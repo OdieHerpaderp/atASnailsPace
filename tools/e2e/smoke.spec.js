@@ -112,6 +112,73 @@ test('a course is built and dropped four times and the geometry count comes back
   noErrors(errors);
 });
 
+test('the registry is filled: pools probed, props stamped, and a density row rebuilding', async ({ page }) => {
+  // **Three registry fields, and none of them can fail loudly.** `world` is a
+  // registry of things the modules that own them fill, and a field nobody filled
+  // has a default - so a default that is an empty list, an empty function or a
+  // null reads as *a quiet answer* rather than as a missing one. Four of these
+  // sat unfilled for four steps of the split with the whole suite green:
+  //
+  //  - `world.water`, so `eachWaterSurface()` saw no pools and **no course got a
+  //    reflection probe at all** - while the stable's, which comes from
+  //    `world.stage` and was filled, kept working, so the row looked alive on the
+  //    hub and dead everywhere it was meant to be seen;
+  //  - `world.shadowRoots()` and `world.racers()`, so `applyShadows()` walked
+  //    nothing and **the shadows row stopped stamping props** - `scatter()` was
+  //    still writing `userData.gfxCast` on thousands of pieces for a flag that
+  //    nothing read;
+  //  - `world.restage()`, so **no density change rebuilt the stable** and four
+  //    rows wrote a flag that nothing read.
+  //
+  // None of those is a number the golden baseline measures, which is exactly why
+  // this test exists rather than a tighter tolerance somewhere else.
+  const { errors } = await boot(page);
+
+  // the reflections row first, because `startRace()` builds the probes and a row
+  // set afterwards would leave the course standing with none
+  await page.evaluate(() => window.__snail.setGfx('refl', 3));
+  await page.evaluate(() => window.__snail.start('splash'));   // four pools
+  await page.evaluate(async () => {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  });
+  // **Four pools and four probes**, and the count is the assertion: a probe per
+  // pool is what the row buys, and `syncProbes()` runs inside `startRace()` before
+  // the hour is set, so a course built with the row off and switched on afterwards
+  // would report nothing here and be right to.
+  expect(await page.evaluate(() => window.__snail.gfx.probes), 'probes on a course\'s four pools')
+    .toBeGreaterThanOrEqual(4);
+
+  // the shadows row, read off the geometry rather than off the registry: a
+  // stamped prop that is still casting when the row says props do not cast is a
+  // walk that did not happen
+  const cast = async (n) => {
+    await page.evaluate((k) => window.__snail.setGfx('shadow', k), n);
+    return page.evaluate(() => {
+      let stamped = 0, casting = 0;
+      for (const root of [window.__snail.race.group]) {
+        root.traverse((o) => { if (o.userData.gfxCast) { stamped++; if (o.castShadow) casting++; } });
+      }
+      return { stamped, casting };
+    });
+  };
+  const off = await cast(1);      // SHADOW_CAST[0] is false
+  expect(off.stamped, 'props on a course carrying the cast flag').toBeGreaterThan(50);
+  expect(off.casting, 'props still casting with the row at its bottom').toBe(0);
+  const on = await cast(4);
+  expect(on.casting, 'props casting with the row at four').toBe(off.stamped);
+
+  // and the rebuild, which is the one with a timer in it: `requestRestage()` is
+  // debounced by 150 ms, so the assertion waits past the debounce rather than
+  // racing it - a test that read the stage a frame after the click would be
+  // asserting the debounce is zero, which it is not and is not meant to be
+  const before = await page.evaluate(() => window.__snail.stage.group.uuid);
+  await page.evaluate(() => window.__snail.setGfx('props', 2));
+  await page.waitForTimeout(700);
+  expect(await page.evaluate(() => window.__snail.stage.group.uuid), 'the stable after a density row moved')
+    .not.toBe(before);
+  noErrors(errors);
+});
+
 test('the settings are the machine\'s and a preset survives a reload', async ({ context }) => {
   // Two pages in **one context**, and that is the whole of how the reload is
   // honest. An init script re-runs on every navigation, so a page armed with the

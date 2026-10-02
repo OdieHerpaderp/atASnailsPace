@@ -71,11 +71,33 @@ export const world = {
   env: null,
   stageEnv: null,
   camera: null,
+  /** Every water mesh a course has built. Filled by `race.js` with **the array
+   *  itself and not a copy of it**, because the pools are made and dropped one
+   *  course at a time and `eachWaterSurface()` walks this on every probe sync -
+   *  a copy would be a list of the meshes of whichever course happened to be
+   *  running when the copy was taken. */
   water: [],
-  /** Put down again at the density the rows now say. Filled by `stage.js`. */
+  /** Put down again at the density the rows now say. Filled by `app.js`, and it is
+   *  the *debounced* rebuild rather than the rebuild itself: the button grid is one
+   *  where a player clicks five times in two seconds, and five thousand tufts
+   *  five times is a stutter. `applyGraphics()` asks for it on every apply. */
   restage: () => {},
-  /** The roots `applyShadows()` walks. Filled by `race.js`. */
-  shadowRoots: () => [],
+  /** The course's root, for the shadow walk. Filled by `race.js` and a function
+   *  because `race.group` is reassigned on every start and every finish, and a
+   *  copied root is a root that no longer exists. */
+  raceGroup: () => null,
+  /** The roots `applyShadows()` walks: the course and the stable.
+   *
+   *  **This is a method rather than a field because it is the union of two things
+   *  two modules own**, and a field would mean one of them clobbering the other's
+   *  list. It is also the one that says the cast-flag stamp is worth having at
+   *  all: `scatter()` sets `userData.gfxCast` on every prop it plants, and
+   *  nothing reads that flag except this walk - so a registry field nobody filled
+   *  was a shadows row that turned props off and nothing on, with no error
+   *  anywhere, which is what it was for four steps. */
+  shadowRoots() {
+    return [this.raceGroup(), this.stage && this.stage.group].filter(Boolean);
+  },
   /** The field's eight, for the same walk. Filled by `race.js`. */
   racers: () => [],
   /** Every water material a course has made, so `dropReflections()` can hand
@@ -89,10 +111,52 @@ export const world = {
    *  every finish, and a registry field written once is a registry field that is
    *  wrong on the frame after the race ends. */
   modeOf: () => 'stable',
-  /** Which season the save is in. Filled by , and a function for the
-   *  reason  is: a new season is a reassignment, and a registry field
+  /** Which season the save is in. Filled by `app.js` too, and a function for the
+   *  reason `modeOf` is: a new season is a reassignment, and a registry field
    *  written once is a field that is wrong on the frame after it. */
   seasonOf: () => 1,
+  /** The seven things the race needs and cannot have, all of them `app.js`'s.
+   *
+   *  **They are the app's because the app is downstream of the race, and the race
+   *  is downstream of everything else** - so a file about the race reaching up to
+   *  the frame loop for a clock is a cycle drawn by a question, exactly as
+   *  `seasonOf()` is. Each one is a function because each one reads something the
+   *  app reassigns: `clock` every frame, `surging` on every key event, and the
+   *  five screens are functions that are the same functions for the whole session
+   *  and whose *names* are the only thing this file needs.
+   *
+   *  `clock()` is the only one of the seven read in the hot path - a particle's
+   *  age, a racer's wobble, ten times a second - and it is a call rather than a
+   *  copied number for the same reason the mode is: a number written once is a
+   *  number that stopped on the frame the race started.
+   *
+   *  **Seven is a lot, and every one of them arrived the same way**: a name read
+   *  bare in `race.js` that the entry declares. `tools/wired.mjs` is what says so,
+   *  and it found them one at a time because it had four wrong answers about what
+   *  counts as a local of a file's own before it could be trusted to find the
+   *  fifth. The alternative to seven fields was a callback threaded down through
+   *  `stepRace()` into `stepRacer()`, and a flag passed to six spawn functions
+   *  that are also called at setup - which is the same seven things with the
+   *  names left off. */
+  clock: () => 0,
+  /** Whether the player is holding the surge button. The listeners are in
+   *  `app.js` - the space bar and the on-screen one - and a racer only ever asks
+   *  whether it is down, which is the one question a file about the race should be
+   *  asking about the keyboard. */
+  surging: () => false,
+  /** Set the hour to the start of a race's own stretch of the day, cache and all.
+   *  **The cache is the app's too**, so a race asks for the whole of it rather
+   *  than half of it and the entry's own reset stays a line beside the function
+   *  that owns the flag. */
+  forceTimeOfDay: () => {},
+  /** The race screen, built once at the start: the markers, the standings, and
+   *  then the per-frame half. */
+  syncHUD: () => {},
+  /** The per-frame half on its own: positions, the bar, the speed, the condition
+   *  and the button. Ten times a second, from `stepRace()`. */
+  updateHUD: () => {},
+  flashGo: () => {},
+  showResults: () => {},
   renderScene() {
     const m = this.modeOf();
     return (m === 'stable' || m === 'stroll') ? this.stageScene : this.scene;

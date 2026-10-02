@@ -1105,6 +1105,19 @@ let grabWanted = null;
 function grabPixels(cols = 96, rows = 60) {
   return new Promise((res) => { grabWanted = { cols, rows, res }; });
 }
+/**
+ * The pending grab, and the taking of it - a request and a consumption in one
+ * pair, because **a `let` handed to another module is a `const` there**: the app
+ * asking for a frame has to ask this file to hand the request over rather than
+ * read the flag and clear it, and the flag is not exported at all so there is
+ * nothing to reach in and clear.
+ */
+function takeGrab() {
+  if (!grabWanted) return null;
+  const g = grabWanted;
+  grabWanted = null;
+  return g;
+}
 function doGrab(g) {
   const gl = renderer.getContext();
   const dw = gl.drawingBufferWidth, dh = gl.drawingBufferHeight;
@@ -1508,6 +1521,15 @@ function applyDrawDistance() {
  * while the material believes it has a 4096 one.
  */
 let gfxCastApplied = null;
+/** Forget that the cast flags are stamped. **A rebuild has to say so**, because a
+ *  prop planted after the row was last applied has never carried the flag and
+ *  `applyShadows()` skips the whole walk when the row has not moved - so without
+ *  this a rebuilt stage stands in the sun with no props casting at all, and the
+ *  row is set to the value it already held, which is the case nobody can see
+ *  changing. Asked for through a function for the reason `takeGrab()` gives. */
+function forgetCastApplied() {
+  gfxCastApplied = null;
+}
 function applyShadows() {
   const map = SHADOW_MAP[gfx.shadow - 1];
   const radius = SHADOW_RADIUS[gfx.shadow - 1];
@@ -1710,9 +1732,9 @@ export {
   renderScene, scenePixels, needsComposer, applyGraphics,
   composer, renderPass, applyChainSize, dropComposer, syncComposer,
   setChainScene, chainUp, chainScene,
-  drawOverlay, grabWanted, grabPixels, doGrab,
+  drawOverlay, takeGrab, grabPixels, doGrab,
   addGlows, syncGlow, courseProbes, probeQueue,
   dropProbe, dropReflections, queueProbes, pumpProbes, syncProbes,
-  STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, gfxCastApplied, applyShadows,
+  STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, forgetCastApplied, applyShadows,
   renderOptions, optionsOpen, openOptions, closeOptions,
 };

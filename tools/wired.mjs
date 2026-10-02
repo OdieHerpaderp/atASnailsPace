@@ -59,21 +59,32 @@ function declared(src) {
 
 /**
  * Every binding a file has of its own, at any depth: a `const` inside a
- * function, an object-literal key, a method shorthand. A file that has a local
+ * function, a parameter, a method shorthand. A file that has a local
  * `const scene` inside `makeEnv()` is not missing an import of somebody else's
  * `scene`, and the check has to tell the two apart or it is noise on every run.
  *
- * **Declarations, keys and method shorthands - and deliberately not "anything
- * followed by a bracket".** That was in the first version and it made
- * `$('boot').textContent` claim that `materials.js` owns a `$`, which silenced
- * exactly the report it existed for: a `$(...)` call in a module that had not
- * imported `$` from `core.js` came back clean. Three shapes, no more.
+ * **Four shapes, and every one of them had to be a wrong answer first.** A key
+ * and a call were both in this set, and both are the same mistake wearing
+ * different hats: **something that looks like a binding and is not one silences
+ * the report instead of making it.** Both have been taken out, and the story of
+ * each is at the foot of this function - the second of them hid a crash the
+ * whole suite walked past.
  */
 function owns(src) {
   const out = new Set(declared(src));
   const bare = strip(src);
   for (const m of bare.matchAll(/\b(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) out.add(m[1]);
-  for (const m of bare.matchAll(/(?:^|[{,\s])([A-Za-z_$][\w$]*)\s*:/gm)) out.add(m[1]);
+  // **No rule for an object-literal key, and there was one, and that was the
+  // fourth wrong answer and the only one of the four that hid a crash.** The
+  // `surging: false` in a racer is a *field*; the `surging` in `(surging ||
+  // race.autoSurge)` is the app's flag for the space bar. The two have nothing to
+  // do with each other except that one is spelled like the other, and a racer is
+  // full of fields - `surging`, `spent`, `stam`, `aiOn`, `wob` - that are also
+  // words the entry and the sim use for something of their own. So the key
+  // claimed the name, `stepRacer()`'s bare read of the app's `let` came back
+  // clean, and the first simulated race threw `surging is not defined` on its
+  // first frame. A key is not a binding, and leaving it out costs no report: a
+  // key cannot be read bare, because `reads()` refuses a name with a `:` after.
   // **A method shorthand is `NAME(...) {` and not `NAME(`.** The first version of
   // this line matched any call and so claimed `$('boot').textContent` as a
   // method named `$`, which silenced the report it existed for: a `$(...)` in a
@@ -105,7 +116,16 @@ function owns(src) {
       if (/^[A-Za-z_$][\w$]*$/.test(n)) out.add(n);
     }
   }
-  for (const m of bare.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*\(/gm)) out.add(m[1]);
+  // **And there is no catch-all over `name(` either, which is the one that was
+  // here longest and the one that silenced five at a stroke.** A **call at the
+  // head of its own line, or after a comma, is not a declaration of anything**,
+  // and reading it as one is how `syncProbes()` in `race.js` came back clean:
+  // `buildCourse()` calls it, `post.js` declares it, `race.js` imported neither,
+  // and the one check that exists to say so read the call as a local. Same
+  // mistake as the key, same cost: the step that took the race out left
+  // `timeOfDay`, `paintSky`, `refreshEnvironment`, `syncGlow` and `chainUp` read
+  // out of two modules it had not imported, and every one of them called at the
+  // head of its own line.
   return out;
 }
 
@@ -142,13 +162,23 @@ function importsOf(src, f) {
  * module that had not imported it was invisible here. That is the second time
  * this checker has been wrong about a name that is not spelled like a word, and
  * both times it was on a one-character identifier.
+ *
+ * **And `)` is in the prefix set, which it was not for most of this checker's
+ * life, and the shape it missed is the commonest one in the county**: a call at
+ * the start of a statement that follows a condition. `else if (race.t % 0.1 <
+ * dt) updateHUD();` is a read of `updateHUD` - it is the only read in the line -
+ * and it came back clean for the whole of the step that took the race out, so
+ * `stepRace()` threw `updateHUD is not defined` on the tenth frame of the first
+ * simulated race and the check that exists to say so had no opinion about it. A
+ * `)` before a name is a statement start and nothing else: there is no expression
+ * in the county where a name can follow a closing paren and still be part of it.
  */
 function reads(bare, name) {
   const lead = /^[A-Za-z0-9_]/.test(name) ? '\\b' : '';
   const tail = /[A-Za-z0-9_]$/.test(name) ? '\\b' : '';
   const esc = name.replace(/[$]/g, '\\$');
   const re = new RegExp(
-    `(?:^|[(,=+\\-*/%;?:&|!<>~^\\[\\]{}]|\\b(?:return|typeof|new|await|&&|\\|\\|)\\s*)\\s*${lead}${esc}${tail}\\s*(?![:.\\w$])`,
+    `(?:^|[(),=+\\-*/%;?:&|!<>~^\\[\\]{}]|\\b(?:return|typeof|new|await|&&|\\|\\|)\\s*)\\s*${lead}${esc}${tail}\\s*(?![:.\\w$])`,
     'm');
   // **and where.** A report that names a line is a report somebody can go and
   // look at; "read bare in X" three times over is a shrug. It cost one match to
@@ -203,6 +233,162 @@ for (const f of files) {
       say(`NO IMPORT   ${n}  read bare at ${f}:${at}, declared in ${home}`
         + (exp[home].has(n) ? '' : ' (and not exported there)'));
     }
+  }
+}
+
+/**
+ * The registry's third direction: a field of `world` that is read and **written by
+ * nobody**.
+ *
+ * **This is the direction the split cannot see by itself, and it is the one that
+ * cost four silent regressions over four steps.** Every other failure in this
+ * split announced itself - a `SyntaxError` at load, a `ReferenceError` on the
+ * first frame, a value in a number. A registry field that nobody fills announces
+ * nothing at all: it has a default, the default is a plausible-looking empty
+ * value, and the code that reads it goes on running. Four of them were sitting
+ * there for the whole of the split and every test passed, because the things they
+ * broke are the four the golden baseline does not measure:
+ *
+ *  - `shadowRoots` and `racers`, so `applyShadows()` walked nothing and **the
+ *    shadows row stopped stamping props** - `scatter()` was still setting
+ *    `userData.gfxCast` on six thousand pieces for a flag nothing read;
+ *  - `water`, so `eachWaterSurface()` saw no pools and **no course got a
+ *    reflection probe at all**, while the stable's - which comes from
+ *    `world.stage`, and that one was filled - kept working, so the row looked
+ *    alive on the hub and dead everywhere it mattered;
+ *  - `restage`, so **no density change rebuilt the stable** and the four rows that
+ *    need a rebuild to be visible did nothing but write a flag.
+ *
+ * A field is written either by `world.x =` somewhere, or by being a method of the
+ * registry's own literal, and a field with no reads is reported too - a registry
+ * nobody asks a question of is one nobody has to answer.
+ */
+const REGISTRY = 'world';
+const use = new Map();   // name -> { assign: [], read: [], mut: [], called: [] }
+const note = (name, kind, at) => {
+  if (!use.has(name)) use.set(name, { assign: [], read: [], mut: [], called: [] });
+  const u = use.get(name);
+  u[kind].push(at);
+  if (kind !== 'assign') u.read.push(at);
+};
+/** The two kinds of member of the registry's literal: a **field** somebody fills
+ *  with `=`, and a **method** that fills itself. A field nobody writes is the
+ *  silent failure; a method nobody calls is dead weight. */
+const fields = new Set(), methods = new Set();
+{
+  const s = src['src/graphics.js'];
+  const m = /export\s+const\s+world\s*=\s*\{/.exec(s);
+  if (!m) say('REGISTRY   src/graphics.js has no `export const world = {`');
+  else {
+    // **and `this.x` inside the literal is a read of a field.** `renderScene()`
+    // asks `this.modeOf()` and reads `this.stageScene`, and a scan that only
+    // looked for `world.x` called both of them unread and then asked who was
+    // filling them - which is the wrong way round, because the methods are the
+    // registry's own and are the only things in the county allowed to say `this`.
+    const head = s.slice(0, m.index + m[0].length).split('\n').length - 1;
+    let depth = 0, key = null, isMethod = false, n = head;
+    for (const line of s.slice(m.index + m[0].length).split('\n')) {
+      n++;
+      if (key !== null) { (isMethod ? methods : fields).add(key); key = null; }
+      // **two spaces of indent**, and the depth: a nested key belongs to whatever
+      // object holds it - `e.key.color` in the registry is not a field of `world`
+      const k = /^ {2}([A-Za-z_$][\w$]*)\s*([(:])/.exec(line);
+      if (k && depth === 0) { key = k[1]; isMethod = k[2] === '('; }
+      for (const c of line) { if (c === '{') depth++; else if (c === '}') depth--; }
+      if (depth < 0) break;
+      for (const t of strip(line).matchAll(/\bthis\.([A-Za-z_$][\w$]*)/g)) {
+        note(t[1], 'read', `src/graphics.js:${n}`);
+      }
+    }
+  }
+}
+/** A member call that *changes* the thing rather than asking it a question.
+ *  `world.courseWater.push(wm)` fills the registry's list as much as an
+ *  assignment does, and the county's own comment on that field is that a list
+ *  emptied by the module that does not fill it is a list two modules argue about
+ *  - so a list the modules argue about is a list they both reach into. */
+const MUTATORS = /\.\s*(push|splice|pop|shift|unshift|sort|reverse|copyWithin|fill)\s*\(/;
+for (const f of files) {
+  if (f.startsWith('meshes/')) continue;
+  const s = strip(src[f]);
+  for (const m of s.matchAll(/\bworld\.([A-Za-z_$][\w$]*)/g)) {
+    const at = `${f}:${s.slice(0, m.index).split('\n').length}`;
+    const after = s.slice(m.index + m[0].length);
+    if (/^\s*=(?!=)/.test(after)) note(m[1], 'assign', at);
+    // **asking a field a question is reading it**, which is why a field the whole
+    // county calls on is not a field nobody reads - the arrow-function fields are
+    // half the registry and every one of them is called rather than indexed.
+    else if (/^\s*\(/.test(after)) { note(m[1], 'called', at); }
+    else if (MUTATORS.test(after)) { note(m[1], 'mut', at); }
+    else note(m[1], 'read', at);
+  }
+}
+for (const [name, u] of [...use].sort()) {
+  if (methods.has(name)) {
+    if (!u.called.length) say(`NEVER CALLED   world.${name}()  declared in the registry, called by nobody`);
+    continue;
+  }
+  if (!fields.has(name)) { say(`NO SUCH FIELD   world.${name}  read at ${u.read[0] || u.mut[0]}, and the registry declares no such field`); continue; }
+  if (!u.assign.length && !u.mut.length) say(`NEVER WRITTEN   world.${name}  read at ${u.read.join(', ')}`);
+  else if (!u.read.length) say(`NEVER READ      world.${name}  written at ${u.assign.join(', ')}`);
+}
+
+/**
+ * A top-level statement that reads a `const` declared *below* it: the temporal
+ * dead zone, which is a boot-time `ReferenceError` and not a warning.
+ *
+ * **This one is here because of how it was found, which is the whole argument for
+ * it.** Writing `world.water = waterMeshes;` above the `const waterMeshes = []`
+ * that owns the list is a crash on the first line of the module - `Cannot access
+ * 'waterMeshes' before initialization` - and every other direction in this file
+ * is blind to it, because the name is imported, declared and used in the right
+ * file by the right module; it is only *early* that it is wrong. It cost a
+ * twenty-second boot timeout on eight tests to find out.
+ *
+ * Two things are deliberately out of its reach. A **`function` declaration is
+ * hoisted**, so reading one above it is not a fault and a line like
+ * `world.racers = () => race.racers;` above `const race` is perfectly legal
+ * because the arrow runs later. **A statement carrying an `=>` is skipped whole**,
+ * for the same reason and because the alternative is a scope analysis: the body of
+ * an arrow is not run at the point it is written, and a checker that cannot tell
+ * that reports the legal version as the broken one.
+ */
+{
+  for (const f of files) {
+    if (f.startsWith('meshes/')) continue;
+    const s = src[f];
+    const bareS = bare[f];
+    // where each top-level `const`/`let`/`class` is declared, and where each
+    // column-0 statement is: both are "at the top" only if the line starts at
+    // column zero, which is what this file's whole layout is built on
+    const at = new Map();
+    const lines = s.split('\n');
+    lines.forEach((l, i) => {
+      const d = /^(?:export\s+)?(?:const|let|class)\s+([A-Za-z_$][\w$]*)/.exec(l);
+      if (d) at.set(d[1], i + 1);
+    });
+    lines.forEach((l, i) => {
+      if (!l || /^[\s}]/.test(l)) return;                    // not a top-level statement
+      const isDecl = /^(?:export\s+)?(?:const|let|var|class)\b/.test(l);
+      const isWrite = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*\s*=(?!=)/.test(l);
+      // **A function declaration is not here at all**, and its absence is not an
+      // oversight: the only thing on `function name(a, b) {` is a signature, and a
+      // parameter is a local of that function rather than a read of anything -
+      // `triplanarDetail(..., colour, ...)` above the module's own `const colour`
+      // is a *shadow*, which is ordinary and legal, and it was the one report
+      // this direction produced on its first run over a county that has none.
+      if (!isDecl && !isWrite) return;
+      if (l.includes('=>')) return;                          // the body runs later
+      const semi = l.indexOf(';');
+      const stmt = (semi >= 0 ? l.slice(0, semi) : l);
+      for (const [n, line] of at) {
+        if (line <= i + 1) continue;
+        const at2 = reads(strip(stmt), n);
+        if (at2 == null) continue;
+        say(`READS BEFORE DECLARED  ${n}  read at ${f}:${i + 1}, declared at ${f}:${line}`);
+      }
+    });
+    void bareS;
   }
 }
 
