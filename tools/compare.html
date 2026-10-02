@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>compare two models</title>
+<style>
+  body { margin: 0; background: #171a1c; color: #d8d4cc;
+         font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  canvas { display: block; }
+  .bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+         padding: 10px 14px; background: #1d2124; border-bottom: 1px solid #2b3134; }
+  label { color: #8b9195; }
+  input[type=text] { font: inherit; background: #101315; color: #d8d4cc;
+                     border: 1px solid #3d4548; border-radius: 3px; padding: 3px 6px; }
+  input[type=number] { font: inherit; width: 6ch; background: #101315; color: #d8d4cc;
+                       border: 1px solid #3d4548; border-radius: 3px; padding: 3px 6px; }
+  button { font: inherit; padding: 4px 10px; background: #2b3134; color: #d8d4cc;
+           border: 1px solid #3d4548; border-radius: 3px; cursor: pointer; }
+  table { border-collapse: collapse; margin: 14px; }
+  td, th { padding: 2px 14px 2px 0; text-align: right; }
+  th { color: #8b9195; font-weight: normal; text-align: right; }
+  td.l, th.l { text-align: left; }
+  .up { color: #7fc08a; } .down { color: #d2912b; }
+</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script></head>
+<body>
+<!--
+  Two models, looked at the same way, for when a model has changed and the
+  question is what it changed by - or when a new one has to be the right size
+  beside an old one and the only honest way to know is to stand them in the
+  same place at the same scale and look.
+
+  A path is a path in this project, so a model and the copy of it in
+  tools/backup/ can be compared as well as two models that both still exist.
+
+    /tools/compare.html?a=meshes/snail.glb&b=tools/backup/snail.glb
+    /tools/compare.html?a=meshes/hut.glb&b=meshes/mushroom-giant.glb&flat=1
+    /tools/compare.html?a=meshes/corn-plot.glb&b=meshes/fence.glb&views=2
+    &scaleB=1.4     scale B to try it out
+    &flat=1         both in one neutral material, which compares shape not colour
+    &maps=0         no maps on either, which is what a prop looks like before
+                    its phase - the maps live in meshes/tex/ and are attached
+                    by name out of meshes/maps.js, exactly as the game does
+    &boxes=0        no bounding boxes
+    &a=...&b=...    the paths
+
+  The three views are A, then B in the same framing, then B over a ghost of A,
+  so a size is read off the first two and a shape off the third.
+-->
+<div class="bar">
+  <label>A <input id="a" type="text" style="width:30ch"></label>
+  <label>B <input id="b" type="text" style="width:30ch"></label>
+  <label>scale B <input id="scale" type="number" step="0.05" min="0.01" value="1"></label>
+  <button id="go">compare</button>
+  <button id="match">scale B to match A</button>
+  <label><input id="flat" type="checkbox"> neutral material</label>
+  <label><input id="boxes" type="checkbox" checked> boxes</label>
+  <label>views <input id="views" type="number" min="1" max="3" step="1" value="3" style="width:4ch"></label>
+</div>
+<div id="stage"></div>
+<table id="stats"></table>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+import { orbitControl } from '/tools/orbit.js';
+import { applyMaps, loadMaps } from '/tools/maps.js';
+
+const q = new URLSearchParams(location.search);
+const $ = (id) => document.getElementById(id);
+// the maps are not in the file, so a comparison of two files that have been
+// converted is a comparison of two models with their surfaces missing unless
+// they are attached here as well
+const maps = q.get('maps') === '0' ? null : await loadMaps();
+$('a').value = q.get('a') || 'meshes/snail.glb';
+$('b').value = q.get('b') || 'tools/backup/snail.glb';
+$('scale').value = q.get('scaleB') || 1;
+$('flat').checked = q.get('flat') === '1';
+$('boxes').checked = q.get('boxes') !== '0';
+$('views').value = q.get('views') || 3;
+
+const W = 520, H = 440;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fb2be);
+scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
+key.position.set(2.5, 4, 3); key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+key.shadow.camera.left = -1.2; key.shadow.camera.right = 1.2;
+key.shadow.camera.top = 1.2; key.shadow.camera.bottom = -1.2;
+scene.add(key);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40),
+  new THREE.MeshStandardMaterial({ color: 0x7e93a0 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+// a grid and a post a unit tall and wide: the ruler everything is measured
+// against is on screen, not only in the numbers below
+const grid = new THREE.GridHelper(12, 12, 0x6d8492, 0x6d8492);
+grid.material.transparent = true; grid.material.opacity = 0.45;
+scene.add(grid);
+scene.add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 1, 0.02),
+  new THREE.MeshBasicMaterial({ color: 0xffd9a0 })));
+scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.02, 0.02),
+  new THREE.MeshBasicMaterial({ color: 0xffd9a0 })));
+
+/** How big a model is, in world units, and what it is made of. */
+function measure(root) {
+  const box = new THREE.Box3();
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.geometry.computeBoundingBox();
+    box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
+  });
+  const size = box.getSize(new THREE.Vector3());
+  let verts = 0, tris = 0, meshes = 0;
+  const maps = new Set();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    meshes++;
+    verts += o.geometry.attributes.position.count;
+    tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+    for (const slot of ['map', 'normalMap', 'roughnessMap', 'aoMap', 'emissiveMap']) {
+      if (o.material[slot]) maps.add(slot);
+    }
+  });
+  return { box, size, verts, tris: Math.round(tris), meshes, maps };
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(W * 3, H);
+renderer.setScissorTest(true);
+document.getElementById('stage').appendChild(renderer.domElement);
+const cam = new THREE.PerspectiveCamera(35, W / H, 0.02, 100);
+const orbit = orbitControl(cam, renderer.domElement);
+
+/**
+ * A little sky to light the models with, so a roughness map has something to
+ * be rough against. Without one, a material that has a normal map and a
+ * roughness map reads as the flat colour it was painted.
+ */
+const ENV_W = 32, ENV_H = 16;
+scene.environment = (() => {
+  const px = new Uint8Array(ENV_W * ENV_H * 4);
+  for (let y = 0; y < ENV_H; y++) {
+    const t = 1 - (y + 0.5) / ENV_H;
+    const c = t < 0.5
+      ? [0.58 + 0.34 * t * 2, 0.70 + 0.24 * t * 2, 0.86 + 0.10 * t * 2]
+      : [0.86 - 0.52 * (t - 0.5) * 2, 0.82 - 0.52 * (t - 0.5) * 2, 0.72 - 0.44 * (t - 0.5) * 2];
+    for (let x = 0; x < ENV_W; x++) {
+      const o = (y * ENV_W + x) * 4;
+      px[o] = c[0] * 255; px[o + 1] = c[1] * 255; px[o + 2] = c[2] * 255; px[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(px, ENV_W, ENV_H);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return new THREE.PMREMGenerator(renderer).fromEquirectangular(tex).texture;
+})();
+
+/**
+ * The part of a model the game repaints, so a piece looks like itself - and,
+ * unless the page has been asked for a flat comparison, the model's own
+ * material. This page used to build a fresh one per mesh and throw the file's
+ * away, which was fine when nothing had a map and is the one thing that made a
+ * textured model look untextured on this page and textured in the game.
+ */
+function repaint(root, flat) {
+  const body = +(q.get('body') || 0xf3e7d3), shell = +(q.get('shell') || 0xb0662f);
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.receiveShadow = true;
+    if (flat) {
+      o.material = new THREE.MeshStandardMaterial({ color: 0xcfcfcf, vertexColors: true, roughness: 0.8 });
+      return;
+    }
+    const named = o.material.name;
+    o.material = o.material.clone();
+    // the base colour is still the page's to choose, because it is the body and
+    // the shell and those are recoloured at runtime; a base map is not
+    if (o.material.map) o.material.color.set(0xffffff);
+    else o.material.color.set(named === 'shell' ? shell : named === 'paper' ? 0xffe6bd : body);
+  });
+}
+
+/** A wireframe box around a model, with its three sizes written on it. */
+function boxLines(box, colour) {
+  const g = new THREE.Box3Helper(box, colour);
+  g.material.depthTest = false;
+  return g;
+}
+
+async function compare() {
+  const loader = new GLTFLoader();
+  const paths = { a: $('a').value.trim(), b: $('b').value.trim() };
+  const out = { a: null, b: null };
+  for (const side of ['a', 'b']) {
+    let root;
+    try {
+      const gltf = await loader.loadAsync('/' + paths[side]);
+      root = gltf.scene;
+    } catch (e) {
+      $('stats').innerHTML = `<tr><td class="l">could not load ${paths[side]}: ${e.message || e}</td></tr>`;
+      return;
+    }
+    // the maps come off the name of the file, so a prop in meshes/tex/ is worn
+    // by meshes/rock.glb and not by the copy of it in tools/backup/ - which is
+    // the point: one side of the comparison has been converted and one has not
+    const worn = maps ? applyMaps(root, paths[side], maps) : [];
+    repaint(root, $('flat').checked);
+    if (side === 'b') {
+      root.scale.setScalar(parseFloat($('scale').value) || 1);
+      out.b = measure(root);
+      scene.add(root);
+      out.b.root = root;
+      out.b.worn = worn;
+    } else {
+      out.a = measure(root);
+      scene.add(root);
+      out.a.root = root;
+      out.a.worn = worn;
+    }
+  }
+  draw(out);
+}
+
+/** The scale B would need so its biggest side is A's biggest side. */
+function matchScale(out) {
+  const a = Math.max(out.a.size.x, out.a.size.y, out.a.size.z);
+  const b = Math.max(out.b.size.x, out.b.size.y, out.b.size.z);
+  const want = +(a / (b || 1)).toFixed(3);
+  $('scale').value = want;
+  out.b.root.scale.setScalar(want);
+  out.b.root.updateMatrixWorld(true);
+  out.b = Object.assign(out.b, measure(out.b.root));
+  draw(last);
+}
+
+let last = null;
+// The framing is worked out once, when the pair changes; painting the views is
+// separate so that a drag can repaint them without redoing any of it.
+let frame = null;
+function draw(out) {
+  last = out;
+  const want = Math.max(1, Math.min(3, +$('views').value || 3));
+  renderer.setSize(W * want, H);
+  // One framing for all of them, taken from the pair of them together, so a
+  // size can be read off A and B and be known to be the same size on screen -
+  // and fitted to what they are, so nothing is cropped off the top of a tall one.
+  const lo = Math.min(out.a.box.min.y, out.b.box.min.y);
+  const hi = Math.max(out.a.box.max.y, out.b.box.max.y);
+  const wide = Math.max(out.a.size.x, out.b.size.x, out.a.size.z, out.b.size.z, 0.2);
+  const ty = (lo + hi) / 2;
+  const fov = (cam.fov * Math.PI) / 180;
+  const fitH = (hi - lo) / 2 / Math.tan(fov / 2);
+  const fitW = wide / 2 / Math.tan(fov / 2) / (W / H);
+  const d = Math.max(fitH, fitW) * 1.2 + 0.15;
+  for (const o of scene.children.slice()) if (o.isBox3Helper) scene.remove(o);
+  if ($('boxes').checked) {
+    scene.add(boxLines(out.a.box, 0x5ad2ff), boxLines(out.b.box, 0xffa03a));
+  }
+  frame = {
+    d, ty, hi, lo, want,
+    // A, then B in the same framing, then B over a ghost of A: a size is read
+    // off the first two, a change of shape off the third
+    shots: [
+      { show: ['a'], ghost: [] },
+      { show: ['b'], ghost: [] },
+      { show: ['b'], ghost: ['a'] },
+    ].slice(0, want),
+  };
+  paint(out);
+  table(out);
+}
+
+function paint(out = last) {
+  if (!out || !frame) return;
+  const { d, ty, hi, lo, shots } = frame;
+  shots.forEach((shot, i) => {
+    const x = i * W;
+    renderer.setViewport(x, 0, W, H);
+    renderer.setScissor(x, 0, W, H);
+    for (const s of ['a', 'b']) {
+      out[s].root.visible = shot.show.includes(s) || shot.ghost.includes(s);
+      if (shot.ghost.includes(s)) {
+        out[s].root.traverse((o) => {
+          if (!o.isMesh) return;
+          o.material = new THREE.MeshBasicMaterial({
+            color: 0x5ad2ff, transparent: true, opacity: 0.2, depthWrite: false,
+          });
+        });
+      }
+    }
+    // every view shares one camera, so a drag turns all of them together
+    orbit.aim({ a: 1.9, d, y: ty + (hi - lo) * 0.32, ty, tx: 0, tz: 0 });
+    renderer.render(scene, cam);
+    // and put the materials back, so the ghost does not stick to the next look
+    for (const s of shot.ghost) repaint(out[s].root, $('flat').checked);
+  });
+}
+
+function table(out) {
+  const rows = [];
+  const f = (n, d = 3) => n.toFixed(d);
+  const ratio = (x, y) => (y ? (x / y) : NaN);
+  const cell = (v, d = 3) => {
+    if (Number.isNaN(v)) return '—';
+    const cls = v > 1.001 ? 'up' : v < 0.999 ? 'down' : '';
+    return `<td class="${cls}">${v.toFixed(d)}</td>`;
+  };
+  rows.push('<tr><th class="l"></th><th>A</th><th>B</th><th>B ÷ A</th></tr>');
+  for (const [name, key, d] of [['width x', 'x', 3], ['height y', 'y', 3], ['depth z', 'z', 3]]) {
+    rows.push(`<tr><td class="l">${name}</td><td>${f(out.a.size[key])}</td><td>${f(out.b.size[key])}</td>${cell(ratio(out.b.size[key], out.a.size[key]))}</tr>`);
+  }
+  rows.push(`<tr><td class="l">biggest side</td><td>${f(Math.max(out.a.size.x, out.a.size.y, out.a.size.z))}</td><td>${f(Math.max(out.b.size.x, out.b.size.y, out.b.size.z))}</td>${cell(ratio(Math.max(out.b.size.x, out.b.size.y, out.b.size.z), Math.max(out.a.size.x, out.a.size.y, out.a.size.z)))}</tr>`);
+  rows.push(`<tr><td class="l">sits on the ground at</td><td>${f(out.a.box.min.y)}</td><td>${f(out.b.box.min.y)}</td><td colspan="1"></td></tr>`);
+  rows.push(`<tr><td class="l">top at</td><td>${f(out.a.box.max.y)}</td><td>${f(out.b.box.max.y)}</td><td colspan="1"></td></tr>`);
+  rows.push(`<tr><td class="l">meshes</td><td>${out.a.meshes}</td><td>${out.b.meshes}</td><td colspan="1"></td></tr>`);
+  rows.push(`<tr><td class="l">vertices</td><td>${out.a.verts}</td><td>${out.b.verts}</td>${cell(ratio(out.b.verts, out.a.verts), 2)}</tr>`);
+  rows.push(`<tr><td class="l">triangles</td><td>${out.a.tris}</td><td>${out.b.tris}</td>${cell(ratio(out.b.tris, out.a.tris), 2)}</tr>`);
+  const kB = Math.round((out.b.tris * 3) / 1024);
+  const kA = Math.round((out.a.tris * 3) / 1024);
+  rows.push(`<tr><td class="l">about</td><td>${kA} KB</td><td>${kB} KB</td><td colspan="1"></td></tr>`);
+  // which slots a model actually has filled, and by name: a prop that has been
+  // converted and one that has not look almost the same in vertex colour and
+  // look nothing like each other in the light, and this is the row that says
+  // which is which
+  const mapList = (m, w) => [...m].map((k) => k.replace('Map', '')).join(' ') || '—';
+  rows.push(`<tr><td class="l">maps</td><td>${mapList(out.a.maps)}</td><td>${mapList(out.b.maps)}</td><td colspan="1"></td></tr>`);
+  rows.push(`<tr><td class="l">from meshes/tex</td><td class="l">${(out.a.worn || []).join(', ') || '—'}</td>
+    <td class="l">${(out.b.worn || []).join(', ') || '—'}</td><td colspan="1"></td></tr>`);
+  $('stats').innerHTML = rows.join('');
+}
+
+orbit.onDraw(() => paint());
+$('go').onclick = () => {
+  if (last) for (const s of ['a', 'b']) scene.remove(last[s].root);
+  compare();
+};
+$('match').onclick = () => { if (last) matchScale(last); };
+for (const id of ['flat', 'boxes', 'views', 'scale']) $(id).onchange = $('go').onclick;
+compare();
+</script></body></html>

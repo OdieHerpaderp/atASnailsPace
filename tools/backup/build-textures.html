@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>build the maps</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 24px; background: #171a1c; color: #d8d4cc; }
+  h1 { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8b9195; margin: 26px 0 6px; }
+  button { font: inherit; padding: 5px 10px; margin: 0 6px 6px 0; background: #2b3134; color: #d8d4cc;
+           border: 1px solid #3d4548; border-radius: 3px; cursor: pointer; }
+  .note { color: #8b9195; max-width: 78ch; }
+  code { color: #b9c4a8; }
+  .grid { display: flex; flex-wrap: wrap; gap: 14px; }
+  .card { width: 156px; }
+  .card canvas { width: 140px; height: 140px; display: block; background: #101315;
+                 border: 1px solid #2b3134; image-rendering: pixelated; }
+  .card .nm { color: #d8d4cc; }
+  .card .meta, .card .disk { color: #8b9195; font-size: 11px; }
+  .card .disk.no { color: #d2912b; }
+  .card .disk.yes { color: #7fc08a; }
+  pre { color: #8b9195; }
+</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1>meshes/tex/&hellip;.png</h1>
+<p class="note">
+  Every map the library uses, drawn on a canvas and written into
+  <code>meshes/tex/</code>. The maps are not embedded in the glbs: the game
+  loads them by name, out of the one manifest in <code>meshes/maps.js</code>, and
+  a prop whose maps have not been written yet simply has none and draws as it
+  always did. That is the whole migration strategy - one prop at a time, and
+  the game is never broken in between.
+  <br><br>
+  Open this page from the folder that serves the game, press a button, and the
+  PNG lands in <code>meshes/tex/</code>. Every map is seamless: the noise is
+  sampled on a lattice that wraps at the tile, and the normals are built from a
+  height field that wraps the same way, so a map tiled a hundred times across a
+  course has no join in it.
+  <br><br>
+  <b>Naming is the contract.</b> The suffix says which slot the file goes in:
+  <code>-albedo</code> is base colour and is read as sRGB,
+  <code>-n</code> and <code>-n2</code> are tangent-space normals, <code>-rgh</code>
+  is roughness in green and metalness in blue, <code>-em</code> is emissive. The
+  rest of the name is the prop, and a prop may share a map with its neighbours -
+  <code>rock-n</code> is the grain of every stone in the county.
+  <br><br>
+  <b>Albedo is full colour only if nothing recolours the prop at runtime.</b>
+  A prop the game tints - the snail, the three shells, the flowers - carries a
+  low-chroma or grey map, because <code>material.color</code> and an
+  <code>instanceColor</code> are the hue and a coloured map underneath turns a
+  tint into a hue shift.
+</p>
+
+<button id="all">write every map</button>
+<button id="missing">write the ones with no file</button>
+<button id="reload">re-read what is on disk</button>
+<pre id="log"></pre>
+<div class="grid" id="grid"></div>
+
+<script type="module">
+import { MAPS, SLOTS, allMaps, allParts, mapsFor, slotFor } from './maps.js';
+import { lin, srgb } from './palette.js';
+
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+const $ = (id) => document.getElementById(id);
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* ------------------------------------------------------------------ *
+ * Noise that wraps.
+ *
+ * A tiling map cannot use ordinary noise: the lattice has to come back to
+ * where it started at the far edge, or there is a seam every time the map
+ * repeats - and a detail map on a course surface repeats a hundred times. So
+ * every lookup is taken modulo the period, and the period is the frequency: at
+ * octave 0 the lattice is `base` cells across the tile, at octave 1 it is
+ * `base * 2`, and each one still divides the tile evenly.
+ * ------------------------------------------------------------------ */
+function hash2(x, y, s) {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1274126177)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+const wrap = (v, p) => ((v % p) + p) % p;
+function vnoise(x, y, p, s) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(wrap(xi, p), wrap(yi, p), s);
+  const b = hash2(wrap(xi + 1, p), wrap(yi, p), s);
+  const c = hash2(wrap(xi, p), wrap(yi + 1, p), s);
+  const d = hash2(wrap(xi + 1, p), wrap(yi + 1, p), s);
+  const top = a + (b - a) * u, bot = c + (d - c) * u;
+  return top + (bot - top) * v;
+}
+/** Tiling fbm over the unit square, 0 at the corners of the tile. */
+/**
+ * Tiling fbm over the unit square, 0 at the corners of the tile.
+ *
+ * The divisor is the *sum of the amplitudes*, which is `2 * (1 - 0.5^oct)` and
+ * not the `1 - 0.5^oct` this used to be divided by. That is a factor of two on
+ * every field in this file, and it was the single reason none of these maps
+ * looked like anything: a field that means 1.0 and reaches 2.0 is clipped to 1
+ * over most of its area by `field()` above, so a map built out of two or three
+ * of them is a flat plateau with some streaks in it - a granite of a sort, a
+ * lawn of a sort, and neither of them with any grain in the middle. Everything
+ * here is written as `constant + weight * term` on the understanding that a term
+ * is 0 to 1, and that is now true.
+ */
+function fbm(u, v, base, oct, s) {
+  let sum = 0, amp = 1, p = base;
+  for (let i = 0; i < oct; i++) { sum += amp * vnoise(u * p, v * p, p, s + i * 131); p *= 2; amp *= 0.5; }
+  return sum / (2 * (1 - Math.pow(0.5, oct)));
+}
+/** Tiling ridged noise: the creases and the grain a stone breaks along. */
+function ridged(u, v, base, oct, s) {
+  let sum = 0, amp = 1, p = base;
+  for (let i = 0; i < oct; i++) {
+    const n = 1 - Math.abs(vnoise(u * p, v * p, p, s + i * 71) * 2 - 1);
+    sum += amp * n * n; p *= 2; amp *= 0.5;
+  }
+  return sum / (2 * (1 - Math.pow(0.5, oct)));
+}
+
+/**
+ * The four things a cliff face is made of, in one place, because its normal, its
+ * roughness and its colour all have to agree about where the cracks are.
+ *
+ * `plate` is the face of a slab and is **quantised**: a flat top in a height
+ * field is a terrace, and the step between two terraces is a vertical face,
+ * which is what the edge of a broken slab is. Every other grain in this file is
+ * smooth, and a smooth grain cannot have an edge in it.
+ * `crack` is the gap between slabs, and it is narrow because a crack that fades
+ * in over a hand's width is a stain and not a crack.
+ * `bed` is the strata the rock broke along. It is 1 on a bedding plane and 0 in
+ * the middle of a course, and it is the one feature that is horizontal in life
+ * and has to be drawn as a function of `v` in a square.
+ * `grit` is the grain inside a slab, and its only job is to stop a pale face
+ * from being a blank one.
+ */
+const CLIFF = (u, v) => {
+  // Plates at **two** scales, because a face breaks into slabs and the slabs
+  // break again, and one quantised octave is a handful of big smooth lobes with
+  // a dome on each. The coarse one is the fracture and the fine one is the
+  // flaking inside a slab, and the slabs are what give the reference its
+  // angular edges.
+  const big = Math.floor(fbm(u, v, 5, 2, 211) * 5) / 5;
+  const fine = Math.floor(fbm(u, v, 14, 1, 233) * 3) / 3;
+  return {
+    plate: big * 0.7 + fine * 0.3,
+    // and the crack between them is a **network**, not a line or two. Thresholded
+    // tight it drew a couple of thin threads on an otherwise blank face; a rock
+    // face is mostly crack with rock between, and the dark of the crack against
+    // the pale of a weathered slab is the whole of the reference's contrast.
+    crack: clamp01((ridged(u, v, 9, 3, 223) - 0.5) * 4.2),
+    bed: Math.abs(((v * 11) % 1) - 0.5) * 2,
+    // grit at two sizes, because a face that is smooth is a face that reads as
+    // a dome of clay no matter how good the cracks around it are
+    grit: fbm(u, v, 61, 2, 227) * 0.6 + fbm(u, v, 23, 2, 229) * 0.4,
+  };
+};
+
+/* ------------------------------------------------------------------ *
+ * A field, and the two things every map here is made of
+ * ------------------------------------------------------------------ */
+/** A square field of 0..1 numbers, one per texel. *//** A square field of 0..1 numbers, one per texel. */
+function field(size, fn) {
+  const f = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = (y + 0.5) / size;
+    for (let x = 0; x < size; x++) f[y * size + x] = clamp01(fn((x + 0.5) / size, v));
+  }
+  return f;
+}
+/** A canvas, from a function of (u, v) given as an [r, g, b] in 0..1 sRGB. */
+function paint(size, fn) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const img = ctx.createImageData(size, size);
+  const d = img.data, px = [0, 0, 0];
+  for (let y = 0; y < size; y++) {
+    const v = (y + 0.5) / size;
+    for (let x = 0; x < size; x++) {
+      fn((x + 0.5) / size, v, px);
+      const o = (y * size + x) * 4;
+      d[o] = clamp01(px[0]) * 255; d[o + 1] = clamp01(px[1]) * 255;
+      d[o + 2] = clamp01(px[2]) * 255; d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+/**
+ * A colour map, from a function of (u, v) given as a **linear** triple. The
+ * encode happens here and nowhere else, because it has to happen exactly once:
+ * a canvas holds sRGB, the game reads an albedo as sRGB and decodes it, and the
+ * jar is linear - so a colour put into a canvas without this step is decoded
+ * twice and arrives darker than the county has ever been.
+ */
+function albedo(size, fn) {
+  const lin3 = [0, 0, 0];
+  return paint(size, (u, v, out) => {
+    fn(u, v, lin3);
+    const s = srgb(lin3);
+    out[0] = s[0]; out[1] = s[1]; out[2] = s[2];
+  });
+}
+/**
+ * A tangent-space normal map from a height field. The samples either side of a
+ * texel are taken with the field's own wrap, so the map tiles, and the strength
+ * is in texels: a map with more strength is a deeper grain at the same tiling.
+ *
+ * And it reports what it actually made, because a normal map of a smooth field
+ * comes out almost flat and a normal map of an almost flat normal does nothing
+ * at all - and nothing else in the pipeline will tell you. `detail.rms` is the
+ * root-mean-square of the x and y channels in their packed range, so a map
+ * sitting near 0.03 tilts a surface by about two degrees and cannot be seen,
+ * and one at 0.35 tilts it by about nineteen. The page prints it for every map
+ * it draws, and the ones worth having are the ones that are not near zero.
+ */
+const detail = { rms: 0 };
+function normalMap(size, h, strength) {
+  const at = (x, y) => h[wrap(y, size) * size + wrap(x, size)];
+  let sum = 0;
+  const c = paint(size, (u, v, out) => {
+    const x = Math.round(u * size) % size, y = Math.round(v * size) % size;
+    const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
+    const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
+    const len = Math.hypot(dx, dy, 1);
+    out[0] = (-dx / len) * 0.5 + 0.5;
+    out[1] = (-dy / len) * 0.5 + 0.5;
+    out[2] = (1 / len) * 0.5 + 0.5;
+    // the packed channels sit around 0.5 and it is the deviation from that
+    // which is the slope, so the 0.5 comes off before it is squared
+    const px = out[0] - 0.5, py = out[1] - 0.5;
+    sum += px * px + py * py;
+  });
+  detail.rms = Math.sqrt(sum / (size * size * 2));
+  return c;
+}
+/**
+ * Roughness in green, metalness in blue, the glTF packing - so one file carries
+ * both, and the red channel is free for an occlusion later. Nothing in this
+ * county is metal, so the blue stays at zero; it is there because a future prop
+ * that is, does not need a second file.
+ */
+function ormMap(size, rgh, ao) {
+  return paint(size, (u, v, out) => {
+    const x = Math.round(u * size) % size, y = Math.round(v * size) % size;
+    out[0] = ao ? ao[y * size + x] : 1;
+    out[1] = rgh[y * size + x];
+    out[2] = 0;
+  });
+}
+/* ------------------------------------------------------------------ *
+ * The maps
+ *
+ * One entry per name in meshes/maps.js, and `missing` lists anything the
+ * manifest names that has no drawer here - which is a hole in the migration
+ * and says so rather than passing quietly.
+ *
+ * Everything is sampled the wrapping way. A shear like `u + v * 3` keeps a map
+ * seamless because three lattice cells is a whole number of them; a scale like
+ * `u * 0.6` does not, and puts a join down one edge of every tile - which on a
+ * course surface tiled a hundred times is a stripe you can see from the line.
+ * ------------------------------------------------------------------ */
+const SIZE = { n: 256, albedo: 512, water: 256, tintable: 256, thumb: 128, turf: 1024 };
+
+/**
+ * Everything a lawn is made of, in one place, so that the grass albedo and the
+ * grass normal cannot fall out of step.
+ *
+ * That is the whole reason this is a function and not four copies of the same
+ * four lines inside two drawers. A detail normal derived from an albedo by hand
+ * - drawn from its own noise, or the same noise with the octaves changed - looks
+ * right in the texture page and is **wrong in the surface**: the bumps sit
+ * between the blades instead of under them, so a blade catches the light on the
+ * side away from the sun, and the mat reads as two textures laid over each other
+ * rather than as one mat of grass. Sharing the fields is what makes the normal
+ * *be* the albedo instead of agreeing with it.
+ */
+/**
+ * The very top of a ridged crease, cut **narrow**.
+ *
+ * This is the whole difference between a mat of grass and a field of lobes, and
+ * it is one function. A ridged noise on its own is rounded ridges: the creases
+ * are broad ramps either side of a line, and three shears of them maxed together
+ * is a soft mottle from any distance, which is what the grass map used to be.
+ * Cut the top eight per cent off and every crease becomes a stem with a gap on
+ * either side of it, and the gaps are half the map: the dark between the blades
+ * is what a mat of grass actually looks like, and a map that draws the blades
+ * without the gaps is a map of hair on a white background.
+ *
+ * `t` is where the cut is and `k` how fast it falls off. A narrow `t` is a thin
+ * stem and a wide one is a fat one, and the crest never exceeds 1 because the
+ * top of a crease is 1.
+ */
+const crest = (u, v, base, oct, s, t, k) => crestOf(ridged(u, v, base, oct, s), t, k);
+const crestOf = (r, t, k) => clamp01((r - t) * k);
+
+const TURF = (u, v) => {
+  /**
+   * Blades, and they are blades and not a noise field, because a lawn seen from
+   * above is a mat of stems and not a surface: three shears of ridged noise
+   * softly maxed together, so the mat has stems crossing in three directions.
+   * One shear on its own is corduroy, and a lawn with a prevailing direction is a
+   * field of drill, not a field.
+   *
+   * The three base frequencies are **high**, and that is the other half of what
+   * made this map dull: the tile is five metres across in the county, so a
+   * lattice of 100 is a stem four centimetres long, and a lattice of 50 is one
+   * eight centimetres long and reads as a stripe. The frequency and the tile
+   * have to be chosen together for the same reason the strength and the tile
+   * have to be, and see `sizeFor` and `triplanarDetail()` for the other end of
+   * it.
+   *
+   * Each ridge is kept **twice**: `body`, the whole of it, is the mat the stems
+   * stand out of, and `stem`, the top fifth of it cut narrow, is the stems. Both
+   * come out of the same number so they can never fall out of step, and the gap
+   * between them is dark in both - which is most of where the contrast in this
+   * map comes from.
+   */
+  const r0 = ridged(u, v + u * 4, 97, 2, 13);
+  const r1 = ridged(u + v * 4, v - u * 2, 113, 2, 29);
+  const r2 = ridged(u - v * 2, v + v * 5, 131, 2, 47);
+  const body = Math.max(r0, r1, r2);
+  const stem = Math.max(crestOf(r0, 0.80, 9.5), crestOf(r1, 0.80, 9.5), crestOf(r2, 0.80, 9.5));
+  // And the **stubs**: the shorter stems lying across the first lot, which is
+  // what a mat actually is - a mat of long blades over a mat of short ones, and
+  // a map with only the long ones is a bed of reeds.
+  const stub = Math.max(
+    crest(u + v * 6, v + u * 3, 173, 1, 53, 0.82, 11),
+    crest(u - v * 5, v - u * 2, 157, 1, 59, 0.82, 11));
+  return {
+    stem, stub, body,
+    // the gap between them, and it is derived rather than drawn, so the two can
+    // never fall out of step: there is a stem exactly where there is not a gap
+    gap: 1 - Math.max(stem, stub),
+    fine: fbm(u, v, 263, 2, 71),     // the grain inside a stem
+    clump: fbm(u, v, 41, 3, 5),      // the mat, a hand across
+    // The dry ones, and they are **patches**: whole quarters of a lawn go to
+    // straw in a dry month and they go together. The previous version cut the
+    // brightest fifth of the blades, which is a lawn with a few yellow hairs in
+    // it and not a lawn in a dry month - and the references are mostly straw,
+    // so the patches are a quarter of the map and not an exception.
+    dry: clamp01((fbm(u, v, 19, 3, 79) - 0.60) * 3.0) * (0.35 + 0.65 * Math.max(stem, stub)),
+    // Seed heads, a centimetre across. Straw and never white, because a white
+    // speck in grass this fine reads as a stone, which is the whole reason the
+    // county's flowers are the colour they are.
+    seed: clamp01((fbm(u, v, 331, 1, 131) - 0.9) * 12.0) * (0.3 + 0.7 * stem),
+    // The weeds: broadleaf in patches, a good deal darker and cooler than the
+    // grass around them, which is the one thing in a lawn that is not a blade.
+    weed: clamp01((fbm(u, v, 13, 2, 101) - 0.70) * 4.0),
+  };
+};
+
+/**
+ * Everything a shore is made of, in one place, for the same reason `CLIFF` and
+ * `TURF` are: the ripple that is pale in the colour has to be the ripple that
+ * is raised in the normal, or the two are two textures laid over each other
+ * rather than one surface.
+ *
+ * `ripple` is the thing a shore is actually made of - the long low crests water
+ * leaves, and a wind leaves. It is a sheared ridged noise, and a shear is the
+ * only way to get them: a low base frequency on its own gives a patchy field
+ * rather than lines, and the lines are what read as a beach. `wrinkle` is a
+ * second set at a different angle and a smaller size, which is the wrinkle in
+ * the crest of the big one and stops the field being a corduroy.
+ * `grain` is the sand itself, and `grit` is the odd dark speck in it.
+ *
+ * There is deliberately no wet and no shell. Wetness is a **vertex colour** -
+ * the shore runs from dry sand up the bank to wet sand and mud at the
+ * waterline, and that is drawn along the spline where it can be, exactly like
+ * the grass's own colour. A map that carried dampness as well would have it in
+ * one place and the vertex colour would have it in another, and the waterline
+ * would stop being the place the water is.
+ */
+const SAND = (u, v) => ({
+  // the crests, long and low, and sheared by a whole number of lattice cells so
+  // the tile still wraps
+  ripple: ridged(u + v * 3, v, 4, 2, 307),
+  wrinkle: ridged(u - v * 2, v, 11, 2, 311),
+  grain: fbm(u, v, 89, 2, 313),
+  // grit is thresholded, so it is sparse: a speck here and there, not a texture
+  grit: clamp01((fbm(u, v, 151, 2, 317) - 0.5) * 3.0),
+});
+
+/**
+ * Everything a road is made of, in one place, for the same reason `CLIFF` and
+ * `SAND` are: the pale patch in the colour has to be the patch the normal has
+ * raised, or the two are two textures laid over each other rather than one
+ * surface.
+ *
+ * `coarse` is the wide, slow variation across the whole ribbon - where the
+ * surface is worn through to the dust under it and where it is still the harder
+ * stuff a foot has not found yet. `grit` is the stones lying in it, and `wear`
+ * is the two of them added up in the proportions the normal has always used, so
+ * `bed-n` comes out of this field and is not a re-derivation of it.
+ *
+ * `hollow` is the one term the normal does not have, and it is here for the
+ * colour alone: the dip between two stones, which is a value and not a shape.
+ * It is thresholded hard so it is sparse - a hollow here and there, not a
+ * texture - because a field of them is a stain.
+ */
+const BEDROAD = (u, v) => {
+  const coarse = fbm(u, v, 6, 4, 31);
+  const grit = ridged(u, v, 19, 2, 43);
+  return {
+    coarse,
+    grit,
+    wear: 0.30 + coarse * 0.46 + grit * 0.24,
+    hollow: clamp01((0.40 - fbm(u + 7, v + 3, 13, 2, 47)) * 3.4),
+  };
+};
+
+const DRAW = {
+  /* ---- the stones ------------------------------------------------ */
+  // The grain of every stone in the county, and it is a cliff face rather than
+  // a boulder: the creases run *up* the face instead of round it, and the stone
+  // breaks along planes instead of rolling. A shear is what does the first part -
+  // `v + u * 5` is constant along a direction that falls five for every one
+  // across, which in the tile is a line standing on end, and a shear by a whole
+  // number of lattice cells still tiles. The fissures are then a *low* base
+  // frequency with few octaves, because a ridged noise at high frequency gives
+  // short scratches and the thing that makes a cliff is a few long ones.
+  'rock-n': (S) => normalMap(S, field(S, (u, v) => {
+    const fis = ridged(u, v + u * 5, 3, 2, 11);
+    const fis2 = ridged(u + v, v + u * 3, 7, 2, 29);
+    // The cleave planes, quantised into steps so the stone breaks along them
+    // rather than rolling. The steps are small and few, and the field they come
+    // from is warped before it is quantised: a clean low-frequency field cut
+    // into steps tiles into a weave, which is a basket and not a rock.
+    const w = fbm(u + v * 0.5, v - u * 0.5, 5, 3, 53) + 0.18 * fbm(u, v, 11, 2, 59);
+    const q = w * 5;
+    const cleave = Math.floor(q) / 5 + (q - Math.floor(q)) * 0.3;
+    // The grit is nearly out of this on purpose. A rough stone in a low sun is
+    // a thousand little facets, and every one of them that turns towards the
+    // key blows out, and a map that does that does not read as granite: it
+    // reads as a field of white flecks, which is salt and not stone. The relief
+    // belongs in the long fissures and the cleave planes, where one edge is
+    // worth a thousand.
+    const grit = fbm(u, v, 43, 2, 71);
+    return 0.18 + cleave * 0.26 + fis * 0.44 + fis2 * 0.16 + grit * 0.03;
+  }), 9),
+  'rock-albedo': (S) => albedo(S, (u, v, out) => {
+    const fis = ridged(u, v + u * 5, 4, 2, 11);
+    const fis2 = ridged(u + v, v + u * 3, 9, 2, 29);
+    const face = fbm(u, v, 5, 3, 53);
+    const grit = fbm(u, v, 29, 3, 91);
+    // The stone is the county's granite, pulled a little towards its warm end
+    // before anything else happens to it - and it is pulled because of the light
+    // rather than because of the map. The county is lit by a blue hemisphere at
+    // four fifths and two blue-white directionals, so a perfectly neutral grey
+    // arrives on screen as periwinkle, and a wall of periwinkle standing in a
+    // green field is a different material. Warming the map by a tenth undoes
+    // most of what the sky does, which is cheaper than changing the light every
+    // other surface in the county is standing in.
+    const pale = [lerp(lin('granite')[0], lin('graniteWarm')[0], 0.7),
+      lerp(lin('granite')[1], lin('graniteWarm')[1], 0.7),
+      lerp(lin('granite')[2], lin('graniteWarm')[2], 0.7)];
+    const dark = [pale[0] * 0.56, pale[1] * 0.56, pale[2] * 0.58];
+    const warm = lin('graniteWarm');
+    // the fissures are where the water goes, and they are the darkest thing on
+    // the stone by a long way - that is what makes a crack read as a crack
+    const crack = clamp01((fis - 0.46) * 2.2) * 0.85 + clamp01((fis2 - 0.6) * 2.4) * 0.45;
+    // and the quartz: a sparse scatter of pale grains, and never white
+    const q = fbm(u, v, 23, 2, 91);
+    // A cliff is one grey. The face term is kept on a short leash for exactly
+    // that reason: given a whole tile of latitude a stone map turns into clouds,
+    // and a wall of clouds is a sky with a rock in front of it.
+    const t = clamp01(0.42 + face * 0.34 + grit * 0.20);
+    for (let k = 0; k < 3; k++) {
+      let c = lerp(dark[k], pale[k], t);
+      c = lerp(c, dark[k] * 0.62, crack);
+      // a warm wash over a few panels, and never over the whole stone
+      c = lerp(c, warm[k], clamp01((face - 0.66) * 1.8) * 0.28);
+      if (q > 0.84) c = lerp(c, pale[k] * 1.02, (q - 0.84) * 1.6);
+      out[k] = c * (0.95 + 0.1 * grit);
+    }
+  }),
+  'rock-rgh': (S) => ormMap(S, field(S, (u, v) =>
+    0.74 + 0.2 * fbm(u, v, 9, 3, 61) - 0.16 * clamp01((ridged(u, v + u * 5, 4, 2, 11) - 0.46) * 2.2))),
+
+  // Moss is a mat, not a coat of paint: a hundred hairs thick, so the normal
+  // is fine and close, and the albedo is the moss palette with the dark of it
+  // in the hollows where the water stands.
+  'moss-n': (S) => normalMap(S, field(S, (u, v) =>
+    0.5 + 0.5 * fbm(u, v, 47, 3, 7)), 4.8),
+  'moss-albedo': (S) => albedo(S, (u, v, out) => {
+    const m = fbm(u, v, 11, 4, 23);
+    const fine = fbm(u, v, 37, 2, 47);
+    const dark = lin('mossDark'), light = lin('mossLight');
+    for (let k = 0; k < 3; k++) {
+      const c = lerp(dark[k], light[k], clamp01(m * 1.15 - 0.08));
+      out[k] = c * (0.82 + 0.30 * fine);
+    }
+  }),
+
+  /* ---- the ground it all sits on ---------------------------------- */
+  // Turf seen from about a metre: clumps, then the odd bare scuff, and a
+  // normal fine enough to catch the light at race distance and no finer.
+  'ground-n': (S) => normalMap(S, field(S, (u, v) => {
+    const clump = fbm(u, v, 8, 3, 5);
+    const blade = ridged(u + v * 5, v, 29, 2, 13);
+    return 0.34 + clump * 0.40 + blade * 0.26;
+  }), 5),
+  'ground-rgh': (S) => ormMap(S, field(S, (u, v) => 0.86 + 0.14 * fbm(u, v, 11, 3, 5))),
+
+  /**
+   * Turf as a **detail** map, not a colour one, and the distinction is the
+   * whole point of it. The colour of a lawn is in the vertex colours, which is
+   * right for a course - the ground is built along a spline with a vertex every
+   * couple of metres and its colour is sampled in world XZ at four frequencies.
+   * But the stable's lawn is a forty-segment fan with one vertex in the middle
+   * of it, and no vertex colours on any fan can hold a detail finer than eight
+   * metres; a lawn seen from a metre away is *all* finer than that. So this map
+   * is the half a vertex colour cannot draw: a fine speckle of light and dark
+   * blades, with the odd dry one in it.
+   *
+   * It multiplies, and it is built around white so that it cannot change the
+   * hue of the green underneath it. The greens in it are the jar's, each
+   * divided by its own mean and then pulled most of the way back to neutral, so
+   * a blade is a shade greener or a shade yellower than the lawn and not a
+   * different colour: a map that carried the hue would take the county's away.
+   */
+  'grass-albedo': (S) => albedo(S, (u, v, out) => {
+    const { body, stem, stub, gap, fine, clump, dry: dryBlade, seed, weed } = TURF(u, v);
+    const straw = lin('caneTip');
+    const strawM = (straw[0] + straw[1] + straw[2]) / 3;
+    const olive = lin('leafOlive');
+    const oliveM = (olive[0] + olive[1] + olive[2]) / 3;
+    const weedC = lin('leafDark');
+    const weedM = (weedC[0] + weedC[1] + weedC[2]) / 3;
+    /**
+     * And here is the thing about a map that multiplies: an eight-bit canvas
+     * holds 0 to 1 and clamps at both ends, so **nothing above white survives**.
+     * A detail built symmetrically about 1.0 loses its entire highlight half to
+     * the clamp and arrives as a flat average - the map looks blank in the
+     * texture page and the surface looks untextured, and the range is not the
+     * problem the width is. So the whole thing is built under 1.0, with the mean
+     * where the map can carry it, and the shader puts the mean back:
+     * `detailCGain`. The top of the range stops below 1.0 so that a dry blade and
+     * a seed head, which both tint *upward*, have somewhere to go.
+     *
+     * And it is read as **sRGB**, which buys the contrast back rather than
+     * costing it. A canvas value of 0.5 is a *linear* 0.21, so a map that runs
+     * from 0.5 to 1.0 across the tile arrives as a range of 0.21 to 1.0 - nearly
+     * five to one - where the same numbers taken as linear would be two to one.
+     * Every value here is chosen to be read that way, which is why the numbers
+     * look high and close together and the surface still has its darks.
+     *
+     * The shape of it, and it is the shape of the reference: the mat's own body,
+     * the stems standing out of it, and the hollow between two stems taken back
+     * down. The hollow is half the map and it is the darker half, and that is the
+     * part this version added - a mat of grass is mostly shadow, and a map that
+     * draws the stems without the hollows between them is a field of hairs on a
+     * white background.
+     */
+    let shade = 0.40 + 0.18 * body + 0.14 * clump + 0.06 * fine
+      + 0.16 * stem + 0.07 * stub - 0.14 * gap;
+    for (let k = 0; k < 3; k++) {
+      // the sunlit ones go a shade olive, which is what a blade edge looks like
+      // and is the one place this map is allowed a hue of its own
+      let c = shade * lerp(1, olive[k] / oliveM, stem * 0.5);
+      c = lerp(c, c * straw[k] / strawM, dryBlade);
+      c = lerp(c, c * straw[k] / strawM, seed);
+      c = lerp(c, c * weedC[k] / weedM, weed * 0.7);
+      out[k] = c;
+    }
+  }),
+
+  /**
+   * The same mat, as a normal map, and it is **the same mat** in the sense that
+   * matters: every one of its fields comes out of `TURF()`, so a blade that is
+   * bright in the albedo is the blade the light is coming off. See `TURF` for
+   * why that is not a detail.
+   *
+   * The height is the albedo's own terms and nothing else - the stems, the stubs,
+   * the mat, the grain inside a stem - plus the two things that are genuinely
+   * standing up rather than merely a different colour. A dry blade has gone stiff
+   * and curled over, and a seed head is up above the mat, so both add; a **weed
+   * does not**, and this is the one part of the albedo the normal leaves out on
+   * purpose: a broadleaf weed in a lawn is flat and a good deal darker than the
+   * grass round it, and giving it a bump makes a patch of the lawn stand up off
+   * the rest of it like a scab.
+   *
+   * The strength is **2.5**, and the number is barely more than what it was, and
+   * that is not a fudge in the other direction either. `normalMap()` takes the
+   * difference between neighbouring texels, and a field sampled at four times the
+   * resolution has a *quarter* of the difference per texel - so the same map at
+   * 1024 with the old 2.2 would be four times flatter than the one it replaced,
+   * and raising it to get that back saturates the packing instead: at 8 the map
+   * reports 30° and is mostly two values, at 0 and 255, which is a map of
+   * hard-edged scratches. It lands at about 22°, which is a mat of stems
+   * standing up out of their own gaps.
+   *
+   * And what makes 22° readable at a distance, where the old map's 10.8° at the
+   * same strength was not, is that the relief is in **lines** and not in facets.
+   * A facet the size of a stem shades like a chip of stone and a mat of grass
+   * stops being a mat; a line the width of a stem is what grass looks like lit
+   * from the side.
+   */
+  'grass-n': (S) => normalMap(S, field(S, (u, v) => {
+    const { body, stem, stub, gap, fine, clump, dry: dryBlade, seed } = TURF(u, v);
+    return 0.42 + clump * 0.20 + body * 0.18 + stem * 0.24 + stub * 0.10 + fine * 0.08
+      - gap * 0.22 + dryBlade * 0.10 + seed * 0.5;
+  }), 2.5),
+
+  // The bed is dirt on the flat and rock on the walls, in the same ribbon, so
+  // its detail is the coarser of the two: it has to read at a glance as a
+  // road, and a road does not have blades in it.
+  //
+  // It carries a **colour** as well, and the reason it did not for as long as
+  // it had a normal is the one that is true of every surface in the county: the
+  // ribbon is a vertex colour every two metres, and a vertex colour holds
+  // nothing finer than the patch it was sampled from. The road came up as one
+  // flat brown card with a normal on it, and a normal is shape and not value,
+  // so the thing a car would see and a snail would not - the dust worn pale in
+  // the middle, the harder stone at the verges - was nowhere in it.
+  'bed-n': (S) => normalMap(S, field(S, (u, v) => BEDROAD(u, v).wear), 9.5),
+  'bed-rgh': (S) => ormMap(S, field(S, (u, v) => 0.84 + 0.16 * fbm(u, v, 9, 3, 31))),
+  'bed-albedo': (S) => albedo(S, (u, v, out) => {
+    const b = BEDROAD(u, v);
+    // The same bargain the cliff's colour strikes, and for the same reason: this
+    // multiplies the dirt the ribbon is already painted in, so it carries no hue
+    // of its own and does all of its work in value.
+    //
+    // And it sits **close to** one rather than well under it, which is the whole
+    // difference between this map and the cliff's. The cliff's colour is
+    // *meant* to darken the face, because a face is weathered a long way below
+    // its top and that is what makes a cut read as a cut. The road's is not: a
+    // road is the colour it already is, and what it has been missing is grain.
+    // So the tones here are narrow and centred high - dust worn pale where the
+    // ground is high, the harder stuff a little deeper, and the hollows between
+    // the stones the one thing allowed to go properly dark, because a hollow
+    // that is only a value change is not a hollow.
+    const g = 0.78 + b.coarse * 0.18 + b.grit * 0.10 - b.hollow * 0.30;
+    out[0] = g * 1.04;
+    out[1] = g;
+    out[2] = g * 0.92;
+  }),
+
+  /* ---- the face of a cliff ------------------------------------------- *
+   * A cliff flank and a road are both drawn in a strip along the edge of the
+   * lane, they stand at the same angle to the light a few metres apart, and
+   * until this they wore the same grain - so a wall looked like a road with a
+   * drop beside it. They are two different surfaces and this is the second
+   * one.
+   *
+   * It is built out of the four things the reference is made of, in this order
+   * because they are in this order in a rock face:
+   *
+   *   - **plates**. The rock has broken into angular slabs and a slab is flat.
+   *     A flat slab in a height field is a *terrace*, so the plate tops are a
+   *     coarse noise quantised onto a few levels: the flat tops cost nothing and
+   *     the steps between them become the vertical faces, which is exactly what
+   *     a fractured edge is. Nothing else in the county does this - every other
+   *     grain here is smooth, and a smooth grain cannot have an edge in it.
+   *   - **cracks**, and they are narrow. A crack that fades in over a hand's
+   *     width is a stain, so the ridged noise between the plates is thresholded
+   *     hard and pulled *down* out of the face, and it is the contrast between
+   *     the dark of a crack and the pale of a weathered slab face that makes the
+   *     reference read as rock at a glance.
+   *   - **bedding**, running with the strata the rock broke along, and it is the
+   *     one feature that is horizontal in life and diagonal in the square.
+   *   - **grit**, the grain inside a slab, which is what keeps a pale face from
+   *     being a blank one.
+   *
+   * All three maps come out of the same field, and the normal, the roughness and
+   * the colour are all at the same size on purpose: a cliff whose bumps are not
+   * where its colour is, is two textures laid over each other.
+   */
+  'cliff-n': (S) => normalMap(S, field(S, (u, v) => {
+    const c = CLIFF(u, v);
+    return 0.4 + c.plate * 0.48 - c.crack * 0.42 + (1 - c.bed) * 0.05 + c.grit * 0.16;
+  }), 6.5),
+  'cliff-rgh': (S) => ormMap(S, field(S, (u, v) => {
+    const c = CLIFF(u, v);
+    // a face is dry and holds nothing, and a crack holds dust and is duller
+    // still; the worn top of a slab is where a boot would go and is the only
+    // thing here that takes a polish
+    return clamp01(0.9 - c.grit * 0.1 + c.crack * 0.07 - Math.max(0, 0.86 - c.plate) * 0.22);
+  })),
+  'cliff-albedo': (S) => albedo(S, (u, v, out) => {
+    const c = CLIFF(u, v);
+    // A grey-brown, and **low chroma on purpose**: this multiplies the vertex
+    // colours, which already carry the stone of the face, so a map with a hue
+    // of its own would repaint the cliff in it. The work is done entirely in
+    // value - the pale of a weathered slab, the dark of a crack - which is also
+    // what the reference is: one colour, many tones.
+    //
+    // And it sits **low**, under one. A map that averages near white would
+    // leave the cliff the same pale stone the road is, and the whole point of
+    // drawing it is that a cliff is not a path with a drop beside it: the face is
+    // weathered a good deal darker than the top of it.
+    const base = 0.42 + c.plate * 0.34 + (1 - c.bed) * 0.04 + c.grit * 0.14;
+    const g = base * (1 - c.crack * 0.5);
+    out[0] = g * 1.03;
+    out[1] = g;
+    out[2] = g * 0.93;
+  }),
+
+  /* ---- the shore ----------------------------------------------------- *
+   * Sand, which is the one surface in the county that is neither found nor cut
+   * but **laid**: it is the band round every pool, and it is the only part of a
+   * course that is a flat pale field with nothing standing on it, so a vertex
+   * colour every two metres is a flat pale field with nothing standing on it.
+   *
+   * It gets the same pair the turf gets and for the same two reasons - the
+   * ground's colour is a vertex colour that cannot hold a grain, and the two
+   * maps have to be built out of one field or they are two textures laid over
+   * each other - but out of `SAND()` rather than `TURF()`, because sand is not
+   * blades. A shore is a ripple, and a ripple is a long low crest; give it
+   * grass's map and the beach is a lawn that has been drained.
+   */
+  'sand-n': (S) => normalMap(S, field(S, (u, v) => {
+    const s = SAND(u, v);
+    return 0.46 + s.ripple * 0.30 + s.wrinkle * 0.10 + s.grain * 0.14 - s.grit * 0.06;
+  }), 6.0),
+  'sand-albedo': (S) => albedo(S, (u, v, out) => {
+    const s = SAND(u, v);
+    // The same bargain the cliff's colour strikes and for the same reason: it
+    // **multiplies** a vertex colour that is already the county's sand, so the
+    // work is done in value and not in hue - the pale of a dry crest, the dark
+    // of the trough between two of them, and the speck of grit. One touch of
+    // warmth, so the crests are the yellow of dry sand and the troughs are not
+    // quite the same yellow, but no more than that.
+    //
+    // And it sits under one for the same reason the cliff's does: the shader
+    // puts the mean back with `detailCGain`, and a detail built symmetrically
+    // about white loses its whole highlight half to the clamp of an eight-bit
+    // canvas and arrives as a flat average.
+    const base = 0.58 + s.ripple * 0.16 + s.wrinkle * 0.05 + s.grain * 0.15;
+    const g = base * (1 - s.grit * 0.18);
+    out[0] = g * 1.02;
+    out[1] = g;
+    out[2] = g * 0.92;
+  }),
+
+  /* ---- cut stone, for the things that are built rather than found ----- *
+   * Marble, and the county has none of it: the fountain in the stable's pool
+   * and the snail's own plinth are the two pieces of it, and they are the two
+   * things in the game that are *cut* rather than weathered, so they get their
+   * own grain rather than the granite every stone in the county wears.
+   *
+   * Like the grass detail it is a map that multiplies a colour the piece
+   * already has, built about white so it cannot repaint the stone: what a
+   * marble is that a granite is not is the veining, and a vein is a line of
+   * slightly greyer stone running through it. The veins are ridged noise
+   * sheared one way and then thresholded hard, because a vein that fades in
+   * and out over a hand's width is a stain and not a vein.
+   */
+  'marble-albedo': (S) => albedo(S, (u, v, out) => {
+    const vein = ridged(u, v + u * 2, 4, 4, 13);
+    const vein2 = ridged(u + v, v + u * 3, 11, 3, 29);
+    const dust = fbm(u, v, 9, 3, 41);
+    const sugar = fbm(u, v, 61, 2, 53);
+    const pale = lin('stone'), warm = lin('graniteWarm');
+    const line = clamp01((vein - 0.5) * 2.6) * 0.7 + clamp01((vein2 - 0.62) * 2.8) * 0.4;
+    for (let k = 0; k < 3; k++) {
+      // about 0.98 on average, so the piece underneath keeps the colour it had
+      let c = 0.94 + 0.12 * dust;
+      c = lerp(c, c * 0.66, line);
+      c = lerp(c, c * warm[k] / pale[k], clamp01((vein - 0.78) * 2.2) * 0.5);
+      if (sugar > 0.8) c *= 1 + (sugar - 0.8) * 0.7;
+      out[k] = c;
+    }
+  }),
+  'marble-n': (S) => normalMap(S, field(S, (u, v) => {
+    const vein = ridged(u, v + u * 2, 4, 4, 13);
+    const grit = fbm(u, v, 37, 3, 17);
+    // a cut stone is nearly flat, and the only relief in it is that the veins
+    // stand a hair proud and the pits between them a hair under
+    return 0.46 + vein * 0.14 + grit * 0.24;
+  }), 5),
+  'marble-rgh': (S) => ormMap(S, field(S, (u, v) =>
+    0.34 + 0.26 * fbm(u, v, 13, 3, 71) + 0.10 * ridged(u, v + u * 2, 4, 3, 13))),
+
+  // Two of these, and the shader scrolls one each way. Neither is a wave: a
+  // pool is a set of overlapping rings and troughs, and the trick is that the
+  // rings do not line up between the two layers.
+  'water-n': (S) => normalMap(S, field(S, (u, v) => {
+    const a = Math.sin((u * 5 + fbm(u, v, 4, 2, 3) * 2.2) * Math.PI * 2) * 0.5 + 0.5;
+    const b = fbm(u, v, 6, 3, 19);
+    return 0.5 + (a - 0.5) * 0.34 + (b - 0.5) * 0.5;
+  }), 3.2),
+  'water-n2': (S) => normalMap(S, field(S, (u, v) => {
+    const a = Math.sin((v * 7 - u * 2 + fbm(u, v, 5, 2, 37) * 2.6) * Math.PI * 2) * 0.5 + 0.5;
+    const b = fbm(u + 0.37, v + 0.11, 7, 3, 53);
+    return 0.5 + (a - 0.5) * 0.28 + (b - 0.5) * 0.52;
+  }), 4),
+
+  /* ---- the tintable greys ----------------------------------------- */
+  // Low chroma on purpose: `material.color` is the hue, and a coloured map
+  // under a coloured tint is a hue shift rather than a hue.
+  'snail-n': (S) => normalMap(S, field(S, (u, v) =>
+    0.5 + 0.5 * fbm(u, v, 23, 3, 67)), 3.4),
+  'snail-rgh': (S) => ormMap(S, field(S, (u, v) => 0.38 + 0.26 * fbm(u, v, 13, 2, 67))),
+
+  // A shell: the whorl's own growth lines run one way, and that is the only
+  // detail on a shell that is not a scale of a turtle.
+  'shell-n': (S) => normalMap(S, field(S, (u, v) => {
+    const lines = Math.sin((u * 26 + fbm(u, v, 4, 2, 3) * 1.6) * Math.PI * 2) * 0.5 + 0.5;
+    return 0.4 + lines * 0.34 + fbm(u, v, 19, 2, 71) * 0.26;
+  }), 3),
+  'shell-rgh': (S) => ormMap(S, field(S, (u, v) => 0.30 + 0.30 * fbm(u, v, 9, 3, 71))),
+
+  /* ---- a shared leaf, for everything that is a plant ---------------- *
+   * A conifer, a bush, a lily, a reed and a tuft of grass are all leaves at
+   * different scales, and a leaf has a rib up the middle and veins running off
+   * it - none of which any of them has as geometry, because at the size the
+   * game looks at them a vein is a texture and not a mesh. One map for all of
+   * them, and no albedo: the colour of a leaf is in its vertex colours, which
+   * differ from the twig it grows on, and a base-colour map multiplies both
+   * into the same mud. A normal map has no average brightness to get wrong. */
+  'leaf-n': (S) => normalMap(S, field(S, (u, v) => {
+    // the midrib and the side veins, running off it at an angle
+    const mid = 1 - Math.abs(((u * 6) % 1) - 0.5) * 2;
+    const side = Math.sin((v * 9 + Math.abs((u * 6) % 1 - 0.5) * 3) * Math.PI * 2) * 0.5 + 0.5;
+    const grain = fbm(u, v, 19, 2, 83);
+    return 0.42 + Math.pow(mid, 6) * 0.3 + side * 0.14 + grain * 0.16;
+  }), 10),
+  'leaf-rgh': (S) => ormMap(S, field(S, (u, v) => {
+    const mid = 1 - Math.abs(((u * 6) % 1) - 0.5) * 2;
+    // a leaf is waxy where it is thick and matte at its edges, and the wax is
+    // the only reason a wet leaf and a dry one look different
+    return 0.40 + 0.34 * fbm(u, v, 11, 3, 11) - 0.16 * Math.pow(mid, 6);
+  })),
+
+  /* ---- wood, plaster and thatch ---------------------------------------
+   * Normal and roughness only, and the reason is the same as the leaf's: a
+   * hut is plaster, timber and thatch in one mesh with one material, so a base
+   * colour here would land on all three at once. These are here for the pieces
+   * that are one material - a post, a beam, a lantern's frame - and the
+   * buildings wait until they are three meshes.                            */
+  // Sawn: the grain runs one way along the piece, the rings are the wide slow
+  // bands across it, and a few knots where a branch used to be.
+  'timber-n': (S) => normalMap(S, field(S, (u, v) => {
+    const ring = Math.sin((u * 9 + fbm(u, v, 3, 2, 5) * 2.4) * Math.PI * 2) * 0.5 + 0.5;
+    const fibre = fbm(u * 0.2, v, 43, 2, 61);
+    return 0.42 + Math.pow(ring, 3) * 0.34 + fibre * 0.22;
+  }), 6),
+  'timber-rgh': (S) => ormMap(S, field(S, (u, v) => 0.72 + 0.22 * fbm(u, v, 13, 3, 5))),
+
+  /* ---- sailcloth ----------------------------------------------------- *
+   * The one map in the county that is cloth, and it is here because a windmill's
+   * fan is the largest single surface in the game that is neither stone nor
+   * wood. A mill sail is canvas stretched on a frame, and the two things that
+   * tell it from a painted board are the **weave** and the way the cloth sags
+   * between the battens - so the weave is a fine cross-hatch in two directions
+   * and the sag is one slow undulation across it, and the normal carries both.
+   *
+   * It is drawn at a fine scale because that is the scale it is at: a sail is
+   * about a metre and a half square and this tile is a hand's width of it, so a
+   * weave you cannot see on the model is exactly the weave you want.           */
+  'canvas-n': (S) => normalMap(S, field(S, (u, v) => {
+    const warp = Math.sin((u * 46 + fbm(u, v, 5, 2, 19) * 1.6) * Math.PI * 2) * 0.5 + 0.5;
+    const weft = Math.sin((v * 44 - fbm(u, v, 7, 2, 37) * 1.4) * Math.PI * 2) * 0.5 + 0.5;
+    // the sag between the battens, and a little slack where the cloth is tied
+    const sag = fbm(u, v, 5, 2, 53);
+    return 0.44 + (warp * weft) * 0.2 + sag * 0.34;
+  }), 3.4),
+  'canvas-rgh': (S) => ormMap(S, field(S, (u, v) =>
+    0.86 + 0.1 * fbm(u, v, 17, 2, 53) + 0.04 * (vnoise(u * 44, v * 42) - 0.5))),
+
+  /* ---- the mushrooms ------------------------------------------------ *
+   * One cap map for all five, and no colour in it: a cap is recoloured at
+   * runtime - two of the five are an instanceColor tint, and the other three
+   * get their colour in their vertices - so a full-colour map underneath turns
+   * a tint into a hue shift. What a cap does have that geometry does not is the
+   * fine grain of the flesh and the rings it leaves on the gills.           */
+  'mushroom-n': (S) => normalMap(S, field(S, (u, v) => {
+    const flesh = fbm(u, v, 31, 2, 97);
+    const gill = ridged(u, v * 0.25, 23, 2, 43);
+    return 0.44 + flesh * 0.26 + gill * 0.30;
+  }), 4.8),
+  'mushroom-rgh': (S) => ormMap(S, field(S, (u, v) => 0.62 + 0.26 * fbm(u, v, 13, 2, 97))),
+
+  /* ---- the two things that give out light ---------------------------- *
+   * An emissive map is read as a colour and multiplied into the emissive, so
+   * it is not a mask - it is what the lit thing looks like. That is why the
+   * paper's is warm and ribbed rather than a white blob, and why the glass's
+   * is hottest at the burner and goes out towards the glass.                 */
+  'lantern-em': (S) => albedo(S, (u, v, out) => {
+    // the ribs of the lantern, and the band of red round the waist
+    const rib = 1 - Math.abs(((u * 18) % 1) - 0.5) * 2;
+    const band = Math.abs(v - 0.5) < 0.07 ? 1 : 0;
+    const thin = fbm(u, v, 9, 3, 3);
+    const paper = lin('paperWarm'), red = lin('paperBand');
+    for (let k = 0; k < 3; k++) {
+      // a rib is paper seen edge-on: thinner, so it gives out *more*, and the
+      // shade it makes on the paper either side of it is what reads as a rib
+      const lit = 0.72 + Math.pow(rib, 4) * 0.30 + thin * 0.14;
+      let c = paper[k] * lit;
+      if (band) c = lerp(c, red[k] * lit, 0.8);
+      out[k] = c;
+    }
+  }),
+  'lamp-em': (S) => albedo(S, (u, v, out) => {
+    // the flame is low in the globe and the glass round it is not lit, so the
+    // map falls away from a point rather than glowing evenly
+    const d = Math.hypot(u - 0.5, (v - 0.34) * 1.5);
+    const flame = clamp01(1 - d * 2.6);
+    const glassy = fbm(u, v, 7, 2, 31);
+    for (let k = 0; k < 3; k++) {
+      const c = lin('paperWarm');
+      out[k] = (0.10 + flame * 0.95 + glassy * 0.06) * c[k];
+    }
+  }),
+
+  // and the glass itself, which is a globe with a little pull in it: the only
+  // detail a piece of glass has is the way it was made
+  'glass-n': (S) => normalMap(S, field(S, (u, v) => {
+    const pull = fbm(u, v, 5, 2, 17);
+    const ripple = Math.sin((v * 3 + pull * 1.4) * Math.PI * 2) * 0.5 + 0.5;
+    return 0.5 + (ripple - 0.5) * 0.5;
+  }), 1.1),
+};
+
+/**
+ * Which size a name is drawn at. A colour map gets twice the resolution of a
+ * normal or a roughness map, because it is the one that is looked at: it is
+ * the one on the stone in the foreground, and the one a texel of it that is
+ * too coarse shows up as. The other two are data the eye never reads directly,
+ * they are read as the shading they produce, and 256 tiles at the scale the
+ * course surface is tiled at is about a texel a centimetre - which is finer
+ * than the shadow the key light can resolve at thirty metres.
+ */
+function sizeFor(name) {
+  if (name.startsWith('water')) return SIZE.water;
+  // The cliff's three maps are all the same size whatever their names say. An
+  // albedo gets twice the resolution of a normal everywhere else in this file,
+  // which is right when the colour is a tint laid over a bump and wrong here: the
+  // cliff's colour *is* its relief, and at two resolutions apart the pale face is
+  // in one place and the bump that makes it pale is in another.
+  if (name.startsWith('cliff-')) return SIZE.n;
+  // And the road's two, for the cliff's reason. An albedo gets twice the
+  // resolution of a normal everywhere else in this file, which is right when the
+  // colour is a tint laid over a bump and wrong here: the road's colour *is* its
+  // grain, and a worn patch pale at one resolution and raised at another is a
+  // patch with a shadow in the wrong place.
+  if (name.startsWith('bed-')) return SIZE.n;
+  // And the shore's two, for the cliff's reason: a ripple that is pale in one
+  // of them and raised in the other is a ripple with a shadow in the wrong
+  // place, which is the whole failure `SAND()` exists to avoid.
+  if (name.startsWith('sand-')) return SIZE.n;
+  // And the turf's two, at **1024**, which is the one map in this file that is
+  // not content with a quarter of that. Everything else in here is a rock, a
+  // wall or a road, and the largest thing any of them has to resolve is a slab
+  // edge. Turf is the one surface whose whole character is a thing three
+  // centimetres across, tiled five metres to a side: at 256 that is a hundred
+  // and forty cells a blade, and a blade is a texel and a half. The albedo and
+  // the normal are the same size for the reason the cliff's are - they are one
+  // mat of stems and they have to agree about where the stems are.
+  if (name.startsWith('grass-')) return SIZE.turf;
+  if (name.endsWith('-albedo')) return SIZE.albedo;
+  if (name === 'snail-n' || name === 'snail-rgh' || name.startsWith('shell-')) return SIZE.tintable;
+  return SIZE.n;
+}
+
+/**
+ * One map, as a canvas. This is the whole interface the harness hook uses:
+ * `window.__texExport('rock-n')` calls exactly this and posts the bytes. The
+ * size is an argument so the page can draw a thumbnail of all fifteen at once
+ * without spending a second and a half of javascript on it.
+ */
+function buildMap(name, size) {
+  const draw = DRAW[name];
+  if (!draw) return null;
+  const before = detail.rms;
+  const canvas = draw(size || sizeFor(name));
+  if (size || !sizeFor(name)) detail.rms = before;
+  lastDraw = { name, rms: detail.rms };
+  return canvas;
+}
+/** What the last `buildMap` actually drew, for the report under the grid. */
+let lastDraw = { name: null, rms: 0 };
+
+/** Everything the manifest names, whether it can be drawn here, and who wants it. */
+function inventory() {
+  const out = [];
+  for (const m of allMaps()) {
+    const wanted = [];
+    for (const name of Object.keys(MAPS)) {
+      for (const part of allParts(name)) {
+        if (mapsFor(name, part).includes(m)) wanted.push(part ? name + '-' + part : name);
+      }
+    }
+    out.push({ name: m, slot: slotFor(m), draw: !!DRAW[m], size: sizeFor(m), wanted });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Writing
+ *
+ * Served from /_harness/textures.html the page has a `__texExport` that posts
+ * into meshes/tex/. Opened off the server it has a download link instead,
+ * which is the only difference and exists so the page is still a page.
+ *
+ * The paths are absolute because of that first one: the page is served from
+ * /_harness/, and a relative `meshes/tex/x.png` from there asks the server for
+ * a file that has never existed.
+ * ------------------------------------------------------------------ */
+const texUrl = (name) => '/meshes/tex/' + name + '.png';
+const have = new Map();
+/** How far each normal map tilts a surface, filled in as the grid is drawn. */
+const tilt = {};
+async function onDisk() {
+  for (const item of inventory()) {
+    const res = await fetch(texUrl(item.name), { method: 'HEAD', cache: 'no-store' });
+    have.set(item.name, res.ok);
+  }
+  grid();
+}
+async function write(name) {
+  const canvas = buildMap(name);
+  if (!canvas) { log('no drawer for ' + name + ' - add one to DRAW'); return false; }
+  if (window.__texExport) {
+    const r = await window.__texExport(name);
+    log(`${name}.png — ${r.ok ? r.bytes + ' bytes' : 'not written'}${r.error ? ' (' + r.error + ')' : ''}`);
+    if (r.ok) have.set(name, true);
+    return !!r.ok;
+  }
+  const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.png';
+  document.body.appendChild(a); a.click(); a.remove();
+  have.set(name, true);
+  log(name + '.png — downloaded');
+  return true;
+}
+async function writeAll(onlyMissing) {
+  for (const item of inventory()) {
+    if (!item.draw) { log('SKIPPED ' + item.name + ' — no drawer in DRAW'); continue; }
+    if (onlyMissing && have.get(item.name)) continue;
+    await write(item.name);
+  }
+  grid();
+}
+
+/* ------------------------------------------------------------------ *
+ * The page itself: every map, what it is for, what it looks like, and
+ * whether the file is actually there. A name in the manifest with no file
+ * beside it is the whole failure mode of this migration, so it is on screen.
+ * ------------------------------------------------------------------ */
+function grid() {
+  const g = $('grid');
+  g.textContent = '';
+  for (const item of inventory()) {
+    const slot = SLOTS[item.slot] || {};
+    const card = document.createElement('div');
+    card.className = 'card';
+    const canvas = buildMap(item.name, SIZE.thumb);
+    // the thumbnail is a different size, so the tilt is read from a full-size
+    // draw for the normal maps - a quarter of the texels is a quarter of the
+    // gradient and would report a map as flat when it is not
+    if (item.slot === 'normalMap') tilt[item.name] = (buildMap(item.name), detail.rms);
+    if (canvas) card.appendChild(canvas);
+    else {
+      const missing = document.createElement('div');
+      missing.style.cssText = 'width:140px;height:140px;border:1px solid #7a3b2a;color:#d2912b;padding:8px';
+      missing.textContent = 'no drawer in DRAW';
+      card.appendChild(missing);
+    }
+    const nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = item.name + (item.slot ? '' : ' (no slot)');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = item.size + '²  ' + (item.slot || '?') + (slot.srgb ? ' · sRGB' : ' · data');
+    if (item.wanted.length) {
+      const who = document.createElement('div');
+      who.className = 'meta';
+      who.textContent = 'for ' + item.wanted.join(', ');
+      card.appendChild(who);
+    }
+    const disk = document.createElement('div');
+    const on = have.get(item.name);
+    disk.className = 'disk ' + (item.draw ? (on ? 'yes' : 'no') : '');
+    disk.textContent = item.draw ? (on ? 'on disk' : 'not written') : 'unmapped';
+    card.append(nm, meta, disk);
+    // how much the map actually tilts a surface, which is the one number that
+    // says whether a normal map is doing anything
+    if (item.slot === 'normalMap' && tilt[item.name] !== undefined) {
+      const t = document.createElement('div');
+      const deg = Math.atan(tilt[item.name] * 2) * 180 / Math.PI;
+      t.className = 'meta';
+      t.textContent = 'tilts ' + deg.toFixed(1) + '°';
+      t.style.color = deg < 4 ? '#d2912b' : '#8b9195';
+      card.appendChild(t);
+    }
+    g.appendChild(card);
+  }
+  const flat = Object.entries(tilt).filter(([, v]) => Math.atan(v * 2) * 180 / Math.PI < 4);
+  if (flat.length) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.innerHTML = 'too flat to see: ' + flat.map(([n, v]) => `<b>${n}</b> ${(Math.atan(v * 2) * 180 / Math.PI).toFixed(1)}°`)
+      .join(', ') + ' — raise the strength passed to <code>normalMap</code>.';
+    g.appendChild(p);
+  }
+}
+
+$('all').onclick = () => writeAll(false);
+$('missing').onclick = () => writeAll(true);
+$('reload').onclick = () => onDisk();
+grid();
+onDisk();
+</script>
+</body>
+</html>

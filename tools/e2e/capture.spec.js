@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from 'playwright/test';
 import { GFX, GFX_KEY, SAVE_KEY, COURSES } from './tier.js';
+import { BOOT_MS } from './fixtures.js';
 
 // `__dirname` and not `import.meta.url`, and that is a fact about the runner: a
 // `.js` spec is compiled to a CommonJS module before it is evaluated, so
@@ -26,7 +27,7 @@ test('capture the fixture save and the golden baseline', async ({ page }) => {
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   await page.addInitScript(([k, v]) => localStorage.setItem(k, JSON.stringify(v)), [GFX_KEY, GFX]);
   await page.goto('/snail-race.html', { waitUntil: 'load' });
-  await page.waitForFunction(() => !!window.__snail, null, { timeout: 180000 });
+  await page.waitForFunction(() => !!window.__snail, null, { timeout: BOOT_MS });
 
   // --- the save, as the game itself would write it ---
   const save = await page.evaluate(() => JSON.stringify(Object.assign({ v: 2 }, window.__snail.state)));
@@ -114,7 +115,7 @@ test('capture the fixture save and the golden baseline', async ({ page }) => {
   // reordering the loop would move every number in it.
   for (const id of COURSES) {
     await page.reload({ waitUntil: 'load' });
-    await page.waitForFunction(() => !!window.__snail, null, { timeout: 180000 });
+    await page.waitForFunction(() => !!window.__snail, null, { timeout: BOOT_MS });
     const res = await page.evaluate((catId) => {
       const S = window.__snail;
       S.surge(false);
@@ -140,7 +141,7 @@ test('capture the fixture save and the golden baseline', async ({ page }) => {
 
   // --- the tier's own numbers, at the tier the fixture pinned ---
   await page.reload({ waitUntil: 'load' });
-  await page.waitForFunction(() => !!window.__snail, null, { timeout: 180000 });
+  await page.waitForFunction(() => !!window.__snail, null, { timeout: BOOT_MS });
   // **The surface itself, and it is the check that the split is finished.**
   // `window.__snail` is the one object in the county whose definition reaches
   // every module - `state` from the race, `planTrack` from the planner,

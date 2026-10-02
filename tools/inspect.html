@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>inside a glb</title>
+<style>
+  body { font: 13px/1.6 ui-monospace, Menlo, monospace; margin: 24px; background: #171a1c; color: #d8d4cc; }
+  h1 { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8b9195; margin: 26px 0 6px; }
+  .note { color: #8b9195; max-width: 78ch; }
+  .l { color: #8b9195; }
+  .g { color: #7fc08a; }
+  .a { color: #d2912b; }
+  table { border-collapse: collapse; margin: 4px 0 14px; }
+  td, th { padding: 2px 12px 2px 0; text-align: left; vertical-align: top; }
+  th { color: #8b9195; font-weight: 400; }
+  .miss { color: #d2912b; }
+  select { font: inherit; background: #2b3134; color: #d8d4cc; border: 1px solid #3d4548; border-radius: 3px; padding: 3px 6px; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1>inside a glb</h1>
+<p class="note">
+  What a model file actually holds, which is the question every odd thing in
+  the game comes back to. It is also the audit for the map migration: the table
+  at the foot is every prop in the manifest, what it declares and what is on
+  disk, and the one line that matters is <b>maps</b> &mdash; a name declared
+  with no file beside it is a prop that draws as though it had never been
+  converted, which is the entire failure mode of converting the library one
+  prop at a time.
+</p>
+<select id="file"></select>
+<div id="out"></div>
+<h2>the manifest</h2>
+<div id="audit"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+import { MAPS, SLOTS, allMaps, allParts, mapsFor, slotFor } from '../meshes/maps.js';
+
+const $ = (id) => document.getElementById(id);
+const bytes = (n) => n < 1024 * 1024 ? (n / 1024).toFixed(1) + ' KB' : (n / 1024 / 1024).toFixed(2) + ' MB';
+
+// The one thing the game cannot see is what a file *declared*: the glTF JSON
+// chunk keeps the extensions a file used and the images it referenced. So the
+// header is read here by hand - a binary header, then the length of the JSON
+// chunk, then the JSON - and the same bytes are handed to the loader. A glb
+// with a texture in it is worth knowing about: a map embedded in a glb is not
+// one the game can swap or leave out, and the house rule is that they carry
+// none, because every map is loaded by name out of meshes/tex/.
+const loader = new GLTFLoader();
+
+const MAP_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'bumpMap'];
+const ATTRS = ['position', 'normal', 'uv', 'uv1', 'uv2', 'tangent', 'color', 'skinIndex', 'skinWeight'];
+const yn = (b) => b ? 'yes' : '—';
+
+/** The JSON chunk of a glb: what the file said about itself. */
+function glbJson(buf) {
+  const jsonLen = new DataView(buf).getUint32(12, true);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jsonLen)));
+}
+
+async function show(path) {
+  $('out').innerHTML = 'loading…';
+  const buf = await (await fetch('/' + path)).arrayBuffer();
+  const j = glbJson(buf);
+  const gltf = await loader.parseAsync(buf, '');
+  const root = gltf.scene;
+  root.position.y = 0.088;
+  const ex = j.extensionsUsed || [];
+  const im = j.images || [];
+  const rows = [];
+  const p = path.replace(/^\//, '').replace(/^meshes\//, '');
+  rows.push(`<tr><th>file</th><td>${p}</td><th>size</th><td>${bytes(buf.byteLength)}</td></tr>`);
+  rows.push(`<tr><th>extensions</th><td colspan="3">${ex.length ? ex.join(', ') : '—'}</td></tr>`);
+  rows.push(`<tr><th>images</th><td colspan="3" class="${im.length ? 'a' : 'l'}">${
+    im.length ? im.length + ' embedded — the game reads its maps from meshes/tex/ by name' : 'none'}</td></tr>`);
+  rows.push(`<tr><th>buffers</th><td colspan="3" class="l">${(j.buffers || []).length}</td></tr>`);
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = o.material;
+    o.geometry.computeBoundingBox();
+    const bb = o.geometry.boundingBox;
+    rows.push(`<tr><th>mesh</th><td>${o.name}</td>
+      <th>material</th><td>${m.name || '<i>no name</i>'}</td></tr>`);
+    rows.push(`<tr><th>verts</th><td>${o.geometry.attributes.position.count}</td>
+      <th>indexed</th><td>${!!o.geometry.index}</td></tr>`);
+    rows.push(`<tr><th>attributes</th><td colspan="3">${
+      ATTRS.filter((a) => o.geometry.attributes[a]).join(', ') || '<i>none</i>'}</td></tr>`);
+    rows.push(`<tr><th>shared</th><td>${yn(o.geometry.userData.shared)}</td>
+      <th>uv layers</th><td>${[0, 1, 2].filter((i) => o.geometry.attributes['uv' + (i || '')]).length}</td></tr>`);
+    rows.push(`<tr><th>maps</th><td colspan="3">${
+      MAP_SLOTS.filter((s) => m[s]).join(', ') || '—'}</td></tr>`);
+    rows.push(`<tr><th>rough / metal</th><td>${m.roughness} / ${m.metalness}</td>
+      <th>vertexColors</th><td>${yn(m.vertexColors)}</td></tr>`);
+    rows.push(`<tr><th>local min</th><td>${bb.min.toArray().map((v) => v.toFixed(2)).join(', ')}</td>
+      <th>max</th><td>${bb.max.toArray().map((v) => v.toFixed(2)).join(', ')}</td></tr>`);
+  });
+  $('out').innerHTML = `<table>${rows.join('')}</table>`;
+}
+
+/**
+ * The audit: every name in the manifest, whether the game will find a file for
+ * it, and which props declare it. `MAPS` is the one list all four builders and
+ * the game read, so this table is the same list and the same answer the game
+ * reaches when it warns about a missing map.
+ */
+async function audit() {
+  const have = new Map();
+  await Promise.all(allMaps().map(async (m) => {
+    const res = await fetch('/meshes/tex/' + m + '.png', { method: 'HEAD' });
+    have.set(m, res.ok);
+  }));
+  const byProp = new Map();
+  for (const name of Object.keys(MAPS)) {
+    for (const part of allParts(name)) {
+      for (const m of mapsFor(name, part)) {
+        const who = part ? name + '-' + part : name;
+        if (!byProp.has(m)) byProp.set(m, []);
+        if (!byProp.get(m).includes(who)) byProp.get(m).push(who);
+      }
+    }
+  }
+  const rows = ['<tr><th>map</th><th>slot</th><th>on disk</th><th>declared by</th><th>note</th></tr>'];
+  let holes = 0;
+  for (const m of allMaps()) {
+    const slot = slotFor(m);
+    const ok = have.get(m);
+    if (!ok) holes++;
+    const s = SLOTS[slot];
+    rows.push(`<tr><td>${m}</td><td class="l">${slot || '<span class="miss">no slot</span>'}</td>
+      <td class="${ok ? 'g' : 'miss'}">${ok ? 'yes' : 'no'}</td>
+      <td class="l">${(byProp.get(m) || []).join(', ') || '— course surface —'}</td>
+      <td class="l">${s ? s.note : 'a name the manifest does not recognise'}</td></tr>`);
+  }
+  $('audit').innerHTML = `<table>${rows.join('')}</table>
+    <p class="note">${allMaps().length} maps declared, ${allMaps().length - holes} written,
+    ${holes} still to draw. A name with no slot is the one that would be
+    silently ignored by the game.</p>`;
+}
+
+const files = [...new Set([
+  'rock.glb', 'mossy-rock.glb', 'bush.glb', 'hut.glb', 'mushroom-giant.glb',
+  'lantern-pole.glb', 'snail.glb', 'shell-bands.glb', 'conifer.glb', 'tuft.glb',
+])];
+for (const f of files) {
+  const o = document.createElement('option');
+  o.value = 'meshes/' + f; o.textContent = 'meshes/' + f;
+  $('file').appendChild(o);
+}
+for (const side of ['a', 'b']) {
+  const o = document.createElement('option');
+  o.value = side === 'a' ? 'tools/backup/snail.glb' : 'meshes/snail.glb';
+  o.textContent = o.value;
+  $('file').appendChild(o);
+}
+// ?f= is the one the docs and the skills use, and it is a path in the project
+// rather than a name out of the list
+const want = new URLSearchParams(location.search).get('f');
+if (want) {
+  const full = want.includes('/') ? want : (/^(tools|meshes)\//.test(want) ? want : 'meshes/' + want);
+  if (![...$('file').options].some((o) => o.value === full)) {
+    const o = document.createElement('option');
+    o.value = full; o.textContent = full;
+    $('file').appendChild(o);
+  }
+  $('file').value = full;
+}
+$('file').onchange = () => show($('file').value);
+show($('file').value);
+audit();
+</script></body></html>

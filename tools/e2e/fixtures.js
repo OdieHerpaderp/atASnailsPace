@@ -23,6 +23,16 @@ export const SAVE = JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-save.jso
 
 export { GFX, GFX_KEY, SAVE_KEY };
 
+/** How long a boot may take, and it is short on purpose. The county boots in
+ *  about two seconds under SwiftShader at 480x300 and has been measured at 3.5 s
+ *  wall clock for the slowest spec's first paint, so twenty is ten times the
+ *  worst good case. **A longer timeout does not make the suite more patient, it
+ *  makes a failure slower to find**: a page that throws in a module body never
+ *  reaches `window.__snail`, and every spec that waits for it waits the whole
+ *  budget first - twenty-two tests at three minutes each is an hour of a
+ *  one-line error. So the wait is short and the errors are surfaced with it. */
+export const BOOT_MS = 20000;
+
 /** Seed the keys, then go. `gfx: null` seeds the save and **leaves the settings
  *  key alone**, which is how a spec asks "does the tier the game just wrote come
  *  back?" - an init script re-runs on every navigation, so a page armed with the
@@ -44,7 +54,22 @@ export async function boot(page, { gfx = GFX } = {}) {
   // ran, and it is the only completion signal here that is not a timeout with a
   // guess in it: `#boot` is removed 700 ms after it goes, so a page that reached
   // `.gone` may already have taken the element the loader would have to read.
-  await page.waitForFunction(() => !!window.__snail, null, { timeout: 180000 });
+  try {
+    await page.waitForFunction(() => !!window.__snail, null, { timeout: BOOT_MS });
+  } catch (e) {
+    // **The module-evaluation throw, printed here rather than as a bare
+    // timeout.** A missing or misspelled export is a `ReferenceError` before the
+    // first frame, and the boot screen never moves off whichever line the game
+    // had reached - which is "loading the meshes…" for anything that throws
+    // after the loader and says nothing else at all.
+    let said = '(gone)';
+    try { said = await page.locator('#boot').textContent({ timeout: 2000 }); } catch {}
+    throw new Error(
+      `the county did not boot in ${BOOT_MS / 1000}s.\n`
+      + `  #boot says: ${said}\n`
+      + `  page errors:\n${errors.map((x) => '    ' + x).join('\n') || '    (none)'}\n`
+      + `  ${e.message}`);
+  }
   return { errors };
 }
 

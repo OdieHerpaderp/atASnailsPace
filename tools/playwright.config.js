@@ -26,10 +26,14 @@ export default defineConfig({
   // checking agrees with whatever is broken - so it only runs when a name says
   // so, and that name is `CAPTURE`.
   testIgnore: process.env.CAPTURE ? [] : '**/capture.spec.js',
-  // a course is planned, built, scattered, reflected and then raced at 4 kHz of
-  // simulated time; on a software rasteriser that is seconds, not milliseconds
-  timeout: 300000,
-  expect: { timeout: 30000 },
+  // **Ninety seconds, and not the five minutes it was.** A course is planned,
+  // built, scattered and then raced at 4 kHz of simulated time, and the slowest
+  // spec in the suite - five courses, five whole races, and the chain built and
+  // torn down twice - measures 6.4 s on a software rasteriser. Ninety is
+  // fourteen times that, and the point of a ceiling nobody expects to reach is
+  // that reaching it is a report and not an afternoon.
+  timeout: 90000,
+  expect: { timeout: 20000 },
   workers: 1,
   fullyParallel: false,
   forbidOnly: true,

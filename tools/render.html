@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>render a model</title>
+<style>body{margin:0;background:#171a1c} canvas{display:block}</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script></head>
+<body><script type="module">
+/**
+ * A model on its own, so a change to a mesh can be looked at before it goes
+ * near the game. The game's own materials are stood in for: the parts it
+ * recolours by name get the body or shell colour, so a piece looks the way it
+ * will look out there.
+ *
+ *   /tools/render.html?f=snail.glb                 four angles
+ *   /tools/render.html?f=hut.glb&view=1&a=1.9&d=0.9
+ *   /tools/render.html?f=lantern-arch.glb&v=shell  the angles that suit a prop
+ *   ?body=0xf3e7d3&shell=0xb0662f                   override the colours
+ *   ?maps=0                                         the same model with no
+ *                                                    maps at all, which is what
+ *                                                    a prop looks like before
+ *                                                    its phase
+ *   ?t=0.2 aims at a point on the model. Drag to turn it, shift-drag to
+ *   slide the view, wheel to come closer, double-click to put it back.
+ *
+ * The model keeps the material out of its own file - maps, roughness and all -
+ * and the maps are attached out of meshes/tex/ by name, the same way the game
+ * does, so what this page shows is what the game draws. Only the base colour is
+ * still the page's to choose, and only where the file leaves it open.
+ */
+import * as THREE from 'three';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+import { orbitControl } from '/tools/orbit.js';
+import { applyMaps, loadMaps, propOf } from '/tools/maps.js';
+import { mapsFor } from '/meshes/maps.js';
+
+const q = new URLSearchParams(location.search);
+const file = q.get('f') || 'snail.glb';
+const W = 520, H = 420;
+
+// The maps come out of meshes/tex/ and not out of the file, so they are loaded
+// and attached here as well - otherwise this page shows a prop with its surface
+// missing, and a normal map looks like no normal map at all.
+const maps = await loadMaps();
+
+const g = await new GLTFLoader().loadAsync('/meshes/' + file);
+const root = g.scene;
+// the game stands the model on the track with this lift under it
+root.position.y = 0.088;
+const got = applyMaps(root, file, maps);
+if (q.get('maps') === '0') {
+  root.traverse((o) => { if (o.isMesh) for (const s of ['map', 'normalMap', 'roughnessMap', 'emissiveMap']) o.material[s] = null; });
+} else {
+  // any map this model declares and has no file for: a prop that looks
+  // untextured and should not
+  const prop = propOf(file);
+  const missing = prop ? mapsFor(prop, '').filter((n) => !got.includes(n)) : [];
+  if (missing.length) console.warn(file + ' declares ' + missing.join(', ') + ' and meshes/tex/ has none');
+}
+
+const bodyCol = +(q.get('body') || 0xf3e7d3);
+const shellCol = +(q.get('shell') || 0xb0662f);
+const parts = new Map();
+root.traverse((o) => {
+  if (!o.isMesh) return;
+  // a bare prop file has a material with no name, and all its colour is in the
+  // vertices, so it is given the shell colour to sit in
+  const k = o.material.name || (/shell/.test(file) ? 'shell' : 'body');
+  if (!parts.has(k)) parts.set(k, []);
+  parts.get(k).push(o);
+  o.castShadow = true;
+});
+/**
+ * The model's own materials, and only their base colour touched.
+ *
+ * This page used to throw away whatever material the file carried and build a
+ * single new one per part: vertex colours, one roughness, no maps. That was
+ * the house style when nothing had a map, and it is the exact thing that made
+ * a textured model look untextured here and perfectly textured in the game. So
+ * the material is kept - maps, roughness, metalness and all - and this page
+ * only says what the colour is where the file leaves it open: a body or a
+ * shell, which the page is asked to recolour, or a prop with no base map, which
+ * must not draw as pure white because ten centimetres of white reads as a
+ * stone.
+ */
+const TINTS = { body: [bodyCol, 0.72], foot: [bodyCol, 0.66], stalk: [bodyCol, 0.6], shell: [shellCol, 0.42], paper: [bodyCol, 0.9] };
+for (const [key, [color, rough]] of Object.entries(TINTS)) {
+  for (const m of parts.get(key) || []) {
+    m.material = m.material.clone();
+    m.material.color.set(color);
+    // a model that brings its own roughness keeps it; the page's number is a
+    // floor for the props that came out of a pipeline which declared none
+    m.material.roughness = Math.max(rough, m.material.roughness || 0);
+  }
+}
+for (const [key, list] of parts) {
+  if (TINTS[key]) continue;
+  for (const m of list) {
+    m.material = m.material.clone();
+    if (!m.material.map) m.material.color.set(0x9a968c);
+  }
+}
+
+/**
+ * A little sky to light the model with. A material with a roughness map and a
+ * normal map has nothing to reflect without one, and reads as the flat colour
+ * it was painted - which is no use to anybody judging a surface.
+ */
+const ENV_W = 32, ENV_H = 16;
+function makeEnv() {
+  const px = new Uint8Array(ENV_W * ENV_H * 4);
+  for (let y = 0; y < ENV_H; y++) {
+    const t = 1 - (y + 0.5) / ENV_H;
+    const c = t < 0.5
+      ? [0.58 + 0.34 * t * 2, 0.70 + 0.24 * t * 2, 0.86 + 0.10 * t * 2]
+      : [0.86 - 0.52 * (t - 0.5) * 2, 0.82 - 0.52 * (t - 0.5) * 2, 0.72 - 0.44 * (t - 0.5) * 2];
+    for (let x = 0; x < ENV_W; x++) {
+      const o = (y * ENV_W + x) * 4;
+      px[o] = c[0] * 255; px[o + 1] = c[1] * 255; px[o + 2] = c[2] * 255; px[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(px, ENV_W, ENV_H);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return new THREE.PMREMGenerator(renderer).fromEquirectangular(tex).texture;
+}
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xaebfcc);
+scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
+key.position.set(2.5, 4, 3); key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+key.shadow.camera.left = -1; key.shadow.camera.right = 1;
+key.shadow.camera.top = 1; key.shadow.camera.bottom = -1;
+scene.add(key);
+scene.add(root);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(4, 40),
+  new THREE.MeshStandardMaterial({ color: 0x8fa0ab }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+
+// each view is a bearing, how high it looks from over the target, and that as
+// a fraction of the distance; the distance and the aim are worked out below
+const views = [
+  { name: '3/4 front', a: Math.PI * 0.60, rise: 0.42 },
+  { name: 'side', a: Math.PI * 0.50, rise: 0.30 },
+  { name: 'front', a: 0, rise: 0.35 },
+  { name: '3/4 back', a: Math.PI * 1.42, rise: 0.50 },
+];
+if (q.get('v') === 'shell') {
+  views.length = 0;
+  views.push({ name: '3/4 above', a: 0.85, rise: 0.6 });
+  views.push({ name: 'side', a: Math.PI * 0.5, rise: 0.16 });
+  views.push({ name: 'face on', a: 0.1, rise: 0.12 });
+}
+const one = q.get('view');
+const tx = +(q.get('tx') || 0), tz = +(q.get('tz') || 0), ty = +(q.get('t') || 0.26);
+const list = one ? [{ name: 'one', a: +q.get('a') || Math.PI * 0.60, d: +(q.get('d') || 1.15),
+  y: +(q.get('camy') || 0.34) + ty }] : views;
+
+// The views above are framed for something the size of a snail, which is no use
+// for a house or a mushroom, so unless a distance was asked for on the url the
+// framing is worked out from the model itself: the same rule compare.html uses,
+// so a model looks the same size on both pages.
+const modelBox = new THREE.Box3().setFromObject(root);
+const size = modelBox.getSize(new THREE.Vector3());
+{
+  const fixed = list.some((v) => v.fixed);
+  if (!fixed) {
+    const lo = modelBox.min.y - 0.088, hi = modelBox.max.y + 0.088;
+    const tall = Math.max(hi - lo, 0.15);
+    const wide = Math.max(size.x, size.z, 0.15);
+    const fov = (35 * Math.PI) / 180;
+    const fit = Math.max(tall / 2 / Math.tan(fov / 2), wide / 2 / Math.tan(fov / 2) / (W / H));
+    const aim = (hi + lo) / 2;
+    for (const v of list) {
+      v.d = fit * 1.35;
+      v.ty = aim;
+      v.y = aim + v.d * (v.rise === undefined ? 0.42 : v.rise);
+    }
+    if (one) list[0].y = aim + list[0].d * (q.get('camy') === null ? 0.42 : +q.get('camy'));
+  }
+}
+const cam = new THREE.PerspectiveCamera(35, W / H, 0.05, 50);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(list.length * W, H);
+renderer.setScissorTest(true);
+document.body.appendChild(renderer.domElement);
+scene.environment = makeEnv();
+// the same turn applies to every view, so a four-angle page turns as one thing
+const orbit = orbitControl(cam, renderer.domElement);
+const draw = () => list.forEach((v, i) => {
+  const x = i * W;
+  renderer.setViewport(x, 0, W, H);
+  renderer.setScissor(x, 0, W, H);
+  const look = one ? ty : v.ty;
+  orbit.aim({ a: v.a, d: v.d, y: v.y, ty: look, tx, tz });
+  renderer.render(scene, cam);
+});
+orbit.onDraw(draw);
+window.__ready = true;
+</script></body></html>
