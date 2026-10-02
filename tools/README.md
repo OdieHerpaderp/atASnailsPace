@@ -2,7 +2,7 @@
 
 The kit for working on the meshes in `meshes/` and the maps in `meshes/tex/`.
 Nothing in here is part of the game: the game is `snail-race.html`,
-`snail-race.js`, `races.json` and `seasons.json`, and it never reads any of this.
+`src/*.js`, `races.json` and `seasons.json`, and it never reads any of this.
 
     python3 tools/serve.py          # http://127.0.0.1:8713
 
@@ -15,7 +15,11 @@ Nothing in here is part of the game: the game is `snail-race.html`,
 | `compare.html` | two models at once: A, then B in the same framing, then B over a ghost of A, with the numbers that answer "is it the right size" |
 | `inspect.html` | what is actually inside a `.glb`: mesh names, vertex counts, bounding boxes, attributes, maps — and the audit of the whole map manifest at the foot |
 | `maps.js` | the bit both preview pages share: load `meshes/tex/` and hand a model the maps its own file declares, the way the game does |
-| `plan-test.mjs` | the track planner run on its own in node, for checking a course or an obstacle |
+| `plan-test.mjs` | the track planner imported and run in node, for checking a course or an obstacle |
+| `check.sh` | the static gate: every module parses, and `wired.mjs` reads the whole graph |
+| `wired.mjs` | the graph itself, in four directions - see *Reading the graph* |
+| `e2e/` | the browser suite: 25 Playwright tests against a golden baseline captured from the pre-split game |
+| `playwright.config.js` | the runner: SwiftShader, a 480×300 window, and the bottom preset pinned at render scale 1× |
 | `backup/` | models as they were before they were changed, kept in case a model has to be compared with what it was |
 
 ## The routes the server adds
@@ -98,11 +102,41 @@ be, and a comparison wants the old one to look old.
     node tools/plan-test.mjs sky 11 777         one course, these seeds
     node tools/plan-test.mjs sky 11 --leaps     and the gaps, with their sizes
 
-It lifts the planner out of `snail-race.js` by name, so it prints what the game
-would build. The condition line is the course in order — `RUN×20 CLIMB×8
+**It imports `src/plan.js` and runs it**, which is the whole of why the planner
+has no three.js in it: `src/core.js` is importable in Node, so this prints what
+the game would build rather than what a copy of the game's source says it would
+build. It used to do the other thing — read the file as text, regex for a
+declaration, guess at the rest — and it guessed wrong about a course's `scale`,
+so every length it printed was the unscaled one. A number a tool reads out of
+another file's source is a second implementation of that file.
+
+The condition line is the course in order — `RUN×20 CLIMB×8
 FLY×9 CLIMB×10` is a run, a lip, a gap to fly and the wall on the far side of
 it — and `--leaps` gives every gap's width, how far the lip stands above the
 lane, and how deep the water is.
+
+## Reading the graph
+
+    tools/check.sh                              all eleven modules, and the graph
+    tools/check.sh src/surfaces.js              one file, parsed
+    node tools/wired.mjs src/*.js meshes/palette.js meshes/maps.js
+
+`check.sh` parses every file in `src/` under an `.mjs` name — `node --check`
+reads the extension to decide whether a file is a module or a script, so a `.js`
+with a bare `import` at the top is a syntax error to it — and then runs
+`wired.mjs`, which reads the whole graph in four directions: a name a file
+imports that another module does not export, a name a file reads bare that
+another module declares and it did not import, a field of `world` read by nobody
+who writes it, and a top-level read of a `const` declared below it.
+
+**The third one is the direction the split cannot see for itself.** A registry
+field nobody fills has a default, and a plausible empty default reads as a quiet
+answer rather than as a missing one: four of them sat unfilled through four steps
+with the whole browser suite green, and the things they broke were the shadows
+row, the reflection probes on every course, and the rebuild a density row asks
+for — none of which any committed artifact measures. The fourth is the temporal
+dead zone, which is a crash on a module's first line and which is only a crash
+until something moves the two lines apart.
 
 ## Reading the comparison
 

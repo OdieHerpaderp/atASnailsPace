@@ -3,7 +3,9 @@
 A racing game. Five courses, a season ladder, and eight snails. The whole thing
 is a spline-cut lane with rock walls to climb, ponds to swim and gaps to fly;
 every snail carries five traits and the course decides which one is working. No
-build step, no package manager, no dependencies to install.
+build step, no package manager, no dependencies to install. **The game is eleven
+modules under `src/`**, loaded by `src/app.js` as ordinary ES modules over the
+import map in `snail-race.html`, and the eleven are listed below.
 
     python3 tools/serve.py        # http://127.0.0.1:8713
 
@@ -18,7 +20,7 @@ below). Port via `PORT=9000`.
 | | |
 |---|---|
 | `snail-race.html` / `.css` | the shell: every screen and id, nothing else |
-| `snail-race.js` | the whole game, ~4500 lines, one module, no bundler |
+| `src/*.js` | the whole game in eleven modules, no bundler - see the table below |
 | `races.json` | the five courses, and the obstacles each is built out of |
 | `seasons.json` | the four tiers, the rating band each covers, its length scale |
 | `meshes/*.glb` | the prop library, one file per prop, drawn instanced |
@@ -26,17 +28,76 @@ below). Port via `PORT=9000`.
 | `meshes/maps.js` | **the map manifest** - which piece declares which map, and why |
 | `meshes/palette.js` | **the colour jar** - every colour in the project, linear |
 | `meshes/build-*.html` | pages of three.js that generate some of those files |
-| `tools/` | server, and the pages for looking at and comparing models |
+| `tools/` | the server, the static gates, the browser tests, and the model pages |
 
-three.js 0.160 is imported from a CDN at the top of `snail-race.js` and nowhere
-else; `snail-race.html` carries the import map. Do not add a dependency, and do
-not pin a different three version in one place only. The map carries two
-specifiers, `three` and `three/addons/`, and they are not loaded the same way:
-`three` is a static import at the top of the module because the game cannot
-start without it, and the addons are the post-processing passes, fetched on
-demand by `loadAddons()` the first time a tier asks for one and never again
-(see *Settings*). `meshes/palette.js` and `meshes/maps.js` are plain modules with
-no three import, so they are read by the game and by all four builder pages.
+### The eleven modules
+
+The graph is a chain and a fan, and **the one rule it obeys is that `world` is the
+only thing that goes sideways**. Every edge below is an import; the sideways lines
+are not, and they are `src/graphics.js`'s registry.
+
+| | lines | what it is |
+|---|---|---|
+| `src/core.js` | 562 | data, tuning, seasons, noise, geometry helpers, and the one three.js import |
+| `src/plan.js` | 814 | the pure planner: no three, so Node can import it and `tools/plan-test.mjs` can ask it |
+| `src/graphics.js` | 1,079 | the settings ladder, the renderer, the dome, and **`world`** |
+| `src/materials.js` | 1,253 | the glb loader, the material jar, the palette adapter, the shader injectors |
+| `src/course.js` | 703 | the track samples, the frame, and `groundYAt()` |
+| `src/surfaces.js` | 1,452 | the four surfaces, the water, and the half-way |
+| `src/scenery.js` | 1,529 | the tower, the lamps, `scatter()`, the farms, the backdrop |
+| `src/post.js` | 1,739 | the settings panel, the chain, the probes, the readback |
+| `src/race.js` | 1,348 | the snail, the field, the sim, the crates, the save |
+| `src/stage.js` | 687 | the stable and its rebuild |
+| `src/app.js` | 2,056 | the camera, the frame loop, the perf panel, every screen, the boot |
+
+**The imports, and they are the whole dependency story:**
+
+    core  <-  everything
+    plan  <-  core
+    course  <-  core, graphics, plan
+    graphics  <-  core
+    materials  <-  core, graphics
+    surfaces  <-  core, graphics, course, materials
+    scenery  <-  core, graphics, materials, course, surfaces
+    post  <-  core, graphics, materials
+    race  <-  core, graphics, materials, post, course, surfaces, scenery
+    stage  <-  core, graphics, materials, post, scenery, race
+    app  <-  all ten
+
+**No cycles, and three of the edges are there for one name each** - `app.js` needs
+`updateWater()` from itself and nothing, `stage.js` needs the snail from `race.js`,
+and `race.js` needs the water's shared uniform from `post.js`. Everything else that
+*looks* like an edge going backwards goes through `world`: eight functions in the
+graphics stack read a scene, a mode, a clock or a camera that belong to `app.js`,
+and they read `world.scene`, `world.modeOf()`, `world.clock()` and `world.camera`
+instead.
+
+**The registry has twenty-three members and fifteen of them are functions**, because
+a field written once is a field that is wrong on the next frame. Eight carry a
+scene, a stage, an env or a camera; **every one of the other fifteen is a function
+because it reads something reassigned after boot** - `mode` and `clock` on every
+start, `surging` on every key event, and the ten that are somebody else's screen
+(`syncHUD`, `updateHUD`, `flashGo`, `showResults`, `applyLook`, `forceTimeOfDay`,
+`restage`). **Four of them being written by nobody is the one failure the graph
+cannot see for itself**, which is what `tools/wired.mjs`'s third direction is for
+and what the registry test in `tools/e2e/` pins.
+
+three.js 0.160 is imported from a CDN and nowhere else, as a **top-level `await`
+dynamic import of a literal URL** in `src/core.js`; `snail-race.html` carries the
+import map. Do not add a dependency, and do not pin a different three version in
+one place only. The map carries two specifiers, `three` and `three/addons/`, and
+**neither of them is the game's**: `three` is used by `tools/*.html` and
+`meshes/build-*.html`, and the addons are the post-processing passes, fetched on
+demand by `loadAddons()` the first time a tier asks for one and never again (see
+*Settings*). `meshes/palette.js` and `meshes/maps.js` are plain modules with no
+three import, so they are read by the game and by all four builder pages.
+
+**And `src/core.js` has to be importable by Node**, which is the one constraint the
+browser does not impose: `plan.js` and `tools/plan-test.mjs` import it, and there is
+no `window` in a terminal. So the three.js import is behind an environment test and
+`races.json` and `seasons.json` are read from disk on that side and fetched on this
+one. **It is the only module in the county that knows which of the two it is in**, and
+that is the price of a planner that can be asked a question without a browser.
 
 **Shading is smooth.** Nothing in the world is flat shaded any more, so a face
 reads as a face because the geometry says so and not because the shader is
@@ -46,6 +107,30 @@ hill is a nine-by-six sphere, and smooth-shaded there is a black shape against a
 bright sky at a low sun, because no facet is left facing it.
 
 ## The rules that bite
+
+**A module's live bindings are read-only from outside, and that is a runtime
+error rather than a lint.** An exported `let` cannot be assigned from another
+file — `TypeError: Assignment to constant variable`, on the first call and with
+nothing in the console to explain it — and it cannot be emptied, which is the
+worse half, because `simSurge = false` reads as ordinary code and throws for
+everybody who draws it. So every flag a module shares comes out as a pair:
+`clearRegister()` and `standingReport()` for the prop register, `takeGrab()` for
+the pending frame read-back, `forgetCastApplied()` for the shadows row's
+one-shot, `stageOf()` and `buildStable()` for the stable, `world.racers()` for
+the field. **The tell is a call site that looks like an assignment and is not**,
+and `tools/wired.mjs` cannot see it, because an assignment to an imported name
+parses.
+
+**A registry field nobody fills is a quiet answer, and quiet is the dangerous
+kind.** `world` is a set of defaults that modules fill at module scope, so a
+field left alone has a plausible empty value — `() => []`, `() => {}`, `null` —
+and the code that reads it goes on running. Four sat unfilled through four steps
+of the split with the whole browser suite green: the shadows row stopped
+stamping props, no course got a reflection probe, and a density change never
+rebuilt the stable. **A default is an answer, and an empty one is the answer to
+a question nobody asked.** That is why `wired.mjs` has a direction for it, and
+why `tools/e2e/` has a test that reads the three rows rather than the registry:
+a field is only worth a test if something visible hangs off it.
 
 **Everything is built in lane space.** A course is a list of samples along a
 spline: `s` is metres along it, `d` is metres to the right of the centre line,
@@ -433,7 +518,7 @@ came to exist is not the game's business: the builders in this repo are one way
 in and a convenient one, but anything that produces a valid glb is equally
 welcome — another script, a modelling package, a generated or scanned model, a
 hand-built `BufferGeometry`. Use whichever route does the job best. What matters
-is the file, and it has to satisfy the loader at `snail-race.js:93`:
+is the file, and it has to satisfy the loader at `src/materials.js:131`:
 
 - One file per prop, named after the prop, and its mesh named the same, or
   `<prop>-<part>` where a part of it needs its own material. The dash is not a
@@ -459,7 +544,7 @@ is the file, and it has to satisfy the loader at `snail-race.js:93`:
   geometry has to hold the shape up on its own.
 
 Wiring one in is two steps and both are mandatory: the name goes in `MESH_FILES`
-in `snail-race.js` — a file that is not in that list is not loaded at all — and
+in `src/materials.js` — a file that is not in that list is not loaded at all — and
 something places it, usually a `scatter()` call in `populate()` with
 `mat.rock`, `mat.foliage` or `mat.vcol`. Read that section of *the rules that
 bite* above before writing the second step; the options are easy to get wrong in
@@ -520,7 +605,7 @@ least one of each, so `feats` must be ≥ the number of distinct elements.
 and `lip`; `water` and `leapClimb` need `gap`, `lip` and `deep`; and
 `pushCrate` needs nothing, because the gap is the element's own and the crate is
 put there by hand. A course that breaks this says so at boot and stops, with the
-reason — the check is at `snail-race.js:205` and is worth keeping in step with any
+reason — the check is at `src/core.js:316` and is worth keeping in step with any
 new element. `wiggle` and `corners` shape the line. `level` and `drain` are
 optional.
 
@@ -874,7 +959,7 @@ pole. Two things come off reading the number off the model rather than typing it
 the light follows the **instance's own scale**, which is 0.92 to 1.12 and was never
 applied to a hand-written offset, and the number cannot go stale — rebuild the glb
 with a longer arm and the light is in the glass again with no line of
-`snail-race.js` changed. `lampY` is gone for the same reason.
+`src/scenery.js` changed. `lampY` is gone for the same reason.
 
 **A glow wears its light's colour, read off the light.** `opts.lamps` hands back
 whatever colour a piece is painted in and `mat.paper` is emissive in that colour,
@@ -904,10 +989,14 @@ probe whose resolution changed: it is a render target, so it is disposed.
 first two are read while the stage is built, the third is stamped onto each
 piece as it is planted, and the fourth hangs a probe off the stable's own pool.
 Everything else is a uniform or a renderer knob and lands on the next frame.
-`buildStage()` uses seed 1177 and calls `applyLook()`, so a rebuild puts the
-same county back at a different density — which is the point, and also why
+`buildStage()` in `src/stage.js` uses seed 1177, and `restage()` asks the app for
+`applyLook()` afterwards, so a rebuild puts the same county back at a different
+density wearing the same snail — which is the point, and also why
 `renderer.info.memory.geometries` coming back to the same number after four
-rebuilds is the test for a leak.
+rebuilds is the test for a leak. **The comparison has to hold the density still**,
+though: `buildStage()` merges per piece and not per count, so a hub at `props: 1`
+and a hub at `props: 2` are two different numbers of geometries and the first version
+of that test read the difference as a leak.
 
 **Cloud shade and wind are uniforms on five long-lived materials, injected once,
 and only two of the five take the wind.** `gfxSurfaceTargets()` runs at setup and
@@ -962,8 +1051,23 @@ was.
 
 ## Checks
 
-    cp snail-race.js /tmp/kilo/check.mjs && node --check /tmp/kilo/check.mjs
-    node tools/plan-test.mjs
+    tools/check.sh          # parses all eleven modules and reads the graph
+    node tools/plan-test.mjs # the planner, in Node, with no browser
+    tools/e2e/run.sh         # 25 Playwright tests, about a minute, on the pinned tier
+
+`tools/check.sh` is the gate that knows about the split: it parses each module
+under an `.mjs` name and then runs `tools/wired.mjs` over the whole graph, which
+reports a name a file imports that another module does not export, a name a file
+reads bare that another module declares, **a field of `world` that is read and
+written by nobody**, and **a top-level read of a `const` declared below it**. The
+last two are the ones the split invented, and both of them are failures with no
+symptom: an empty default reads as a quiet answer, and a temporal dead zone reads
+as a crash on the module's first line.
+
+`tools/e2e/run.sh` pins the bottom preset at render scale 1× so the direct path is
+the one under test, and `tools/e2e/capture.spec.js` is the one spec that must never
+run again — it rewrites both committed artifacts and it may only ever be taken from
+the pre-split game.
 
 Then serve it and watch the console. The things that actually break, in order of
 likelihood: an `InstancedMesh` whose count is exhausted so the last pieces

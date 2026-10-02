@@ -11,7 +11,7 @@
  * it comes out, what it asks of you in order, and how big each gap, lip, wall
  * and puddle actually is.
  *
- * **This used to read `snail-race.js` as text**, regex for a declaration, guess
+ * **This used to read the pre-split `snail-race.js` as text**, regex for a declaration, guess
  * where it ends, and concatenate twenty-eight hand-listed names onto a shim
  * that redefined `clamp`, `lerp` and `smoothstep` and carried a stub
  * `class Vector3`. Its own header used to record how that heuristic mistook a

@@ -165,8 +165,8 @@ one comment that says what the output will be: `python3 tools/serve.py
 # http://127.0.0.1:8713`. Filenames, symbols and values are backticked on first
 mention and then frequently left bare, because the reader has them by then.
 
-**A document ends on a check.** *cp snail-race.js /tmp/kilo/check.mjs && node
---check* and *node tools/plan-test.mjs*, then what to look at, then the actual
+**A document ends on a check.** *tools/check.sh* and *node tools/plan-test.mjs*,
+then what to look at, then the actual
 failure modes in order of likelihood. There is no summary at the end, because a
 document that has to summarise itself did not make its point in the body.
 
