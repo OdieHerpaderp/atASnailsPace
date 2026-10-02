@@ -90,6 +90,21 @@ function owns(src) {
       if (/^[A-Za-z_$][\w$]*$/.test(n)) out.add(n);
     }
   }
+  // **`function name(...) {` as well, and its absence was this checker's third
+  // wrong answer about a name it should have recognised.** The shape above
+  // matches a bare `name(` and a method shorthand and it does *not* match a
+  // function declaration, because there the line starts with `function` and the
+  // name is the second word - so **every parameter of every `function` in the
+  // county was invisible here**, and a parameter that shares a name with another
+  // module's export reads as a bare use of that export. `spinFans(dt, clock)` is
+  // what it took to find it, and a parameter is not a read of anybody else's.
+  for (const m of bare.matchAll(/\b(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/g)) {
+    out.add(m[1]);
+    for (const q of m[2].split(',')) {
+      const n = q.split('=')[0].trim().replace(/^\.\.\./, '').replace(/[{}]/g, '');
+      if (/^[A-Za-z_$][\w$]*$/.test(n)) out.add(n);
+    }
+  }
   for (const m of bare.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*\(/gm)) out.add(m[1]);
   return out;
 }
@@ -135,7 +150,13 @@ function reads(bare, name) {
   const re = new RegExp(
     `(?:^|[(,=+\\-*/%;?:&|!<>~^\\[\\]{}]|\\b(?:return|typeof|new|await|&&|\\|\\|)\\s*)\\s*${lead}${esc}${tail}\\s*(?![:.\\w$])`,
     'm');
-  return re.test(bare);
+  // **and where.** A report that names a line is a report somebody can go and
+  // look at; "read bare in X" three times over is a shrug. It cost one match to
+  // find the index and it has already paid for itself once.
+  const hit = bare.search(re);
+  if (hit < 0) return null;
+  const line = bare.slice(0, hit).split('\n').length;
+  return line;
 }
 
 const src = {}, decl = {}, exp = {}, imp = {}, bare = {}, own = {};
@@ -175,10 +196,11 @@ for (const f of files) {
   for (const [n, home] of HOME) {
     if (home === f) continue;
     if (own[f].has(n)) continue;           // it has a local of its own
-    if (!reads(bare[f], n)) continue;      // never read bare
+    const at = reads(bare[f], n);
+    if (at == null) continue;              // never read bare
     const got = imp[f][home];
     if (!got || !got.has(n)) {
-      say(`NO IMPORT   ${n}  read bare in ${f}, declared in ${home}`
+      say(`NO IMPORT   ${n}  read bare at ${f}:${at}, declared in ${home}`
         + (exp[home].has(n) ? '' : ' (and not exported there)'));
     }
   }

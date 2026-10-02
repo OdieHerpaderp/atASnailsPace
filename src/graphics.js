@@ -89,6 +89,10 @@ export const world = {
    *  every finish, and a registry field written once is a registry field that is
    *  wrong on the frame after the race ends. */
   modeOf: () => 'stable',
+  /** Which season the save is in. Filled by , and a function for the
+   *  reason  is: a new season is a reassignment, and a registry field
+   *  written once is a field that is wrong on the frame after it. */
+  seasonOf: () => 1,
   renderScene() {
     const m = this.modeOf();
     return (m === 'stable' || m === 'stroll') ? this.stageScene : this.scene;

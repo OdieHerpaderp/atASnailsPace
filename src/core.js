@@ -465,6 +465,14 @@ function fbm(x, y, oct = 3) {
   return s / norm;
 }
 // the rolling countryside the lane is cut through
+/** The seed a course is planned under: `4200 * 7`, the course's own index times 977,
+ *  and the season times 131 - so two courses never share a line and the same
+ *  course is a different line in a different season. **The season is an
+ *  argument and not a read of `state`**, because the scenery is upstream of the
+ *  race and cannot reach it; `world.seasonOf()` is the other end of that. */
+const SEED_BASE = { v: 4200 };
+const trackSeed = (catId, season) => SEED_BASE.v * 7
+  + CATS.findIndex((c) => c.id === catId) * 977 + season * 131;
 function hills(x, z) {
   // the two coarse octaves carry the shape; the fine one is kept small, or
   // the ground beside the lane breaks into hard little facets
@@ -549,6 +557,6 @@ export {
   SURGE_MULT, SURGE_DRAIN, PASSIVE_DRAIN, TIRED_MULT, SWIM_Y, REGEN, STEP, START_S, freshSnail,
   seasonWord, TIERS, TIER_BY_ID, eligibleSeasons, canEnter, seasonFor, seasonDef,
   seasonScale, seasonPicks, seasonFinaleId, seasonRoster, effFor, effTraits,
-  makeRng, rand, vnoise, fbm, hills,
+  trackSeed, makeRng, rand, vnoise, fbm, hills,
   bake, M, colored,
 };
