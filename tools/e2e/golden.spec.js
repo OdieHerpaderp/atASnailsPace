@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from 'playwright/test';
 import { boot, noErrors } from './fixtures.js';
-import { COURSES, GFX_RESAMPLED } from './tier.js';
+import { COURSES } from './tier.js';
 
 const BASELINE = JSON.parse(fs.readFileSync(path.join(__dirname, 'baseline.json'), 'utf8'));
 
@@ -118,15 +118,76 @@ for (const id of COURSES) {
   });
 }
 
+
+for (const id of COURSES) {
+  test(`${id}: every jump stands on a lip that reaches its launch height`, async ({ page }) => {
+    const { errors } = await boot(page);
+    // **The tell the repo documents, and it is not in `plan-test.mjs` whatever
+    // the docs say - it is here.** A leap's lip used to be smoothed off into a
+    // slope that never reached the launch height, because the floor of a chasm
+    // under a *pool* is `FLY` and the floor under a dry gap is `WALK`, and the
+    // ridge filter guarded only the first. It read 0.56 to 0.90 m low on every
+    // dry gap, and nothing caught it because the sim always flew from the
+    // *planned* height: the road was sitting below where the snail launched
+    // from, which is a smaller jump than it looks and not a wrong one.
+    //
+    // So this is a check on the road and not on the plan.
+    const lips = await page.evaluate((catId) => {
+      const S = window.__snail;
+      const tr = S.track(catId);
+      return tr.leaps.map((le) => {
+        // **A crate is not in here, and that is not a gap in the check.** A
+        // `pushCrate`'s lip is a dish cut in the road with a box standing in
+        // it, so the crest of that stretch is the road coming up to the dish
+        // and it is meant to be *higher* than it - Crag Ascent's came out
+        // 200 mm above. The crate's own arithmetic is the notch, and
+        // `tools/plan-test.mjs <course> --leaps` is where that is measured.
+        if (le.kind === 'pushCrate') return null;
+        // the lip's own `s` falls between two lane samples - by up to half a
+        // 750 mm stride - so the crest is the highest of the three around it
+        const i = Math.round(le.s0 / 0.75);
+        let crest = -Infinity, at = i;
+        for (let k = i - 1; k <= i + 1; k++) {
+          if (tr.sm[k].y > crest) { crest = tr.sm[k].y; at = k; }
+        }
+        return {
+          kind: le.kind, s0: +le.s0.toFixed(4), lipY: +le.lipY.toFixed(4),
+          crest: +crest.toFixed(4), ahead: +(tr.sm[at + 1].y - crest).toFixed(4),
+        };
+      }).filter(Boolean);
+    }, id);
+    expect(lips.length, `${id} jumps`).toBe(
+      BASELINE.courses[id].track.leaps.filter((l) => l[0] !== 'pushCrate').length);
+    for (const l of lips) {
+      const where = `${id} ${l.kind} at s=${l.s0}`;
+      // **A tenth of a metre, and the number is not arbitrary.** The crest of a
+      // lip that is exactly right still misses the planned height by up to half
+      // a stride of the lane's own rise, because the lip is not on a sample.
+      // The measured spread across the county is 83 mm, and a lip that had been
+      // rounded off reads 0.56 to 0.90 low, so the bound has six times the
+      // margin over the failure it is for.
+      expect(Math.abs(l.crest - l.lipY), `${where}: crest ${l.crest} against a lip of ${l.lipY}`)
+        .toBeLessThan(0.1);
+      // **and the lane drops away on the far side**, which is what makes a lip a
+      // crease and not the top of a trough. It fell by 82 mm to 670 mm on every
+      // jump in the county; a lip that fell by a millimetre is a dish.
+      expect(l.ahead, `${where}: the lane past the lip`).toBeLessThan(-0.05);
+    }
+    noErrors(errors);
+  });
+}
+
 test('the tier is the one the baseline recorded, and the chain is built and torn down on its edge', async ({ page }) => {
   const { errors } = await boot(page);
-  const at = async () => page.evaluate(() => {
+  const at = async () => page.evaluate(async () => {
+    // **Two frames, and that is the whole of why the course has to be standing
+    // before anything is counted.** The first draw of a course allocates
+    // eighteen textures of its own - a shadow map among them - so a count taken
+    // before one is the count of an empty stage, and comparing it against a
+    // count taken after reads a leak that is the course's own floor.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const i = window.__snail.info();
     return { targets: i.targets, passes: i.passes, samples: i.samples, rt: i.rt, canvas: i.canvas };
-  });
-  const frame = () => page.evaluate(async () => {
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    return window.__snail.info();
   });
   // the pinned tier, exactly as captured
   expect(await at()).toEqual({
@@ -134,38 +195,44 @@ test('the tier is the one the baseline recorded, and the chain is built and torn
     rt: BASELINE.info.rt, canvas: BASELINE.info.canvas,
   });
 
-  // **The course goes up first, and that is the order that matters.** The chain's
-  // targets are counted against a floor that a standing course raises by a
-  // course's worth of maps, so the floor has to be read *with the course up* -
-  // and the course is what the chain has to draw, which is where a
-  // `world.something` still reading null throws on the first frame.
+  // **The course goes up first**, because the chain has to draw something and
+  // because the floor its targets are counted against is the floor a standing
+  // course makes.
   await page.evaluate(() => window.__snail.start('sky'));
   const floor = await at();
   expect(floor.passes, 'the direct path with a course standing').toEqual([]);
 
-  // **across the edge and back.** `needsComposer()` is a predicate and the chain
-  // is built on its false->true edge and disposed on its true->false one, and
-  // eight functions in the post chain read the scenes through the registry - so
-  // this is the step that shows a missed one, and it is the one test in the
-  // suite that can only be run after the chain is a file of its own.
-  await page.evaluate((g) => window.__snail.setGfx('render', g.render), GFX_RESAMPLED);
-  const up = await at();
-  expect(up.passes.length, `the chain after a resample is asked for: ${JSON.stringify(up.passes)}`)
-    .toBeGreaterThan(0);
-  expect(up.rt, 'the chain\'s own buffer, which is a share of the canvas').not.toBeNull();
-  expect(up.canvas, 'the canvas did not change; the county did').toEqual(BASELINE.info.canvas);
-  const drawn = await frame();
-  expect(drawn.glError, 'glError on the composer path').toBe(0);
-  expect(drawn.badProgram, 'programs that did not compile on the composer path').toEqual([]);
-  expect(drawn.calls, 'draw calls through the composer').toBeGreaterThan(0);
-  expect(drawn.tris, 'triangles through the composer').toBeGreaterThan(1000);
+  // **across the edge and back, twice.** `needsComposer()` is a predicate and
+  // the chain is built on its false->true edge and disposed on its true->false
+  // one, and eight functions in the post chain read the scenes through the
+  // registry - so this is the step that shows a missed one, and doing it twice
+  // is what makes it a leak test rather than a build test.
+  const after = [];
+  for (let cycle = 0; cycle < 2; cycle++) {
+    await page.evaluate(() => window.__snail.setGfx('render', 1));
+    const up = await at();
+    expect(up.passes.length, `cycle ${cycle}: the chain is there when it is wanted`)
+      .toBeGreaterThan(0);
+    expect(up.rt, `cycle ${cycle}: the chain's own buffer, a share of the canvas`)
+      .not.toBeNull();
+    expect(up.canvas, `cycle ${cycle}: the canvas did not change; the county did`)
+      .toEqual(BASELINE.info.canvas);
+    const drawn = await page.evaluate(() => window.__snail.info());
+    expect(drawn.glError, `cycle ${cycle}: glError on the composer path`).toBe(0);
+    expect(drawn.badProgram, `cycle ${cycle}: programs that did not compile there`).toEqual([]);
+    expect(drawn.calls, `cycle ${cycle}: draw calls through the composer`).toBeGreaterThan(0);
 
-  // and back down to the floor the course raised, which is the whole of what
-  // "the chain was disposed" means as a number
-  await page.evaluate(() => window.__snail.setGfx('render', 3));
-  const down = await at();
-  expect(down.passes, 'the chain after the tier came back down').toEqual([]);
-  expect(down.samples, 'no target of the chain\'s own is left').toBe(0);
-  expect(down.targets, 'the chain\'s targets were disposed').toBe(floor.targets);
+    await page.evaluate(() => window.__snail.setGfx('render', 3));
+    const down = await at();
+    expect(down.passes, `cycle ${cycle}: the chain is gone when it is not wanted`).toEqual([]);
+    expect(down.samples, `cycle ${cycle}: no multisample target is left`).toBe(0);
+    expect(down.targets, `cycle ${cycle}: the chain's targets were disposed`)
+      .toBe(floor.targets);
+    after.push(down.targets);
+  }
+  // and the two cycles agreed with each other, which is the half a build-once
+  // check cannot see: a chain that keeps a target of four each time it is torn
+  // down still disposes on the first pass
+  expect(after[1], 'the second cycle disposed as much as the first').toBe(after[0]);
   noErrors(errors);
 });

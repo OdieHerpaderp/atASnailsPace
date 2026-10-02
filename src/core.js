@@ -27,12 +27,36 @@
  * layering.
  * ================================================================== */
 
-let THREE;
-try {
-  THREE = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js');
-} catch (err) {
-  document.getElementById('boot').textContent = 'Could not load three.js from the CDN — connect and reload.';
-  throw err;
+// **The county is a browser and the planner is a node process, and this is the
+// one place the two are told apart.** three.js comes off a CDN and the two data
+// files come off a `fetch`, and neither exists under node - so both are behind
+// one guard, and both are on the path a browser always takes, which is what
+// makes the guard free at runtime and load-bearing in exactly one place.
+//
+// It is here because `tools/plan-test.mjs` imports `plan.js`, and `planTrack()`
+// opens with `CAT_BY_ID[catId]`, so a node run needs the county's own courses in
+// the module rather than a hand-written copy of them in the test. **And it turns
+// the planner's bet into a fact**: `plan.js` uses no three.js at all - its
+// design points are plain `{x, y, z}` - and `THREE` being `null` under node is
+// what proves it, because a planner that reached for `THREE.Vector3` throws on
+// its first point instead of quietly needing a shim.
+const IN_BROWSER = typeof document !== 'undefined';
+/** Say what went wrong on the boot screen, and stop. The screen is the game's
+ *  and there is not one under node, so the throw is the half that always
+ *  happens - and the three places below that used to write to the element and
+ *  throw themselves are the same shape as this one. */
+const bootFail = (msg) => {
+  if (IN_BROWSER) document.getElementById('boot').textContent = msg;
+  throw new Error(msg);
+};
+let THREE = null;
+if (IN_BROWSER) {
+  try {
+    THREE = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js');
+  } catch (err) {
+    document.getElementById('boot').textContent = 'Could not load three.js from the CDN — connect and reload.';
+    throw err;
+  }
 }
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -44,21 +68,30 @@ const smoothstep = (e0, e1, x) => {
 const easeInOut = (x) => x * x * (3 - 2 * x);
 const $ = (id) => document.getElementById(id);
 async function loadData(file, what) {
-  let res;
-  try {
-    res = await fetch(file);
-  } catch (err) {
-    document.getElementById('boot').textContent = `Could not load ${file} — is it being served next to the page?`;
-    throw err;
+  let data;
+  if (IN_BROWSER) {
+    let res;
+    try {
+      res = await fetch(file);
+    } catch (err) {
+      document.getElementById('boot').textContent = `Could not load ${file} — is it being served next to the page?`;
+      throw err;
+    }
+    if (!res.ok) {
+      document.getElementById('boot').textContent = `Could not load ${file} (${res.status}).`;
+      throw new Error(file + ' ' + res.status);
+    }
+    data = await res.json();
+  } else {
+    // **off the disk, beside this module** - and the path is relative to the
+    // module rather than to a working directory, so the tool runs from anywhere.
+    const { readFile } = await import('node:fs/promises');
+    data = JSON.parse(await readFile(new URL('../' + file, import.meta.url), 'utf8'));
   }
-  if (!res.ok) {
-    document.getElementById('boot').textContent = `Could not load ${file} (${res.status}).`;
-    throw new Error(file + ' ' + res.status);
-  }
-  const data = await res.json();
+  // the shape check and the message are the same either way, so a file that is
+  // not a list is rejected identically in a browser and under node
   if (!Array.isArray(data) || !data.length) {
-    document.getElementById('boot').textContent = `${file} did not contain a list of ${what}.`;
-    throw new Error(file + ' is not a list of ' + what);
+    bootFail(`${file} did not contain a list of ${what}.`);
   }
   return data;
 }
@@ -69,8 +102,7 @@ const [SEASONS, RACES] = await Promise.all([
 const CATS = RACES;
 for (const c of CATS) {
   if (typeof c.len !== 'number' || typeof c.scale !== 'number' || c.scale <= 0) {
-    document.getElementById('boot').textContent = `races.json: "${c.id || '?'}" needs a positive len and scale.`;
-    throw new Error('bad course ' + c.id);
+    bootFail(`races.json: "${c.id || '?'}" needs a positive len and scale.`);
   }
   // the length the course is actually laid out to
   c.len = c.len * c.scale;
@@ -286,11 +318,13 @@ for (const c of CATS) {
   // it needs room for all of them
   const tooMany = Array.isArray(c.pool) && new Set(c.pool).size > c.feats;
   if (!Array.isArray(c.pool) || !c.pool.length || unknown.length || missing.length || tooMany) {
-    document.getElementById('boot').textContent =
-      `races.json: "${c.id || '?'}" needs a pool of known elements` +
-      (unknown.length ? ` (unknown: ${[...new Set(unknown)].join(', ')})` : '') +
-      (missing.length ? `, and for the rest: ${[...new Set(missing)].map((k) => NEEDS[k].join('/')).join(', ')}` : '') +
-      (tooMany ? `, and at least ${new Set(c.pool).size} feats for the ${new Set(c.pool).size} different elements it names` : '') + '.';
+    if (IN_BROWSER) {
+      document.getElementById('boot').textContent =
+        `races.json: "${c.id || '?'}" needs a pool of known elements` +
+        (unknown.length ? ` (unknown: ${[...new Set(unknown)].join(', ')})` : '') +
+        (missing.length ? `, and for the rest: ${[...new Set(missing)].map((k) => NEEDS[k].join('/')).join(', ')}` : '') +
+        (tooMany ? `, and at least ${new Set(c.pool).size} feats for the ${new Set(c.pool).size} different elements it names` : '') + '.';
+    }
     throw new Error('bad course ' + c.id);
   }
 }
@@ -339,13 +373,17 @@ for (const s of TIERS) {
   const bad = roster.concat(s.finale ? [s.finale] : []).filter((id) => !CAT_BY_ID[id]);
   const badScale = s.scale != null && (typeof s.scale !== 'number' || !(s.scale > 0));
   if (bad.length || !roster.length || badScale || typeof s.lo !== 'number' || !(s.hi > s.lo)) {
-    document.getElementById('boot').textContent = `seasons.json: "${s.id || '?'}" needs a rating band, a positive scale, and races that exist in races.json${bad.length ? ` (unknown: ${bad.join(', ')})` : ''}.`;
+    if (IN_BROWSER) {
+      document.getElementById('boot').textContent = `seasons.json: "${s.id || '?'}" needs a rating band, a positive scale, and races that exist in races.json${bad.length ? ` (unknown: ${bad.join(', ')})` : ''}.`;
+    }
     throw new Error('bad season ' + s.id);
   }
   // two seasons with the same id would leave one of them unreachable: the
   // picker draws a season's seven by its id, and the last one would win
   if (seenSeasonIds.has(s.id)) {
-    document.getElementById('boot').textContent = `seasons.json: two seasons are called "${s.id}". Give them each their own id.`;
+    if (IN_BROWSER) {
+      document.getElementById('boot').textContent = `seasons.json: two seasons are called "${s.id}". Give them each their own id.`;
+    }
     throw new Error('duplicate season id ' + s.id);
   }
   seenSeasonIds.add(s.id);
