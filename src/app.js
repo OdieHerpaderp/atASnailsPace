@@ -25,24 +25,37 @@
 // The county's palette, and the three builders in meshes/ that paint from the
 // same jar. It is a plain module and imports nothing, so it loads before this
 // one and costs no round trip of its own.
-import { CONVERTED, MAPS, SURFACE, allMaps, allParts, mapSlots, mapsFor, slotFor } from '../meshes/maps.js';
+
 // The planner is in `src/plan.js` and the courses it plans are `CATS` out of
 // `core.js`, so the two things a course needs before anything can be drawn are
 // one import apart and not eleven thousand lines.
-import { planTrack, MID_CROWN } from './plan.js';
+import { planTrack } from './plan.js';
 // The snail, the field, the race, the save, and `state` with them - which is the
 // one thing in the county that every other module reads and none of them owns.
 import {
-  state, race, waterMeshes, env, scene,
-  makePool, ratingFor, inTier,
-  buildCrates, buildCourse, dropCourse, startRace,
-  makeFxPool, buildSurgeFx, takeFx, updateFx, surgeFx,
-  buildRipples, spawnRipple, updateRipples, leapShot, flightY, flightPitch,
-  markLiveOrder, leapAt, touchDown, stepCrate, standCrate, placeAll,
-  stepRacer, stepRace, finishRace, save, load, SAVE_KEY, crateSpanS,
-  makeSnail, SNAIL_SCALE, shellFor, NAMES, HUES, STYLES, rndColor, BODY_Y,
-  poolByIds, seasonField, forgetSeasonFields, seasonRivals, pickField,
-  drawSeasonField, lastSeasonField, crateTopAt, crateMeshY, laneYAt,
+  state,
+  race,
+  waterMeshes,
+  env,
+  scene,
+  makePool,
+  buildCourse,
+  dropCourse,
+  startRace,
+  updateFx,
+  surgeFx,
+  updateRipples,
+  flightPitch,
+  stepRace,
+  finishRace,
+  save,
+  load,
+  SAVE_KEY,
+  poolByIds,
+  seasonField,
+  forgetSeasonFields,
+  seasonRivals,
+  lastSeasonField,
 } from './race.js';
 
 // The stable: the lawn, the plinth, the pool, and the rebuild a density row
@@ -56,74 +69,78 @@ import {
 // The things standing next to the lane: the half-way tower, the lamps, the
 // scatter, the farms, and the backdrop both screens share. The register is
 // emptied and read through functions - see `src/scenery.js`'s footer.
-import {
-  placeMidway, placeLamps, knoll, lampPosts, lampWalk, makeBackdrop, backdrop, gateGroup,
-  clearRegister, standingReport, spinFans, fans, mills,
-  scatter, propName, partList, populate, populateFarms, farmstead,
-  standIt, reserveIt, clearOf, FARM_STEP, FARM_FOOT,
-} from './scenery.js';
+import { lampPosts, backdrop, standingReport, spinFans, fans, mills } from './scenery.js';
 
 // The lane, the frames and the ground either side of it. `NEST` rides along
 // because the surfaces' `groundColumns()` is reading the same twelve metres
 // the ground function is.
-import {
-  buildTrack, trackAt, newFrame, bankRadius, vergeBand, wallProfile,
-  groundYAt, groundEdge, farCountry, lanePoint,
-  BEND_BASIS, gfxBendReach, NEST, NEST_FRACTION, EDGE_THIRD,
-} from './course.js';
+import { buildTrack, trackAt, newFrame, groundYAt } from './course.js';
 
 // The four surfaces, the rows they are laid on, and the half-way mark. The
 // ribbon, the skirt, the water and the ground all read the lane through
 // `course.js`; the scenery reads all four back out of here.
-import {
-  laneVertex, roadRows, rowFrame, rampShare, isRock, isFace,
-  buildRoad, buildSkirt, buildWater, buildGround,
-  groundColumns, groundHalfAt, groundDrawnAt, lineMarks, midwayOf,
-  MID_CLEAR, TOWER_FOOT, MID_FLAT, MID_PERCH, WATER_TILE, _fr,
-} from './surfaces.js';
+import { groundColumns, groundDrawnAt, _fr } from './surfaces.js';
 
 // The post chain, the settings panel, the readback, the glows and the probes.
 // It reads its scenes through `world` and builds none of them - the course and
 // the stable that this chain draws are both built further down the graph.
 import {
-  renderScene, scenePixels, needsComposer, applyGraphics,
-  composer, renderPass, applyChainSize, dropComposer, syncComposer,
-  setChainScene, chainUp, chainScene,
-  drawOverlay, takeGrab, grabPixels, doGrab,
-  addGlows, syncGlow, courseProbes, probeQueue,
-  dropProbe, dropReflections, queueProbes, pumpProbes, syncProbes,
-  STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, forgetCastApplied, applyShadows,
-  renderOptions, optionsOpen, openOptions, closeOptions,
+  renderScene,
+  scenePixels,
+  needsComposer,
+  applyGraphics,
+  composer,
+  setChainScene,
+  chainUp,
+  chainScene,
+  drawOverlay,
+  takeGrab,
+  grabPixels,
+  doGrab,
+  syncGlow,
+  courseProbes,
+  probeQueue,
+  queueProbes,
+  pumpProbes,
+  syncProbes,
+  STAGE_ROWS,
+  markStageDirty,
+  applyRenderScale,
+  renderOptions,
+  optionsOpen,
+  openOptions,
+  closeOptions,
 } from './post.js';
 
 // The jar, the loader and the four injections. One import for all of them,
 // because the county has one palette and one set of shaders and a file that
 // gave you half of either would be a file to cross-reference.
-import {
-  props, propMat, propMatFor, snailTemplate, matFor, partMat, loadMeshes,
-  mat, detailOf, mapTex, poolWaterMat,
-  triplanarDetail, triplanarSets, rippleU,
-  colour, PAL, GREEN, STONE, FLOWER_COLORS, BARK, MUSHROOM_RED, MUSHROOM_BROWN,
-  gfxU, gfxSurfaceTargets, gtaoWind, windMark, waterFresnel,
-} from './materials.js';
+import { mat, rippleU, colour, gfxU, gfxSurfaceTargets } from './materials.js';
 
 // The ladder, the renderer, the dome and the hour. The renderer appends its
 // canvas here rather than in that module's body, because a module body runs
 // before `DOMContentLoaded` and the canvas wants to land after the panels.
 import {
-  world, gfx, gfxScale, setPreset, setDefaults, setRow, setToggle, gfxSave, gfxLoad,
-  RENDER_SCALE, RENDER_SCALE_CAP, SCALE_NAMES, SCALE_TAPS, GFX_STEPS, GFX_ROWS,
-  nativePixelRatio, canvasRatio, sceneRatio, needsResample,
-  FOG_LADDER, EDGE_LADDER, SHADOW_MAP, SHADOW_RADIUS, SHADOW_CAST,
-  PROP_DENSITY, GRASS_DENSITY, SKY_LADDER, AO_LADDER, GI_RADIUS, GI_INNER, GI_THICK,
-  REFL_LADDER, REFL_FRESNEL, MSAA_LADDER, MSAA_NAMES, MSAA_PRESET, PRESET_NAMES,
-  FX_TOGGLES, FX_KEYS, FOG_MATCH,
-  gfxMsaa, gfxEdge, gfxGroundFloor, gfxWideRows, gfxPropDensity, gfxGrassDensity, grassCount,
-  gfxSsao, gfxReflSize, gfxReflOn, triesBoost,
-  renderer, buildSkyGeo, setSkyGeo, skyGeo, matSky, paintSky, domeToneFix, timeOfDay,
-  envPmrem, makeEnv, refreshEnvironment,
-  LAMP_LIGHTS, LAMP_SPACING, LAMP_COLOUR,
-  raceClock, raceHour, clockText, TOD, WHITE, _todSky,
+  world,
+  gfx,
+  setDefaults,
+  setRow,
+  gfxSave,
+  SCALE_NAMES,
+  sceneRatio,
+  MSAA_NAMES,
+  FX_TOGGLES,
+  gfxReflOn,
+  renderer,
+  paintSky,
+  timeOfDay,
+  refreshEnvironment,
+  LAMP_LIGHTS,
+  LAMP_COLOUR,
+  raceClock,
+  clockText,
+  TOD,
+  _todSky,
 } from './graphics.js';
 document.body.appendChild(renderer.domElement);
 
@@ -132,18 +149,47 @@ document.body.appendChild(renderer.domElement);
 // imported here and not in ten places because every module needs it, and one
 // edge is one edge.
 import {
-  THREE, $, TAU, clamp, lerp, smoothstep, easeInOut,
-  CATS, CAT_BY_ID,
-  RUN, CLIMB, SWIM, FLY, WALK, PUSH, CLIMB_GRADE, LANE_HW,
-  CRATE_S, CRATE_X, CRATE_BACK, CRATE_GAP, CRATE_LANE, CRATE_HW, CRATE_FLARE, CRATE_WALL,
-  HOURS_PER_SECOND, LEVEL_Y, POOL_BANK, POOL_SPREAD, POOL_BERM, COND, ATTRS, ELEMENTS,
-  STAT_MAX, STAT_MIN, GOLD_PER_FRUIT, START_GOLD, START_RATING, POINTS, FIELD, POOL_SIZE,
-  CLUB_SNAILS, CLUB_ATTR, ATTR_MAX, RATING_PER_ATTR, RATING_EASE, RATING_STEP, RATING_PER_WIN,
-  SURGE_MULT, SURGE_DRAIN, PASSIVE_DRAIN, TIRED_MULT, SWIM_Y, REGEN, STEP, START_S, freshSnail,
-  seasonWord, TIERS, TIER_BY_ID, eligibleSeasons, canEnter, seasonFor, seasonDef,
-  seasonScale, seasonPicks, seasonFinaleId, seasonRoster, effFor, effTraits,
-  trackSeed, makeRng, rand, vnoise, fbm, hills,
-  bake, M, colored,
+  THREE,
+  $,
+  clamp,
+  lerp,
+  smoothstep,
+  CAT_BY_ID,
+  RUN,
+  CLIMB,
+  SWIM,
+  FLY,
+  PUSH,
+  HOURS_PER_SECOND,
+  COND,
+  ATTRS,
+  STAT_MAX,
+  GOLD_PER_FRUIT,
+  START_GOLD,
+  START_RATING,
+  FIELD,
+  START_S,
+  // **And the lane's own sample spacing**, which is here for one reason: the lip test
+  // in the browser suite converts a leap's arc distance into a lane index, and a
+  // magic 0.75 written into that test is a second copy of this number that fails
+  // silently - the wrong three samples of a wrong stretch of road, compared
+  // against a baseline that was captured with the right ones.
+  STEP,
+  freshSnail,
+  seasonWord,
+  TIERS,
+  eligibleSeasons,
+  canEnter,
+  seasonFor,
+  seasonDef,
+  seasonScale,
+  seasonPicks,
+  seasonFinaleId,
+  seasonRoster,
+  trackSeed,
+  makeRng,
+  hills,
+  M,
 } from './core.js';
 
 /** How many races the season runs, and the one function of the season ladder
@@ -152,149 +198,6 @@ import {
  *  module that imports the thing nine modules up the graph is not a leaf. */
 const seasonLength = (id) => seasonRoster(id === undefined ? state.tier : id).length;
 
-
-// How many of each, and how big. `grassCount()` went to `src/graphics.js`
-
-/** The countryside either side of the lane, following it round the corners. */
-/** How far either side of a sample the true radius is measured over, and how far
- *  the tightest one within `gfxBendReach()` of it counts for the whole neighbourhood
- *  - in samples, and **the two are not the same number and the reason is the
- *  whole of this pair of constants.**
- *
- * The **basis is four**, three metres, and it is four for a reason that took the
- * measurement to see. A radius read over a long chord is a radius *averaged* over
- * it, and a corner shorter than the chord is washed out by the straight road
- * either side of it: measured over sixteen samples the tightest radius on Lily
- * Deep reads 124 where the course's own tightest step is 62, and on Grand
- * Marathon 28 where it is eighteen. A cap computed from a corner it cannot see
- * is exactly the cap that lets the fold through, and the fold is what a notch in
- * a meadow's outline is.
- *
- * It was sixteen, and the note beside it claimed a *narrow* basis was the
- * dangerous one - four samples reported a five-metre radius on a course whose
- * tightest corner was eighteen, and it would "pinch the whole country in". That
- * was true of the narrow basis **with a twelve-metre reach**, where a single
- * wobbly sample's radius was the whole of the neighbourhood's evidence. With the
- * reach at the offset's own width the argument inverts: the reach is what
- * gathers the evidence, and the basis only has to resolve one corner. A wiggle
- * that reports too small a radius now costs a strip of meadow, and a corner that
- * reports too large one costs the fold - and only one of those can be seen.
- *
- * The **reach is the ground edge**, and that is the number that was wrong by an
- * order of magnitude. It was sixteen as well, twelve metres, on the reasoning
- * that "the scale a wedge of a corner is actually about" - and the reasoning is
- * about the *corner*, not about the *offset*. A ground row is the lane's path
- * pushed out sideways by its own distance, so a row a hundred and twenty metres
- * out is being pushed past a hundred and twenty metres of lane: **every bit of
- * curvature within a hundred and twenty metres of it can fold it**, and a window
- * that only looks twelve metres either side cannot see the corner thirty metres
- * round. So the cap was computed correctly from the corners beside the sample
- * and the row folded on the ones it could not see, and the two cancelled: the
- * edge went out at seventy-one metres through the middle of a corner whose
- * radius was forty, wrapped through its own centre, and the meadow's outline
- * came back on itself as a notch.
- *
- * The reach is the offset's own width, worked out from it rather than written
- * beside it, so the two cannot fall out of step a second time.
- */
-/** How far out the ground is drawn to, and how many rows the country between the
- *  verge and it is packed on.
- *
- * **A hundred and twenty is where the backdrop's hills are, and that is a real
- * number, not a taste.** The near hills stand a hundred and five to a hundred and
- * forty-five metres out with radii of twenty-six to forty-four, so the ground has
- * to finish *about where they stand* - in front of the far ones, and inside the
- * near ones, which is the only position where a hill rises out of a meadow
- * rather than sitting behind one or being buried under it. It is the number the
- * whole of the far-country work was tuned at, and it is what the draw-distance
- * row's middle step asks for, so the default is the tuned figure and the other
- * five steps move off it rather than the middle step being a compromise.
- *
- * It was **two hundred and sixty-eight**, on the reasoning that a country
- * sampled coarsely to a long way is a country that looks folded. It is: a ribbon
- * drawn to two hundred and sixty-eight is five hundred and thirty-six metres of
- * meadow, it swallows the near hills whole - their centres are a hundred and
- * forty out and they are eight to fifteen tall, so under a ground that has
- * climbed to meet them they are a wrinkle - and what is left is a green plateau
- * with a straight cut edge and sky underneath it. Wider is not further away.
- *
- * **Which is also why the low steps have to be careful.** A ground edge that stops
- * inside the near hills is fine - the fog closes over it first, at a hundred and
- * thirty metres of the hundred-and-thirty-metre fog - but a ground edge that stops
- * in open country is a straight cut with sky underneath it, and that is the shape
- * the whole paragraph above exists to avoid. So the fog ladder and the edge ladder
- * are one setting and not two, and the low steps pull the fog in to meet the edge
- * rather than trusting the edge to hide.
- *
- * The rows between the verge and it are packed on a **ratio worked out per
- * sample** so that the last of them lands exactly on the edge: a fixed ratio
- * multiplied out from a verge that moves leaves the outermost row at a hundred and
- * twenty-six here and a hundred and seventy there, so the country under it
- * is sampled at two different rates and the silhouette is two different shapes.
- */
-
-/** The narrowest the ground is ever drawn, and **it is a piece of scenery, not a
- *  radius.** The widest thing the courses put down is a farmstead: its berth is
- *  put twenty-eight metres off the lane, and its own layout runs a further
- *  twenty-eight from that - the house at nil, the windmill at eighteen and
- *  twelve, and a mill six metres across. Seventy-eight is that whole figure with
- *  a little ground behind it, and it is the number the *drawn* outline is checked
- *  against rather than the number a corner would like.
- *
- * **The radius model would not have allowed it, and the measurement says the
- * model is the pessimistic one.** A ground row is the lane's path pushed out to
- * that row's distance, and the local radius of the lane is what decides whether
- * an offset of that distance folds: `0.9 * R` for the tightest bend in reach. On
- * the tightest corner on each of the five courses that is between eleven and
- * fifty metres, so the model caps the ground at the old floor of fifty-eight -
- * and fifty-eight is what it was drawn at, and it was *narrower than its own
- * scenery*, which is the whole of the complaint. Pushed to seventy-eight, and
- * then to a hundred and ten, the **drawn** edge was measured on every course and
- * every sample: the worst turn between real edge segments is 1.7 degrees, the
- * ribbon's width does not vary by a metre along any course, and no edge stands
- * above the terrain it is sitting on. A brief wiggle makes an offset *spike* -
- * reverse a few metres and come back - where the model reads it as a cusp, and a
- * spike in the outline is a wrinkle, not the ribbon crossing itself.
- *
-* So the cap is the safety net and the floor is the width, and the floor is
- * above the cap's reach on all five courses - which is worth saying plainly,
- * because it means the bend passes below are **inert here** and are the thing
- * that would hold a course tighter than its scenery. Fifty-eight was not a limit
- * found by measuring; it was a number a model produced, and the scenery was built
- * to a different one.
- *
- * The floor is read through `gfxGroundFloor()`, which is seventy-eight at every
- * draw distance from the middle step up and **follows the edge down below it** -
- * because at eighty-five metres of ribbon the scenery would hang off the end of
- * it, and clamping the floor back up to seventy-eight would answer a shorter
- * reach with a wider one, which is the opposite of what the row is for.
-
-/**
- * The height of the ground **as it is drawn**, which is not the same question as
- * `groundYAt()` and the difference between the two is the whole of a flower
- * standing in mid-air.
- *
- * A course surface is a polyline. `groundColumns()` says where the rows are and
- * `buildGround()` puts a vertex at each of them with the height `groundYAt()`
- * gives there, so between two columns the ground the player can see is a straight
- * line joining the two - while `groundYAt()` itself is an analytic profile that
- * carries on curving through the gap. A prop placed by `scatter()` is placed at
- * whatever `d` its own draw happened to land on, which is almost never a column,
- * so on the inner half of the mesh the two agree to a millimetre and on the outer
- * half they can be a **metre** apart: out past the verge the columns are at
- * `a + 6, 14, 18.5, 24` and the ground falls away fast across a wall's shoulder,
- * so the straight line between two of them sits well above the curve.
- *
- * Which is a flower in the air over the top of a ramp, and it is why the same
- * scatter is correct on the meadow - where the columns are a metre apart and the
- * curve is shallow - and wrong on every ramp and lip on the course.
- *
- * So this asks the question the mesh asks: bracket `d` between the two columns
- * either side of it and take the height off the line between them. One entry of
- * cache, because a scatter walks the samples in order and asks about the same row
- * many times running.
- */
-let _colFor = null, _colCache = null;
 /* ================================================================== *
  * Camera and the main loop
  * ================================================================== */
@@ -589,7 +492,6 @@ function forceTimeOfDay() {
   todU = -1; todPainted = -1;
   updateTimeOfDay(true);
 }
-world.forceTimeOfDay = forceTimeOfDay;
 function updateTimeOfDay(force) {
   const p = race.player;
   const running = race.tr && p && race.phase !== 'idle';
@@ -1989,6 +1891,13 @@ window.__snail = {
   plan: (id) => planTrack(id, trackSeed(id, state.season), seasonScale(state.tier)),
   track: (id) => buildTrack(id, trackSeed(id, state.season), seasonScale(state.tier)),
   groundYAt, trackAt, newFrame,
+  // **And the spacing, because a test that converts a distance into a lane index
+  //  needs it.** `golden.spec.js` finds the crest of a lip's take-off edge by
+  // dividing the leap's arc by the stride; a 0.75 written into that test is a
+  // second copy of this number, and the failure of a second copy is silence -
+  // the wrong three samples of a wrong stretch of road, compared against a
+  // baseline captured with the right ones.
+  STEP,
   // and the four that are functions rather than values, so they are spelled
   // as references and not inlined: the surface's own `groundColumns()` and
   // `groundDrawnAt()`, and the scenery's `standing()` and `mills()` - the last

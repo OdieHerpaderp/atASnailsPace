@@ -34,6 +34,14 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+# **And the same place with symlinks resolved**, which is what the containment
+# check below compares against: `realpath` of a target inside the root can still
+# land outside it through a link, and comparing an unresolved root against a
+# resolved target is a comparison between two different questions. It is also the
+# only correct answer when the repository itself is reached through a symlink -
+# a link into it is a legitimate way to ask for the game and a link out of it is
+# not, and only the resolved form tells the two apart.
+ROOT_REAL = os.path.realpath(ROOT)
 PORT = int(os.environ.get("PORT", "8713"))
 
 # what each builder's page exposes for the harness to drive
@@ -83,9 +91,19 @@ window.__texExport = async (name, dir) => {
 
 # The one place the dev server writes to, and the only subfolder of it that
 # anything may write into. A path is not accepted: `dir` is a key into this,
-# not a path, so there is nothing to traverse out of. `tex` holds the maps that
+# not path, so there is nothing to traverse out of. `tex` holds the maps that
 # meshes/build-textures.html draws; everything else lands beside the glbs.
 SAVE_DIRS = {"", "tex"}
+
+# **And the only two things it will write**, which is the other half of the
+# same guard. `SAVE_DIRS` confines the *folder* and this confines the file, and
+# between them a POST cannot touch a tracked source file: without it,
+# `POST /__save?name=palette.js` replaced `meshes/palette.js` with five bytes
+# and the server served the clobbered content straight back. The route exists for
+# the builders' export hooks, and those write glbs and pngs and nothing else -
+# so an extension outside this set is a request this server has no reason to
+# believe in.
+SAVE_EXTS = {".glb", ".png"}
 
 CTYPES = {
     ".html": "text/html; charset=utf-8", ".js": "text/javascript",
@@ -143,8 +161,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return ("html", harness(which))
         if path in ("/", "/snail-race.html"):
             path = "/snail-race.html"
+        # **Containment, checked rather than assumed.** `normpath` collapses
+        # `a/../b` but keeps a *leading* `..`, and `lstrip("/")` only strips the
+        # slash - so a request target that does not begin with one (which a browser
+        # never sends, and `urllib` and `curl --path-as-is` both will) walked
+        # straight out of the repository and served `/etc/passwd`. The dev server
+        # is loopback only, so this is containment rather than a privilege
+        # boundary, but it was accidental: the `SAVE_DIRS` check on the write route
+        # is deliberate and this was `normpath` doing the work by luck. Both ends
+        # of it now - reject a target that is not origin-form, and refuse anything
+        # whose real path has left the root, which also catches a symlink and which
+        # the first check cannot see.
+        if not path.startswith("/"):
+            return None
         rel = os.path.normpath(path).lstrip("/")
         target = os.path.join(ROOT, rel)
+        if os.path.commonpath([ROOT_REAL, os.path.realpath(target)]) != ROOT_REAL:
+            return None
         if os.path.isdir(target):
             target = os.path.join(target, "index.html")
         # a builder served from /_harness/ asks for its own folder by name, and
@@ -175,12 +208,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         d = q.get("dir", [""])[0]
         if d not in SAVE_DIRS:
             return self.send_error(400, "dir must be one of %s" % sorted(SAVE_DIRS))
+        # `basename` above took the traversal out of the *path*; this takes it out
+        # of the *extension*, because the path was never the way in. A name that
+        # is not a glb or a png is not something a builder hook asks for.
+        if os.path.splitext(name)[1].lower() not in SAVE_EXTS:
+            return self.send_error(
+                400, "name must end in one of %s" % sorted(SAVE_EXTS))
         folder = os.path.join(ROOT, "meshes", d)
         if not os.path.isdir(folder):
             os.makedirs(folder, exist_ok=True)
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        with open(os.path.join(folder, name), "wb") as f:
+        target = os.path.join(folder, name)
+        # **Write to a temporary name and move it into place, rather than opening
+        # the real one for writing.** A truncated overwrite is a lost file: if the
+        # body is short or the request dies half way, the old content is already
+        # gone and the new content is not there yet. `os.replace` is atomic within
+        # a filesystem, so the file is either the old one or the new one.
+        tmp = target + ".part"
+        with open(tmp, "wb") as f:
             f.write(body)
+        os.replace(tmp, target)
         self._send(b"ok", "text/plain")
 
     def log_message(self, *a):

@@ -36,30 +36,79 @@
  * else, and both are reads of a `let` the frame loop owns.
  * ================================================================== */
 import {
-  THREE, TAU, clamp, lerp, $,
-  RUN, CLIMB, SWIM, FLY, PUSH, CLIMB_GRADE, LANE_HW,
-  CRATE_S, CRATE_BACK, CRATE_GAP, CRATE_HW,
-  HOURS_PER_SECOND, COND, ATTRS, STAT_MAX, START_GOLD, START_RATING,
-  POINTS, FIELD, POOL_SIZE, CLUB_SNAILS, CLUB_ATTR, ATTR_MAX,
-  RATING_PER_ATTR, RATING_EASE, RATING_STEP, RATING_PER_WIN,
-  SURGE_MULT, SURGE_DRAIN, PASSIVE_DRAIN, TIRED_MULT, SWIM_Y, REGEN, STEP, START_S,
-  freshSnail, TIERS, seasonFor, seasonScale, seasonPicks, seasonFinaleId,
-  effTraits, trackSeed, makeRng, rand, CAT_BY_ID, TIER_BY_ID,
+  THREE,
+  TAU,
+  clamp,
+  lerp,
+  $,
+  RUN,
+  CLIMB,
+  SWIM,
+  FLY,
+  PUSH,
+  CLIMB_GRADE,
+  LANE_HW,
+  CRATE_S,
+  CRATE_GAP,
+  CRATE_HW,
+  HOURS_PER_SECOND,
+  COND,
+  ATTRS,
+  STAT_MAX,
+  START_GOLD,
+  START_RATING,
+  POINTS,
+  FIELD,
+  POOL_SIZE,
+  CLUB_SNAILS,
+  CLUB_ATTR,
+  ATTR_MAX,
+  RATING_PER_ATTR,
+  RATING_EASE,
+  RATING_STEP,
+  RATING_PER_WIN,
+  SURGE_MULT,
+  SURGE_DRAIN,
+  PASSIVE_DRAIN,
+  TIRED_MULT,
+  SWIM_Y,
+  REGEN,
+  STEP,
+  START_S,
+  freshSnail,
+  TIERS,
+  seasonFor,
+  seasonScale,
+  seasonPicks,
+  seasonFinaleId,
+  effTraits,
+  trackSeed,
+  makeRng,
+  rand,
+  CAT_BY_ID,
+  TIER_BY_ID,
 } from './core.js';
 // **The hour is not read from here.** It is written by `updateTimeOfDay()` in the
 // app, which owns the mode, the camera and the stable's own light, and this file
 // asks for it through `world.forceTimeOfDay()` rather than importing a function
 // that lives in the one module that imports this one.
 import { world, makeEnv, raceHour } from './graphics.js';
-import { props, snailTemplate, matFor, partMat, mat, colour, windMark } from './materials.js';
+import { props, snailTemplate, matFor, partMat, mat } from './materials.js';
 import { syncProbes, dropReflections } from './post.js';
 import { buildTrack, trackAt, newFrame } from './course.js';
 import {
   buildRoad, buildSkirt, buildWater, buildGround,
 } from './surfaces.js';
 import {
-  placeMidway, placeLamps, lampPosts, lampWalk, backdrop, gateGroup,
-  clearRegister, fans, scatter, populate,
+  placeMidway,
+  placeLamps,
+  lampPosts,
+  lampWalk,
+  backdrop,
+  gateGroup,
+  clearRegister,
+  fans,
+  populate,
 } from './scenery.js';/* ================================================================== *
  * The snail. Body, spiral shell, two retractable eye stalks and a foot
  * that ripples as it goes. It is meshes/snail.glb, cloned per racer: the

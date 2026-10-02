@@ -24,8 +24,21 @@
 // property names and prose do not make the list.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = '/home/odie/atASnailsPace';
+/** The repository root, and **read off this file's own location rather than
+ *  written down** - because a gate that reads a hardcoded path is a gate that
+ *  validates a different tree from the one it was run in. `check.sh` derives the
+ *  same directory the same way for the same reason.
+ *
+ *  It was a literal here for the whole of the split, and the failure is silent in
+ *  the worst direction: `check.sh` hands this script a *relative* file list after
+ *  `cd`-ing to its own root, so from a second checkout every path resolved and
+ *  every name matched - in the **first** checkout. A clone with a genuinely
+ *  broken import came back `wired.mjs: clean.` and `11 modules`, having checked
+ *  the tree the author happened to be sitting in. `import.meta.url` is the one
+ *  thing in a Node script that is true wherever the script is. */
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = process.argv.slice(2);
 
 const DECL = /^(?:export\s+)?(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/;
@@ -152,8 +165,21 @@ function importsOf(src, f) {
   const out = {};
   for (const m of src.matchAll(/import\s*\{([\s\S]*?)\}\s*from\s*'([^']+)'/g)) {
     const mod = path.relative(ROOT, path.resolve(path.dirname(path.join(ROOT, f)), m[2]));
+    // **Comments out of the brace list before it is split**, and that is this
+    // check's fifth wrong answer about what a name in a file is. An import list
+    // is the one place in the county a comment belongs *inside* a name list -
+    // three lines explaining why one of these forty names is imported at all -
+    // and this split the list on commas without stripping, so the comment's own
+    // words became imported names. The symptom was the reverse of every other
+    // wrong answer here: not a name silently *not* seen, but `STEP` reported as
+    // read bare and not imported, while it was plainly on the list three lines
+    // below the comment. A parser that reads prose as a symbol table is the
+    // worst kind, because it invents names that no file contains.
+    const list = m[1]
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:"'`$\\])\/\/[^\n]*/g, '$1 ');
     out[mod] = new Set(
-      m[1].split(',').map((n) => n.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean));
+      list.split(',').map((n) => n.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean));
   }
   return out;
 }

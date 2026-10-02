@@ -1,2 +1,29 @@
 # Playwright's per-run report and screenshots, written on a failing spec.
 test-results/
+
+# Half-finished extractions from the module split. `check.sh` globs `src/*.js` and
+# `wired.mjs` is handed the same list, so a file with any other extension sits in
+# the module folder and is read by no gate at all - which is how a one-line
+# `src/graphics.js.deferred` spent three commits in the tree.
+*.deferred
+*.bak
+*.orig
+
+# The prop library and its maps are build artefacts: `meshes/*.glb` and
+# `meshes/tex/*.png` are 77 MB written by the pages in `meshes/build-*.html` and by
+# the dev server's `/__save` hook. **Everything in `meshes/` that is not one of
+# those is source** - the two modules every builder page imports, and the four
+# builder pages themselves, which are the only way to regenerate the artefacts -
+# so the ignore is a deny with exceptions rather than a deny of the folder. A
+# clone with these in it can build the county; a clone without them cannot build
+# the game, cannot run `tools/check.sh`, and cannot run `tools/wired.mjs` at all,
+# since it is handed both modules by name.
+/meshes/*
+!/meshes/palette.js
+!/meshes/maps.js
+!/meshes/build-*.html
+
+# `.kilo/` holds the session's plans and skills, and `references/` whatever was
+# read in to write them. Neither is the game.
+.kilo/
+references/

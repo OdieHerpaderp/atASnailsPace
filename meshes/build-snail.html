@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>build snail.glb</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 24px; background: #171a1c; color: #d8d4cc; }
+  h1 { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; }
+  button { font: inherit; padding: 8px 16px; margin-right: 8px; background: #2b3134; color: #d8d4cc;
+           border: 1px solid #3d4548; border-radius: 3px; cursor: pointer; }
+  .note { color: #8b9195; max-width: 62ch; }
+  code { color: #b9c4a8; }
+</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1>meshes/snail.glb</h1>
+<p class="note">
+  The snail, built from the same numbers the game used to build it in code. Open this
+  page from the folder that serves the game, press <em>write snail.glb</em>, and save the
+  file over <code>meshes/snail.glb</code>.
+  <br><br>
+  The names matter: the game finds the parts it animates by name - <code>bodyG</code>,
+  <code>headG</code>, <code>shellG</code>, <code>stalk0</code>, <code>stalk1</code>,
+  <code>footM</code> - and the ones it recolours by the name of their material -
+  <code>body</code>, <code>foot</code>, <code>shell</code>, <code>stalk</code>. The
+  animation moves every part from the pose set here, so the model can be reshaped
+  freely. The foot is the one mesh whose vertices are rewritten every frame, so it
+  must stay a single mesh. The eyes and the smile keep their own dark material,
+  which the game leaves alone.
+  <br><br>
+  The shell is not built here - it is <code>build-shell.html</code>, which cuts
+  the same dome three times over, once for each whorl the game hands out.
+</p>
+<button id="go">write snail.glb</button><button id="prev">preview</button>
+<pre id="log"></pre>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFExporter } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/utils/BufferGeometryUtils.js';
+
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------- the model
+// A snail lies along the ground: a long soft body with a fat round head at
+// the front, a wide flat foot under the whole of it, and the shell slung on
+// its back, tipped forward so the spiral faces up and out. The head carries
+// the face - two big eyes and a smile - and two thin feelers above them.
+
+const M = (x, y, z, sx = 1, sy = 1, sz = 1, rz = 0, rx = 0, ry = 0) =>
+  new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+    new THREE.Vector3(sx, sy, sz));
+
+/** A flat vertex colour, all of a part the same shade. */
+function tint(g, c) {
+  const n = g.attributes.position.count;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2]; }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+
+/** One primitive, transformed, with a flat vertex colour. */
+function part(geo, m, c) {
+  const g = geo.clone();
+  g.applyMatrix4(m);
+  g.deleteAttribute('uv');
+  return tint(g, c);
+}
+
+/** A shade from belly to back, so a big soft form is not one dead flat tone. */
+function shade(g, lo, hi) {
+  const p = g.attributes.position;
+  const n = p.count, col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const t = Math.max(0, Math.min(1, (p.getY(i) - lo) / (hi - lo)));
+    const v = 0.90 + 0.16 * t;
+    col[i * 3] = v; col[i * 3 + 1] = v * 0.99; col[i * 3 + 2] = v * 0.96;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+
+/**
+ * A body, swept: rings of points along x, each ring a closed shape standing
+ * between its own floor and its own back, so the whole animal is one long form
+ * rather than a lump with a slab under it. `rows` are [x, floor, back,
+ * halfWidth] and the two poles close off the ends. They are the shape you want,
+ * not the shape you get: they are run through a spline and resampled `sub`
+ * times so there are no kinks, and a ring is an ellipse, or with `n` above two
+ * a squircle - a rounded box, flat along the floor and round at the corners,
+ * which is what the sole of a foot wants.
+ */
+function sweep(rows, tailPole, frontPole, ring = 16, n = 2, sub = 1) {
+  const dense = [];
+  for (let i = 0; i < rows.length - 1; i++) {
+    const p0 = rows[Math.max(0, i - 1)], p1 = rows[i], p2 = rows[i + 1], p3 = rows[Math.min(rows.length - 1, i + 2)];
+    for (let k = 0; k < sub; k++) {
+      const t = k / sub, t2 = t * t, t3 = t2 * t, row = [];
+      for (let c = 0; c < 4; c++) {
+        const v = 0.5 * (2 * p1[c] + (-p0[c] + p2[c]) * t
+          + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2
+          + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * t3);
+        row.push(c === 3 ? Math.max(0.002, v) : v);
+      }
+      dense.push(row);
+    }
+  }
+  dense.push(rows[rows.length - 1]);
+  const e = 2 / n;
+  const sp = (v) => (v < 0 ? -Math.pow(-v, e) : Math.pow(v, e));
+  const at = (i, j) => {
+    const [x, floor, back, w] = dense[i];
+    const a = (j / ring) * Math.PI * 2;
+    return [x, (floor + back) / 2 - ((back - floor) / 2) * sp(Math.cos(a)), w * sp(Math.sin(a))];
+  };
+  const verts = [];
+  const tri = (p, q, r) => { for (const v of [p, q, r]) verts.push(v[0], v[1], v[2]); };
+  for (let i = 0; i < rows.length - 1; i++) {
+    for (let j = 0; j < ring; j++) {
+      const a = at(i, j), b = at(i, j + 1), c = at(i + 1, j + 1), d = at(i + 1, j);
+      tri(a, c, b); tri(a, d, c);
+    }
+  }
+  for (let j = 0; j < ring; j++) {
+    tri(tailPole, at(0, j), at(0, j + 1));
+    const i = rows.length - 1;
+    tri(frontPole, at(i, j + 1), at(i, j));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  g.deleteAttribute('uv');
+  g.computeVertexNormals();
+  // the shade runs from the lowest belly to the highest back
+  const belly = Math.min(...rows.map((r) => r[1]));
+  const back = Math.max(...rows.map((r) => r[2]));
+  return shade(g, belly, back);
+}
+
+function buildBody() {
+  // The animal is one loaf: the sole is part of the body, so there is no join
+  // to see and nothing to read as a base it is sitting on. The rings are
+  // squircles, which keeps the sole flat and the sides near upright, and the
+  // rows are resampled so the shape has no kinks to catch the light.
+  return sweep([
+    //   x      sole    back   width
+    [-0.250, -0.058,  0.052, 0.022],
+    [-0.215, -0.080,  0.096, 0.052],
+    [-0.170, -0.088,  0.132, 0.082],
+    [-0.120, -0.088,  0.154, 0.106],
+    [-0.060, -0.088,  0.162, 0.120],
+    [ 0.000, -0.088,  0.161, 0.124],
+    [ 0.060, -0.088,  0.157, 0.121],
+    [ 0.120, -0.088,  0.149, 0.113],
+    [ 0.175, -0.084,  0.137, 0.097],
+    [ 0.225, -0.068,  0.119, 0.070],
+    [ 0.258, -0.044,  0.098, 0.042],
+  ], [-0.272, -0.020, 0], [0.278, 0.020, 0], 22, 2.5, 3);
+}
+
+function buildFoot() {
+  // The foot is only a lip now, because the sole is the body's own. Down the
+  // middle it is a sliver, a shade wider than the body and buried just above
+  // the ground, so all that shows is a thin rim round the base - and that is
+  // the bit the game ripples as the snail goes. At the ends it has to climb,
+  // because the tail and the chin are lifted clear of the ground.
+  return tint(sweep([
+    //   x      floor   top   width
+    [-0.248,  0.010,  0.070, 0.010],
+    [-0.232,  0.000,  0.062, 0.026],
+    [-0.200, -0.005,  0.052, 0.058],
+    [-0.150, -0.006,  0.048, 0.088],
+    [-0.080, -0.006,  0.048, 0.101],
+    [ 0.000, -0.006,  0.048, 0.105],
+    [ 0.080, -0.006,  0.048, 0.103],
+    [ 0.150, -0.005,  0.052, 0.095],
+    [ 0.200, -0.002,  0.062, 0.082],
+    [ 0.245,  0.006,  0.086, 0.058],
+    [ 0.275,  0.020,  0.110, 0.028],
+  ], [-0.256, 0.040, 0], [0.292, 0.104, 0], 22, 3, 3), [0.87, 0.86, 0.82]);
+}
+
+function build() {
+  // the head: a big ball on the front of the body, sunk in far enough that
+  // the two read as one form
+  const head = part(new THREE.SphereGeometry(0.112, 20, 14), M(0, 0, 0, 1.00, 0.97, 1.02), [0.96, 0.95, 0.91]);
+  // the face: two big eyes low on the front of the head, and a smile cut round
+  // the head - the smile is a slice of a circle whose ring is the circle the
+  // head's own surface makes at that depth, so it lies on the face
+  const eye = part(new THREE.SphereGeometry(0.033, 14, 11), M(0, 0, 0, 0.42, 1.00, 0.74), [1, 1, 1]);
+  const smileArc = Math.PI * 0.45;
+  const smile = part(new THREE.TorusGeometry(0.0463, 0.006, 5, 16, smileArc),
+    M(0.104, 0, 0, 1, 1, 1, Math.PI * 1.5 - smileArc / 2, 0, Math.PI / 2), [1, 1, 1]);
+  // a feeler: a short thin neck with a rounded knob on the end, and the knob
+  // takes the body colour, as a snail's feeler tip does
+  const stalk = part(new THREE.CylinderGeometry(0.0115, 0.017, 0.075, 6), M(0, 0.037, 0), [0.92, 0.90, 0.86]);
+  const knob = part(new THREE.SphereGeometry(0.022, 12, 9), M(0, 0.078, 0, 0.90, 1.20, 0.90), [0.98, 0.97, 0.93]);
+  return { head, eye, smile, stalk, knob };
+}
+
+const mat = (name, o) => new THREE.MeshStandardMaterial(Object.assign({ name }, o));
+
+async function assemble() {
+  const { head, eye, smile, stalk, knob } = build();
+  // the shell is a file of its own, so the three whorl patterns stay three
+  // files; it is the same spiral, mounted on the back and scaled to the body.
+  // The whorl the snail wears is swapped for the racer's own the moment one is
+  // built, so this is only the shell you see before then.
+  const src = await new GLTFLoader().loadAsync('shell-swirl.glb');
+  // the same rule the game uses to read a prop file: the first mesh in it
+  let shellMesh = null;
+  src.scene.traverse((o) => { if (o.isMesh && !shellMesh) shellMesh = o; });
+  const shellGeo = shellMesh.geometry;
+
+  const mBody = mat('body', { color: 0xffffff, vertexColors: true, roughness: 0.72, metalness: 0.02 });
+  const mFoot = mat('foot', { color: 0xffffff, vertexColors: true, roughness: 0.66 });
+  const mStalk = mat('stalk', { color: 0xffffff, vertexColors: true, roughness: 0.6 });
+  const mShell = mat('shell', { color: 0xffffff, vertexColors: true, roughness: 0.42, metalness: 0.06 });
+  const mEye = mat('eye', { color: 0x0a0806, roughness: 0.2 });
+
+  const root = new THREE.Group(); root.name = 'snail';
+  const add = (parent, geo, material, name) => {
+    const m = new THREE.Mesh(geo, material); m.name = name; m.castShadow = true; parent.add(m); return m;
+  };
+
+  const bodyG = new THREE.Group(); bodyG.name = 'bodyG'; root.add(bodyG);
+  add(bodyG, buildBody(), mBody, 'bodyM');
+
+  // the head sits on the front shoulder, tipped very slightly nose down
+  const headG = new THREE.Group(); headG.name = 'headG';
+  headG.position.set(0.222, 0.096, 0);
+  headG.rotation.set(0, 0, -0.06);
+  bodyG.add(headG);
+  add(headG, head, mBody, 'headM');
+  add(headG, eye, mEye, 'eyeM').position.set(0.088, -0.018, 0.054);
+  add(headG, eye, mEye, 'eyeM_1').position.set(0.088, -0.018, -0.054);
+  add(headG, smile, mEye, 'smileM');
+  for (let i = 0; i < 2; i++) {
+    const s = i === 0 ? 1 : -1;
+    const st = new THREE.Group();
+    st.name = 'stalk' + i;
+    st.position.set(0.045, 0.075, s * 0.036);
+    st.rotation.set(s * 0.18, 0, -0.16);
+    headG.add(st);
+    add(st, stalk, mStalk, 'stalkM');
+    add(st, knob, mStalk, 'knobM');
+  }
+
+  // the shell sits down into the back between the head and the tail, and is
+  // tipped well forward so the whorl faces out of the front of the snail, the
+  // way it does on a snail that is going somewhere. Note that the tilt is the
+  // z: the y only spins the whorl round to catch the light.
+  const shellG = new THREE.Group();
+  shellG.name = 'shellG';
+  shellG.position.set(-0.022, 0.118, 0.005);
+  shellG.rotation.set(0, -0.50, -0.68);
+  shellG.scale.setScalar(0.48);
+  bodyG.add(shellG);
+  add(shellG, shellGeo, mShell, 'shellM');
+
+  add(root, buildFoot(), mFoot, 'footM');
+  return root;
+}
+
+let built = null;
+$('go').onclick = async () => {
+  const root = built || (built = await assemble());
+  const buf = await new Promise((res, rej) =>
+    new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
+  const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'snail.glb';
+  document.body.appendChild(a); a.click(); a.remove();
+  log(`wrote snail.glb — ${buf.byteLength} bytes`);
+};
+
+$('prev').onclick = async () => {
+  document.getElementById('view')?.remove();
+  const root = built || (built = await assemble());
+  // stand it on a flat ground and light it the way the game does
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9fb7c4);
+  scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+  const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
+  key.position.set(2.5, 4, 3);
+  scene.add(key);
+  scene.add(root);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(6, 40), new THREE.MeshStandardMaterial({ color: 0x6f8f4a }));
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+  const camera = new THREE.PerspectiveCamera(35, 2, 0.1, 100);
+  let angle = Math.PI * 0.62;
+  const draw = () => {
+    // a slow turntable, so every side of it can be looked at
+    camera.position.set(Math.cos(angle) * 1.5, 0.62, Math.sin(angle) * 1.5);
+    camera.lookAt(0, 0.34, 0);
+    renderer.render(scene, camera);
+    angle += 0.006;
+  };
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(760, 420);
+  renderer.id = 'view';
+  document.body.appendChild(renderer.domElement);
+  renderer.setAnimationLoop(draw);
+  log('preview: spinning');
+};
+</script>
+</body>
+</html>

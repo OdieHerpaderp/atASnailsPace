@@ -32,8 +32,8 @@
  * ================================================================== */
 import { COUNTY as C, FLOWER_COLORS as FLOWER_HEX, GREEN as GREEN_T, STONE as STONE_T } from '../meshes/palette.js';
 import { CONVERTED, MAPS, SURFACE, allMaps, allParts, mapSlots, mapsFor, slotFor } from '../meshes/maps.js';
-import { THREE, $, clamp, smoothstep, hills } from './core.js';
-import { gfx, LAMP_COLOUR } from './graphics.js';/* ================================================================== *
+import { THREE, $, clamp, smoothstep } from './core.js';
+import { LAMP_COLOUR } from './graphics.js';/* ================================================================== *
  * The meshes live in meshes/ as .glb files: a prop is written once and
  * drawn a thousand times, and a snail is one file that is cloned per racer
  * and recoloured. Only the course itself is still built here, because it is

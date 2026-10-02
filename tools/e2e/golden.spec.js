@@ -14,56 +14,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from 'playwright/test';
-import { boot, noErrors } from './fixtures.js';
+import { boot, noErrors, capturePlan, captureSim, CAPTURE_SPEC } from './fixtures.js';
 import { COURSES } from './tier.js';
 
 const BASELINE = JSON.parse(fs.readFileSync(path.join(__dirname, 'baseline.json'), 'utf8'));
 
-/** The whole per-course capture, from a page that has just booted. */
-const CAPTURE = (catId) => {
-  const S = window.__snail;
-  // **`x || 0` on the way out**, and that is not tidiness: `(-0.00004).toFixed(4)`
-  // is `-0.0000`, and `JSON.stringify(-0)` is `0`, so a baseline on disk can
-  // never come back as the negative zero the page still holds.
-  const r4 = (v) => (v == null || !isFinite(v) ? null : (+v.toFixed(4) || 0));
-  const plan = S.plan(catId);
-  const tr = S.track(catId);
-  const lane = [];
-  for (let i = 0; i <= tr.n; i += 8) {
-    const q = tr.sm[i];
-    lane.push([r4(q.s), r4(q.y), r4(q.ground), r4(q.w), r4(q.water), r4(q.floor),
-      r4(q.basin), r4(q.crown), r4(q.grade), r4(q.bend), q.cond, q.rock ? 1 : 0]);
-  }
-  const fr = S.newFrame();
-  const ground = [];
-  const stride = Math.max(1, Math.floor(tr.n / 8));
-  for (let i = 0; i <= tr.n; i += stride) {
-    S.trackAt(tr, tr.sm[i].s, fr);
-    ground.push([r4(tr.sm[i].s), r4(fr.y), r4(fr.ground),
-      ...[-40, -18, -7, 7, 18, 40].map((d) => r4(S.groundYAt(fr, d)))]);
-  }
-  return {
-    plan: {
-      length: r4(plan.length), midX: r4(plan.midX), tally: plan.tally,
-      pts: plan.pts.map((p) => [r4(p.x), r4(p.y), r4(p.z)]),
-      meta: plan.meta.map((m) => [m.cond, r4(m.ground), r4(m.w), r4(m.water),
-        r4(m.floor), r4(m.basin), r4(m.crown), m.rock ? 1 : 0]),
-      leaps: plan.leaps.map((l) => [l.kind, r4(l.x0), r4(l.x1), r4(l.farX), r4(l.lipY),
-        r4(l.laneY), r4(l.waterY), r4(l.floorY), r4(l.vy), l.wet ? 1 : 0, l.crate ? 1 : 0]),
-    },
-    track: {
-      catId: tr.catId, n: tr.n, length: r4(tr.length), finish: r4(tr.finish), drain: r4(tr.drain),
-      leaps: tr.leaps.map((l) => [l.kind, r4(l.s0), r4(l.s1), r4(l.land), r4(l.lipY),
-        r4(l.laneY), r4(l.waterY), r4(l.floorY), r4(l.vy), l.wet ? 1 : 0]),
-      lane, ground,
-    },
-  };
-};
 
 for (const id of COURSES) {
   test(`${id}: the plan, the lane and the terrain either side of it`, async ({ page }) => {
     const { errors } = await boot(page);
-    const got = await page.evaluate(CAPTURE, id);
+    const got = await page.evaluate(capturePlan, CAPTURE_SPEC(id));
     const want = BASELINE.courses[id];
     expect(got.plan.length, `${id} plan length`).toBe(want.plan.length);
     expect(got.plan.tally, `${id} what it asked for`).toEqual(want.plan.tally);
@@ -89,20 +49,7 @@ for (const id of COURSES) {
 for (const id of COURSES) {
   test(`${id}: a whole race, simulated, and what is standing on it`, async ({ page }) => {
     const { errors } = await boot(page);
-    const got = await page.evaluate((catId) => {
-      const S = window.__snail;
-      S.surge(false);
-      S.start(catId);
-      const r = S.sim(300, 0.04);
-      S.surge(false);
-      return {
-        place: S.race.player.place, points: S.race.player.points,
-        time: +r.time.toFixed(6), length: +r.length.toFixed(4), hour: +r.hour.toFixed(6),
-        field: r.field.map((f) => [f.name, f.place, f.points, +f.time.toFixed(6), f.rating]),
-        standing: S.standing(),
-        mills: S.mills(),
-      };
-    }, id);
+    const got = await page.evaluate(captureSim, id);
     const want = BASELINE.courses[id].sim;
     expect(got.time, `${id} your time`).toBe(want.time);
     expect(got.place, `${id} where you came in`).toBe(want.place);
@@ -143,9 +90,16 @@ for (const id of COURSES) {
         // 200 mm above. The crate's own arithmetic is the notch, and
         // `tools/plan-test.mjs <course> --leaps` is where that is measured.
         if (le.kind === 'pushCrate') return null;
-        // the lip's own `s` falls between two lane samples - by up to half a
-        // 750 mm stride - so the crest is the highest of the three around it
-        const i = Math.round(le.s0 / 0.75);
+        // **`S.STEP`, and not a 0.75 written here.** The lip's own `s` falls
+        // between two lane samples - by up to half a stride - so this rounds to
+        // the sample nearest it and the crest is the highest of the three around
+        // that. The stride is the game's own number and it is read out of
+        // `window.__snail` rather than restated, because a copy of a number in a
+        // test fails by being wrong rather than by being absent: the wrong three
+        // samples of a wrong stretch of road, compared against a baseline
+        // captured with the right ones, and the assertion that exists to catch a
+        // rounded-off lip measuring nothing at all.
+        const i = Math.round(le.s0 / S.STEP);
         let crest = -Infinity, at = i;
         for (let k = i - 1; k <= i + 1; k++) {
           if (tr.sm[k].y > crest) { crest = tr.sm[k].y; at = k; }

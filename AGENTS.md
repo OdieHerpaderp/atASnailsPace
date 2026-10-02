@@ -39,16 +39,16 @@ are not, and they are `src/graphics.js`'s registry.
 | | lines | what it is |
 |---|---|---|
 | `src/core.js` | 562 | data, tuning, seasons, noise, geometry helpers, and the one three.js import |
-| `src/plan.js` | 814 | the pure planner: no three, so Node can import it and `tools/plan-test.mjs` can ask it |
+| `src/plan.js` | 831 | the pure planner: no three, so Node can import it and `tools/plan-test.mjs` can ask it |
 | `src/graphics.js` | 1,079 | the settings ladder, the renderer, the dome, and **`world`** |
 | `src/materials.js` | 1,253 | the glb loader, the material jar, the palette adapter, the shader injectors |
-| `src/course.js` | 703 | the track samples, the frame, and `groundYAt()` |
-| `src/surfaces.js` | 1,452 | the four surfaces, the water, and the half-way |
-| `src/scenery.js` | 1,529 | the tower, the lamps, `scatter()`, the farms, the backdrop |
-| `src/post.js` | 1,739 | the settings panel, the chain, the probes, the readback |
-| `src/race.js` | 1,348 | the snail, the field, the sim, the crates, the save |
-| `src/stage.js` | 687 | the stable and its rebuild |
-| `src/app.js` | 2,056 | the camera, the frame loop, the perf panel, every screen, the boot |
+| `src/course.js` | 716 | the track samples, the frame, and `groundYAt()` |
+| `src/surfaces.js` | 1,463 | the four surfaces, the water, and the half-way |
+| `src/scenery.js` | 1,533 | the tower, the lamps, `scatter()`, the farms, the backdrop |
+| `src/post.js` | 1,774 | the settings panel, the chain, the probes, the readback |
+| `src/race.js` | 1,397 | the snail, the field, the sim, the crates, the save |
+| `src/stage.js` | 696 | the stable and its rebuild |
+| `src/app.js` | 1,965 | the camera, the frame loop, the perf panel, every screen, the boot |
 
 **The imports, and they are the whole dependency story:**
 
@@ -1053,7 +1053,7 @@ was.
 
     tools/check.sh          # parses all eleven modules and reads the graph
     node tools/plan-test.mjs # the planner, in Node, with no browser
-    tools/e2e/run.sh         # 25 Playwright tests, about a minute, on the pinned tier
+    tools/e2e/run.sh         # 26 Playwright tests, about a minute, on a port of its own
 
 `tools/check.sh` is the gate that knows about the split: it parses each module
 under an `.mjs` name and then runs `tools/wired.mjs` over the whole graph, which
@@ -1062,12 +1062,31 @@ reads bare that another module declares, **a field of `world` that is read and
 written by nobody**, and **a top-level read of a `const` declared below it**. The
 last two are the ones the split invented, and both of them are failures with no
 symptom: an empty default reads as a quiet answer, and a temporal dead zone reads
-as a crash on the module's first line.
+as a crash on the module's first line. **The gate reads its root off its own
+location**, and it is not a detail: `check.sh` hands it a relative file list, so a
+hardcoded path made it validate whichever checkout the author happened to be
+sitting in while a clone with a genuinely broken import reported `11 modules` and
+exited zero.
 
-`tools/e2e/run.sh` pins the bottom preset at render scale 1× so the direct path is
-the one under test, and `tools/e2e/capture.spec.js` is the one spec that must never
-run again — it rewrites both committed artifacts and it may only ever be taken from
-the pre-split game.
+**`tools/e2e/run.sh` pins the bottom preset at render scale 1× so the direct path
+is the one under test, and it asks the OS for a port rather than naming one.** A
+gate that reuses whatever holds a fixed port tests whatever is holding it, which
+is the one arrangement in which a green run means nothing: a checkout that could
+not boot reported twenty-six passes against a healthy server left over from the
+last one. `PORT=9000` still asks for a specific port.
+
+**The pin is a literal in `tools/e2e/tier.js` and a spec checks it against the
+game.** It is not derived from `src/graphics.js` because there is nothing to
+derive it from — each row carries its own ladder and `gfxRowValue()` picks the
+cell, so parsing the source would be reimplementing that function in a regex. A
+literal rots quietly, because `gfxLoad()` drops a key it does not recognise and
+keeps the game's own default; so `smoke.spec.js` boots at exactly that object and
+asks `gfxAgreed()` whether it is still preset 1, which is the code that writes
+presets agreeing out loud.
+
+`tools/e2e/capture.spec.js` is the one spec that must never run again — it
+rewrites both committed artifacts and it may only ever be taken from the
+pre-split game.
 
 Then serve it and watch the console. The things that actually break, in order of
 likelihood: an `InstancedMesh` whose count is exhausted so the last pieces

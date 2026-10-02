@@ -22,9 +22,22 @@
  *
  * ================================================================== */
 import {
-  THREE, TAU, clamp, lerp, smoothstep, easeInOut, vnoise, hills,
-  RUN, CLIMB, PUSH, LANE_HW, CRATE_S, CRATE_BACK, CRATE_HW, CRATE_FLARE,
-  POOL_BERM, STEP,
+  THREE,
+  TAU,
+  clamp,
+  lerp,
+  smoothstep,
+  easeInOut,
+  vnoise,
+  hills,
+  RUN,
+  PUSH,
+  LANE_HW,
+  CRATE_BACK,
+  CRATE_HW,
+  CRATE_FLARE,
+  POOL_BERM,
+  STEP,
 } from './core.js';
 import { gfxEdge, gfxGroundFloor } from './graphics.js';
 import { planTrack, MID_CROWN } from './plan.js';

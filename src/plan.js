@@ -38,9 +38,26 @@
  * planner is a cycle wearing a module boundary.
  * ================================================================== */
 import {
-  CAT_BY_ID, ELEMENTS, TAU, makeRng, clamp, lerp, smoothstep, easeInOut, hills,
-  LEVEL_Y, POOL_BANK, POOL_SPREAD, POOL_BERM, LANE_HW, CRATE_X, CRATE_LANE,
-  RUN, CLIMB, FLY, WALK, PUSH,
+  CAT_BY_ID,
+  ELEMENTS,
+  TAU,
+  makeRng,
+  clamp,
+  lerp,
+  smoothstep,
+  easeInOut,
+  hills,
+  LEVEL_Y,
+  POOL_BANK,
+  POOL_SPREAD,
+  LANE_HW,
+  CRATE_X,
+  CRATE_LANE,
+  RUN,
+  CLIMB,
+  FLY,
+  WALK,
+  PUSH,
 } from './core.js';
 
 /* ================================================================== *

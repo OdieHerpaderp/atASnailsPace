@@ -42,8 +42,12 @@ import { COUNTY as C } from '../meshes/palette.js';
 import { props, propMat, propMatFor, matFor, partMat, mat, colour, FLOWER_COLORS, windMark } from './materials.js';
 import { trackAt, newFrame, bankRadius, groundYAt } from './course.js';
 import {
-  laneVertex, roadRows, groundHalfAt, groundDrawnAt, lineMarks,
-  midwayOf, MID_CLEAR, TOWER_FOOT,
+  laneVertex,
+  groundHalfAt,
+  groundDrawnAt,
+  midwayOf,
+  MID_CLEAR,
+  TOWER_FOOT,
 } from './surfaces.js';/* ------------------------------------------------------------------ *
  * Scenery, scattered along the lane
  * ------------------------------------------------------------------ */

@@ -4,6 +4,7 @@
 #   tools/e2e/run.sh                 every spec
 #   tools/e2e/run.sh golden          the specs whose names match
 #   CAPTURE=1 tools/e2e/run.sh        and the capture, which rewrites the baseline
+#   PORT=9000 tools/e2e/run.sh        and a specific port rather than a free one
 #   tools/e2e/run.sh -c tools/playwright.config.js smoke.spec.js
 #
 # **The repo has no package manager and no dependencies, and the runner is not
@@ -67,6 +68,36 @@ if [ -z "$TREE" ]; then
 fi
 
 echo "run.sh: chromium $REV, playwright $V  ($TREE)"
+
+# **A port of this run's own, and the reason is that two suites cannot share
+#  one.** The config used to name 8713 and reuse whatever held it, which is the
+#  one arrangement in which a green run means nothing: a checkout whose
+#  `src/app.js` throws on its first line, with no `meshes/` at all, reported
+#  twenty-five passes against a healthy server somebody else had left running.
+#  `reuseExistingServer` is off now, so a port in use is a hard error - and
+#  giving each run its own is what keeps that error rare instead of constant.
+#  `PORT=9000 tools/e2e/run.sh` still asks for a specific one, which is what a
+#  machine with 8713 held by the dev server wants.
+if [ -z "${PORT:-}" ]; then
+  # **A port the OS says is free, asked for and not assumed.** `listen(0)` binds
+  # an ephemeral port and hands it back, which is the only authority on what is
+  # free on a machine with a dev server, a browser and whatever else already
+  # running - and the ephemeral range is disjoint from 8713-8799, so a test run
+  # can never land on the port `tools/serve.py` documents. There is a small race
+  # between closing and the suite binding it, which is why the config does not
+  # reuse a server: the run fails loudly on a taken port rather than quietly
+  # testing somebody else's county.
+  PORT="$(node -e '
+    const s = require("net").createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => process.stdout.write(String(p)));
+    });
+  ')"
+fi
+echo "run.sh: port $PORT"
+
 export NODE_PATH="$TREE"
+export PORT
 if [ "${CAPTURE:-}" ]; then export CAPTURE=1; fi
 exec node "$TREE/playwright/cli.js" test --config "$(dirname "$0")/../playwright.config.js" "$@"

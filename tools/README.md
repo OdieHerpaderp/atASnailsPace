@@ -18,8 +18,8 @@ Nothing in here is part of the game: the game is `snail-race.html`,
 | `plan-test.mjs` | the track planner imported and run in node, for checking a course or an obstacle |
 | `check.sh` | the static gate: every module parses, and `wired.mjs` reads the whole graph |
 | `wired.mjs` | the graph itself, in four directions - see *Reading the graph* |
-| `e2e/` | the browser suite: 25 Playwright tests against a golden baseline captured from the pre-split game |
-| `playwright.config.js` | the runner: SwiftShader, a 480×300 window, and the bottom preset pinned at render scale 1× |
+| `e2e/` | the browser suite: 26 Playwright tests against a golden baseline captured from the pre-split game, and the one capture both of its specs share |
+| `playwright.config.js` | the runner: SwiftShader, a 480×300 window, the bottom preset pinned at render scale 1×, and no server reuse |
 | `backup/` | models as they were before they were changed, kept in case a model has to be compared with what it was |
 
 ## The routes the server adds
@@ -137,6 +137,29 @@ row, the reflection probes on every course, and the rebuild a density row asks
 for — none of which any committed artifact measures. The fourth is the temporal
 dead zone, which is a crash on a module's first line and which is only a crash
 until something moves the two lines apart.
+
+**Both the gate and the suite read the tree they are checking, off their own
+location.** `wired.mjs` resolved a hardcoded `/home/odie/…` once, which made it
+validate *that* checkout from wherever it was run — a clone with a genuinely
+broken import came back `11 modules` and exited zero. And the suite used to reuse
+whatever held 8713, which is the same failure one layer out: a checkout that could
+not boot reported twenty-six passes against a server somebody else had left
+running. `run.sh` now asks the OS for a free port and nothing is reused, so a
+port in use is an error naming the port.
+
+## Reading the server
+
+    python3 tools/serve.py        # http://127.0.0.1:8713
+    PORT=9000 python3 tools/serve.py
+
+The dev server is loopback-only and serves the tree plus a few builder routes. Two
+things it deliberately refuses: a request target that is not origin-form or whose
+real path leaves the root (`normpath` keeps a leading `..`, and `lstrip("/")` only
+strips the slash, so a relative target walked out and served `/etc/passwd`), and a
+`POST /__save` for anything that is not a `.glb` or a `.png` — that route confined
+the *folder* and not the file, so `?name=palette.js` replaced a tracked source file
+with whatever the body was. It writes through a `.part` and `os.replace`s, so a
+short body leaves the old file rather than a truncated one.
 
 ## Reading the comparison
 

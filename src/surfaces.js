@@ -37,15 +37,26 @@
  * hole in the start line is a coin toss.
  * ================================================================== */
 import {
-  THREE, clamp, lerp, smoothstep, vnoise, fbm, hills,
-  RUN, CLIMB, FLY, WALK, PUSH, STEP, POOL_BERM, CRATE_WALL, CRATE_GAP, START_S,
+  THREE,
+  clamp,
+  lerp,
+  smoothstep,
+  vnoise,
+  fbm,
+  RUN,
+  CLIMB,
+  FLY,
+  WALK,
+  PUSH,
+  STEP,
+  POOL_BERM,
+  CRATE_WALL,
+  CRATE_GAP,
+  START_S,
 } from './core.js';
-import { world, gfxGroundFloor, gfxWideRows, grassCount } from './graphics.js';
-import {
-  trackAt, newFrame, bankRadius, vergeBand, wallProfile,
-  groundYAt, groundEdge, gfxBendReach, NEST,
-} from './course.js';
-import { mat, poolWaterMat, triplanarSets, colour, PAL } from './materials.js';
+import { world, gfxWideRows } from './graphics.js';
+import { trackAt, newFrame, bankRadius, vergeBand, groundYAt, groundEdge } from './course.js';
+import { mat, poolWaterMat, PAL } from './materials.js';
 
 const _fr = newFrame();
 const _c = new THREE.Color();

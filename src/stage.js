@@ -38,12 +38,21 @@ import {
 } from './core.js';
 import { world, makeEnv, gfxPropDensity, gfxGrassDensity, WHITE } from './graphics.js';
 import {
-  props, mat, matFor, partMat, detailOf, poolWaterMat, colour, mapTex, triplanarDetail, windMark, PAL,
+  props,
+  mat,
+  matFor,
+  partMat,
+  detailOf,
+  poolWaterMat,
+  mapTex,
+  triplanarDetail,
+  windMark,
+  PAL,
 } from './materials.js';
 import {
   addGlows, applyShadows, forgetCastApplied, clearStageDirty, syncProbes, dropProbe,
 } from './post.js';
-import { makeBackdrop, scatter } from './scenery.js';
+import { makeBackdrop } from './scenery.js';
 import { makeSnail, state, env, SNAIL_SCALE } from './race.js';
 
 /* ================================================================== *

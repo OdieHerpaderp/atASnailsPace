@@ -17,6 +17,17 @@
 // set here, because the tier is a *fact about the build* rather than about the
 // browser: it has to be in `localStorage` before the game's first line runs if
 // it is to be in force before the first frame is drawn.
+//
+// **The port comes from the environment, and every run gets its own.** It is
+// `PORT` or 8713, and `run.sh` passes a different one per run - a port is a
+// finite thing, two suites cannot both listen on it, and `reuseExistingServer`
+// meant the second one quietly tested the first one's county. That is the worst
+// way a gate can fail: a checkout whose `src/app.js` throws on its first line,
+// with no `meshes/` at all, reported twenty-five passes because a healthy server
+// was already holding the port. Nothing is reused now. If something *is* already
+// on the port, the run fails and says so, which is a report.
+const PORT = process.env.PORT || '8713';
+
 import { defineConfig } from 'playwright/test';
 
 export default defineConfig({
@@ -39,7 +50,7 @@ export default defineConfig({
   forbidOnly: true,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:8713',
+    baseURL: `http://127.0.0.1:${PORT}`,
     browserName: 'chromium',
     viewport: { width: 480, height: 300 },
     deviceScaleFactor: 1,
@@ -57,10 +68,15 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'python3 serve.py',
-    url: 'http://127.0.0.1:8713/snail-race.html',
+    command: `python3 serve.py`, // PORT is inherited from this process's env
+    url: `http://127.0.0.1:${PORT}/snail-race.html`,
     cwd: '.',
-    reuseExistingServer: true,
+    // **Not reused, and the failure mode is the point.** With this true the
+    // suite tested whatever process happened to hold the port, so a checkout
+    // that could not boot at all still went green against somebody else's
+    // county. Off, a port already in use is a hard error naming the port, and
+    // the fix is one number.
+    reuseExistingServer: false,
     stdout: 'ignore',
   },
 });

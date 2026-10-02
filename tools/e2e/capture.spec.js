@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from 'playwright/test';
 import { GFX, GFX_KEY, SAVE_KEY, COURSES } from './tier.js';
-import { BOOT_MS } from './fixtures.js';
+import { BOOT_MS, capturePlan, captureSim, CAPTURE_SPEC } from './fixtures.js';
 
 // `__dirname` and not `import.meta.url`, and that is a fact about the runner: a
 // `.js` spec is compiled to a CommonJS module before it is evaluated, so
@@ -50,55 +50,18 @@ test('capture the fixture save and the golden baseline', async ({ page }) => {
   };
 
   // --- the plan and the track, per course ---
+  //
+  // **`capturePlan` and `captureSim` are `fixtures.js`'s, not this file's**, and
+  // that is the whole of why a baseline can be trusted for as long as it exists.
+  // The two used to be written out here and in `golden.spec.js` independently -
+  // same `r4`, same every-eighth-sample lane, same six distances off the centre
+  // line - and nothing checked that the writer and the reader of `baseline.json`
+  // were describing the same fields. A field added to one is a field the other
+  // silently stops comparing; a rounding changed in one is a diff with no cause.
+  // **A capture is a contract with the file it produced**, and a contract with a
+  // committed file needs one definition.
   for (const id of COURSES) {
-    const row = await page.evaluate((catId) => {
-      const S = window.__snail;
-      // **`x || 0` on the way out**, and that is not tidiness: `(-0.00004).toFixed(4)`
-      // is `-0.0000`, and `JSON.stringify(-0)` is `0`, so a baseline written to
-      // disk can never come back as the negative zero the page still holds. One
-      // lane sample of five courses would fail on it, every run, forever.
-      const r4 = (v) => (v == null || !isFinite(v) ? null : (+v.toFixed(4) || 0));
-      const plan = S.plan(catId);
-      const tr = S.track(catId);
-      // the lane, every eighth sample: often enough to place a change and short
-      // enough to read when two files disagree
-      const lane = [];
-      for (let i = 0; i <= tr.n; i += 8) {
-        const q = tr.sm[i];
-        lane.push([r4(q.s), r4(q.y), r4(q.ground), r4(q.w), r4(q.water), r4(q.floor),
-          r4(q.basin), r4(q.crown), r4(q.grade), r4(q.bend), q.cond, q.rock ? 1 : 0]);
-      }
-      // the terrain either side of the lane, off `groundYAt` at six distances
-      // out on nine samples along it. `groundYAt` is a *function of the frame it
-      // is handed*, so a frame read off the wrong row is a hillside in the wrong
-      // place and nothing else in the frame would show it.
-      const fr = S.newFrame();
-      const ground = [];
-      const stride = Math.max(1, Math.floor(tr.n / 8));
-      for (let i = 0; i <= tr.n; i += stride) {
-        S.trackAt(tr, tr.sm[i].s, fr);
-        ground.push([r4(tr.sm[i].s), r4(fr.y), r4(fr.ground),
-          ...[-40, -18, -7, 7, 18, 40].map((d) => r4(S.groundYAt(fr, d)))]);
-      }
-      return {
-        plan: {
-          length: r4(plan.length), midX: r4(plan.midX), tally: plan.tally,
-          pts: plan.pts.map((p) => [r4(p.x), r4(p.y), r4(p.z)]),
-          meta: plan.meta.map((m) => [m.cond, r4(m.ground), r4(m.w), r4(m.water),
-            r4(m.floor), r4(m.basin), r4(m.crown), m.rock ? 1 : 0]),
-          leaps: plan.leaps.map((l) => [l.kind, r4(l.x0), r4(l.x1), r4(l.farX), r4(l.lipY),
-            r4(l.laneY), r4(l.waterY), r4(l.floorY), r4(l.vy), l.wet ? 1 : 0, l.crate ? 1 : 0]),
-        },
-        track: {
-          catId: tr.catId, n: tr.n, length: r4(tr.length), finish: r4(tr.finish),
-          drain: r4(tr.drain),
-          leaps: tr.leaps.map((l) => [l.kind, r4(l.s0), r4(l.s1), r4(l.land), r4(l.lipY),
-            r4(l.laneY), r4(l.waterY), r4(l.floorY), r4(l.vy), l.wet ? 1 : 0]),
-          lane,
-          ground,
-        },
-      };
-    }, id);
+    const row = await page.evaluate(capturePlan, CAPTURE_SPEC(id));
     baseline.courses[id] = row;
     console.log(`  ${id.padEnd(9)} plan ${row.plan.length} m  track ${row.track.length} m  ` +
       `n=${row.track.n} finish=${row.track.finish}  ${JSON.stringify(row.plan.tally)}`);
@@ -116,23 +79,7 @@ test('capture the fixture save and the golden baseline', async ({ page }) => {
   for (const id of COURSES) {
     await page.reload({ waitUntil: 'load' });
     await page.waitForFunction(() => !!window.__snail, null, { timeout: BOOT_MS });
-    const res = await page.evaluate((catId) => {
-      const S = window.__snail;
-      S.surge(false);
-      S.start(catId);
-      const r = S.sim(300, 0.04);
-      S.surge(false);
-      return {
-        place: S.race.player.place, points: S.race.player.points,
-        time: +r.time.toFixed(6), length: +r.length.toFixed(4), hour: +r.hour.toFixed(6),
-        field: r.field.map((f) => [f.name, f.place, f.points, +f.time.toFixed(6), f.rating]),
-        // read while the course is still built: the register is emptied by
-        // `dropCourse()`, and a `standing()` after the race is an empty report
-        // that agrees with every other empty report
-        standing: S.standing(),
-        mills: S.mills(),
-      };
-    }, id);
+    const res = await page.evaluate(captureSim, id);
     baseline.courses[id].sim = res;
     console.log(`  sim ${id.padEnd(9)} ${res.place} of 8  ${res.time.toFixed(3)} s  ` +
       res.field.map((f) => `${f[0]}:${f[1]}`).join(' '));

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from 'playwright/test';
 import { boot, noErrors } from './fixtures.js';
+import { GFX } from './tier.js';
 
 const BASELINE = JSON.parse(fs.readFileSync(path.join(__dirname, 'baseline.json'), 'utf8'));
 
@@ -25,7 +26,25 @@ test('the county boots, the boot screen goes, and the surface is the one the bas
   // definition reaches every module, so a module that failed to export one of
   // them throws while the object is being built - which is after every module
   // body has run and before a frame has been drawn.
-  expect(await page.evaluate(() => Object.keys(window.__snail).sort())).toEqual(BASELINE.surface);
+  //
+  // **A superset check and not equality**, because `baseline.json` is the
+  // pre-split capture and it may never be regenerated: a name added to the
+  // surface since then would otherwise be indistinguishable from a baseline
+  // that has rotted, and the fix - recapturing it - is the one thing that spec
+  // must not do. So the assertion is the two halves separately. **Every name the
+  // baseline recorded must still be there**, which is the half that catches the
+  // failure this exists for - a module that stopped exporting something and took
+  // a key with it. And **the additions are named here**, so a surface that grew
+  // for a reason nobody wrote down is a failure rather than a longer list.
+  //
+  // `STEP` is the lane's sample spacing, added so the lip test below can convert
+  // an arc distance into a lane index instead of carrying its own 0.75.
+  const ADDED_SINCE = ['STEP'];
+  const got = await page.evaluate(() => Object.keys(window.__snail).sort());
+  const missing = BASELINE.surface.filter((k) => !got.includes(k));
+  const added = got.filter((k) => !BASELINE.surface.includes(k));
+  expect(missing, 'names the baseline recorded and the surface no longer has').toEqual([]);
+  expect(added, 'names the surface has that the baseline did not').toEqual(ADDED_SINCE);
 });
 
 test('the stable is what the first frame draws, and not the county', async ({ page }) => {
@@ -82,6 +101,33 @@ test('the pinned tier is the direct path: no chain, no samples, no target of the
   expect(info.rt, 'the chain\'s own buffer').toBeNull();
   expect(info.canvas, 'the canvas is native, and the county is a share of it')
     .toEqual(BASELINE.info.canvas);
+  noErrors(errors);
+});
+
+test('the pinned tier is still the bottom preset the game would write', async ({ page }) => {
+  const { errors } = await boot(page);
+  // **The pin's own claim, checked by the game rather than by this suite.**
+  // `tier.js` holds seventeen numbers that decide what every other spec is
+  // testing, and it cannot derive them: each row carries its own ladder and
+  // `gfxRowValue()` picks the cell, so anything that parsed the source to work
+  // them out would be reimplementing that function. A literal is the honest
+  // shape - and a literal rots quietly, because `gfxLoad()` drops a key it does
+  // not recognise and keeps the game's own default, so a row added to
+  // `GFX_ROWS` tomorrow leaves every spec still quoting a tier the game no
+  // longer agrees is the bottom one.
+  //
+  // `gfxAgreed()` is the game's own answer to "are these numbers exactly
+  // preset N": every row it owns matches that level and all six switches match
+  // `FX_PRESET[N-1]`, or it is `0` and nothing else is true. So preset 1 here
+  // means the seventeen numbers in `tier.js` are the bottom preset, said out
+  // loud by the code that writes presets.
+  expect(await page.evaluate(() => window.__snail.gfx.preset), 'gfxAgreed() on the pinned tier')
+    .toBe(1);
+  // **And the render row is 1x, which is the one the preset does not own** - so
+  // it is the single number here the ladder cannot give back, and the reason
+  // `gfxLevelRow()` reads a row the preset writes by identity.
+  expect(await page.evaluate(() => window.__snail.gfx.render), 'the pinned render step')
+    .toBe(GFX.render);
   noErrors(errors);
 });
 
