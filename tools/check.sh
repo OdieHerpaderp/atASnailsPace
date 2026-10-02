@@ -35,7 +35,11 @@ trap 'rm -rf "$TMP"' EXIT
 if [ "$#" -gt 0 ]; then
   FILES=("$@")
 else
-  mapfile -t FILES < <(ls -1 "$ROOT"/src/*.js "$ROOT"/snail-race.js 2>/dev/null)
+  # **`src/*.js` and nothing else**, and the glob is the entry now: `app.js` is
+  # the eleventh module and lives in the folder with the other ten. There was a
+  # `snail-race.js` on the end of this list for eight steps, and the day it moved
+  # into `src/` the list did not need editing - which is the shape of the fix.
+  mapfile -t FILES < <(ls -1 "$ROOT"/src/*.js)
 fi
 
 fail=0
@@ -54,7 +58,7 @@ done
 # the graph, and only on a whole run - one file on its own is not a graph
 if [ "$#" -eq 0 ]; then
   if (cd "$ROOT" && node "$HERE/wired.mjs" \
-        src/*.js meshes/palette.js meshes/maps.js snail-race.js); then
+        src/*.js meshes/palette.js meshes/maps.js); then
     printf '  wired   %d modules\n' "$(ls -1 "$ROOT"/src/*.js | wc -l)"
   else
     fail=1

@@ -1,4 +1,21 @@
-// snail-race.js - the whole game. Split out of snail-race.html.
+/* ================================================================== *
+ * app.js
+ *
+ * The boot, the camera, the frame loop, the perf panel and every screen: the
+ * lobby's shell, the season picker, the shop, the race, the results, the
+ * inspector, the course card and the options modal.
+ *
+ * **It is the last module in the graph and the only one nothing imports**, and
+ * that is what keeps the boot one ordered block with the same calls in the same
+ * order it has always had. Everything it uses arrives by importing, so every
+ * module body has run by the time this one does - and that ordering is load
+ * bearing rather than tidy: `world.stage`, `world.scene` and `world.camera` are all
+ * read on the first frame, and the first frame happens here.
+ *
+ * It fills five fields of `world` - camera, modeOf, seasonOf, restage, applyLook
+ * and the seven the race asks for - and it is the only file that can fill them,
+ * because it is the one that imports the modules whose state they describe.
+ * ================================================================== */
 /* ================================================================== *
  * Snail Grand Prix
  * A racing game in a walled valley: rock walls to climb, ponds to swim
@@ -8,11 +25,11 @@
 // The county's palette, and the three builders in meshes/ that paint from the
 // same jar. It is a plain module and imports nothing, so it loads before this
 // one and costs no round trip of its own.
-import { CONVERTED, MAPS, SURFACE, allMaps, allParts, mapSlots, mapsFor, slotFor } from './meshes/maps.js';
+import { CONVERTED, MAPS, SURFACE, allMaps, allParts, mapSlots, mapsFor, slotFor } from '../meshes/maps.js';
 // The planner is in `src/plan.js` and the courses it plans are `CATS` out of
 // `core.js`, so the two things a course needs before anything can be drawn are
 // one import apart and not eleven thousand lines.
-import { planTrack, MID_CROWN } from './src/plan.js';
+import { planTrack, MID_CROWN } from './plan.js';
 // The snail, the field, the race, the save, and `state` with them - which is the
 // one thing in the county that every other module reads and none of them owns.
 import {
@@ -26,7 +43,7 @@ import {
   makeSnail, SNAIL_SCALE, shellFor, NAMES, HUES, STYLES, rndColor, BODY_Y,
   poolByIds, seasonField, forgetSeasonFields, seasonRivals, pickField,
   drawSeasonField, lastSeasonField, crateTopAt, crateMeshY, laneYAt,
-} from './src/race.js';
+} from './race.js';
 
 // The stable: the lawn, the plinth, the pool, and the rebuild a density row
 // asks for. `stage` is a `let` this file cannot reassign, so the boot asks for one
@@ -34,7 +51,7 @@ import {
 // stands on is `world.stageScene` and the two are the same object.
 import {
   stageEnv, stageBackdrop, stageOf, buildStable, requestRestage,
-} from './src/stage.js';
+} from './stage.js';
 
 // The things standing next to the lane: the half-way tower, the lamps, the
 // scatter, the farms, and the backdrop both screens share. The register is
@@ -44,7 +61,7 @@ import {
   clearRegister, standingReport, spinFans, fans, mills,
   scatter, propName, partList, populate, populateFarms, farmstead,
   standIt, reserveIt, clearOf, FARM_STEP, FARM_FOOT,
-} from './src/scenery.js';
+} from './scenery.js';
 
 // The lane, the frames and the ground either side of it. `NEST` rides along
 // because the surfaces' `groundColumns()` is reading the same twelve metres
@@ -53,7 +70,7 @@ import {
   buildTrack, trackAt, newFrame, bankRadius, vergeBand, wallProfile,
   groundYAt, groundEdge, farCountry, lanePoint,
   BEND_BASIS, gfxBendReach, NEST, NEST_FRACTION, EDGE_THIRD,
-} from './src/course.js';
+} from './course.js';
 
 // The four surfaces, the rows they are laid on, and the half-way mark. The
 // ribbon, the skirt, the water and the ground all read the lane through
@@ -63,7 +80,7 @@ import {
   buildRoad, buildSkirt, buildWater, buildGround,
   groundColumns, groundHalfAt, groundDrawnAt, lineMarks, midwayOf,
   MID_CLEAR, TOWER_FOOT, MID_FLAT, MID_PERCH, WATER_TILE, _fr,
-} from './src/surfaces.js';
+} from './surfaces.js';
 
 // The post chain, the settings panel, the readback, the glows and the probes.
 // It reads its scenes through `world` and builds none of them - the course and
@@ -77,7 +94,7 @@ import {
   dropProbe, dropReflections, queueProbes, pumpProbes, syncProbes,
   STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, forgetCastApplied, applyShadows,
   renderOptions, optionsOpen, openOptions, closeOptions,
-} from './src/post.js';
+} from './post.js';
 
 // The jar, the loader and the four injections. One import for all of them,
 // because the county has one palette and one set of shaders and a file that
@@ -88,7 +105,7 @@ import {
   triplanarDetail, triplanarSets, rippleU,
   colour, PAL, GREEN, STONE, FLOWER_COLORS, BARK, MUSHROOM_RED, MUSHROOM_BROWN,
   gfxU, gfxSurfaceTargets, gtaoWind, windMark, waterFresnel,
-} from './src/materials.js';
+} from './materials.js';
 
 // The ladder, the renderer, the dome and the hour. The renderer appends its
 // canvas here rather than in that module's body, because a module body runs
@@ -107,7 +124,7 @@ import {
   envPmrem, makeEnv, refreshEnvironment,
   LAMP_LIGHTS, LAMP_SPACING, LAMP_COLOUR,
   raceClock, raceHour, clockText, TOD, WHITE, _todSky,
-} from './src/graphics.js';
+} from './graphics.js';
 document.body.appendChild(renderer.domElement);
 
 
@@ -127,7 +144,7 @@ import {
   seasonScale, seasonPicks, seasonFinaleId, seasonRoster, effFor, effTraits,
   trackSeed, makeRng, rand, vnoise, fbm, hills,
   bake, M, colored,
-} from './src/core.js';
+} from './core.js';
 
 /** How many races the season runs, and the one function of the season ladder
  *  that reads `state` - so it did not go with the ladder. All three of its

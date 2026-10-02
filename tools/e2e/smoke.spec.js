@@ -179,6 +179,39 @@ test('the registry is filled: pools probed, props stamped, and a density row reb
   noErrors(errors);
 });
 
+test('the stable is built and dropped four times and the geometry count comes back', async ({ page }) => {
+  const { errors } = await boot(page);
+  // **The leak gate for the stable, and it is a different leak from the course's.**
+  // `dropStage()` gives back the lawn's merged geometry, the tufts' instanced
+  // meshes, the snail, the pool's material and the fountain's - and it is the
+  // *material* and the *probe* that a course's own `dropCourse()` has less of, so
+  // one course through is not this test. The rebuild goes through `restage()`,
+  // which drops before it builds, so the second one is the first taken down.
+  const settled = async () => page.evaluate(async () => {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return window.__snail.info().geometries;
+  });
+  // **One row value for all four rebuilds, and that is the whole of what this
+  // test has to get right.** `buildStage()` merges per piece rather than per
+  // count, so a *different* density is a different number of geometries and the
+  // first version of this compared a hub at `props: 1` against a hub at
+  // `props: 2` and called the three a leak. The count is taken after the first
+  // rebuild and again after the fourth, which is the only comparison where the
+  // only thing that has happened three times in between is a rebuild.
+  const rebuild = async () => {
+    await page.evaluate(() => window.__snail.setGfx('props', 2));
+    // 150 ms of debounce plus the build itself, and the count is read after two
+    // frames rather than after the timeout: a count read mid-rebuild is a count
+    // of a stable that is halfway down
+    await page.waitForTimeout(700);
+    return settled();
+  };
+  const one = await rebuild();
+  for (let i = 0; i < 3; i++) await rebuild();
+  expect(await settled(), 'geometries after four rebuilds of the stable').toBe(one);
+  noErrors(errors);
+});
+
 test('the settings are the machine\'s and a preset survives a reload', async ({ context }) => {
   // Two pages in **one context**, and that is the whole of how the reload is
   // honest. An init script re-runs on every navigation, so a page armed with the

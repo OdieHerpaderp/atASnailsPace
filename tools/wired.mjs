@@ -1,8 +1,8 @@
-// /tmp/kilo/split/wired.mjs - is every module wired to every other one?
+// wired.mjs - is every module wired to every other one?
 //
-//   node wired.mjs src/*.js meshes/palette.js meshes/maps.js snail-race.js
+//   node tools/wired.mjs src/*.js meshes/palette.js meshes/maps.js
 //
-// Two directions, and the second is the one that matters:
+// Four directions, and none of them is the interesting one:
 //
 //  - **a name a file imports that another module does not declare, or declares
 //    but does not export** - a `SyntaxError` or a `ReferenceError` at module
@@ -11,7 +11,12 @@
 //    import.** `node --check` parses each file on its own and cannot see this,
 //    and it is the one that actually happened: `_todSky` is the hour of the
 //    day's scratch colour, it moved into `graphics.js` in the step that took the
-//    renderer out, and the frame loop went on reading it.
+//    renderer out, and the frame loop went on reading it;
+//  - **a field of `world` that is read and written by nobody**, which is a
+//    failure with no symptom at all - a default is a quiet answer - and there
+//    were four of them, one per step, for four steps;
+//  - **a top-level read of a `const` declared below it**, which is the temporal
+//    dead zone and is a crash on the first line of the module.
 //
 // **After a declaration moves out, every bare read of it has to have become an
 // import.** A word is counted as a read only in a statement position - not after
