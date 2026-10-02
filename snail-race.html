@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Snail Grand Prix</title>
+<link rel="stylesheet" href="snail-race.css" />
+<!-- three's own addons (the glTF loader) import the bare name 'three', so it
+     has to be mapped to the same file the game loads, or the two end up as
+     separate copies of the library and nothing they build fits together.
+     `three/addons/` is the same pin: the post-processing passes the options
+     menu brings in (bloom, GTAO) are three's own files and they import 'three'
+     as well, so they are mapped in this one import map at this one version. -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+
+<!-- ============ STABLE ============ -->
+<section id="stable" class="screen on">
+  <header id="brand">
+    <div class="logo">Snail Grand Prix</div>
+    <div class="tag" id="seasonTag">season 1 · four races, then the marathon</div>
+    <div id="pips"></div>
+  </header>
+
+  <div class="panel" id="snailCard">
+    <div class="row">
+      <input id="snailName" maxlength="14" spellcheck="false" value="Wilma" />
+      <div class="gold"><span class="coin"></span><b class="num" id="goldOut">50</b></div>
+    </div>
+    <div class="picker">
+      <label class="cap">body</label>
+      <input type="color" id="bodyColor" value="#e0b183" />
+      <label class="cap" style="margin-left:6px">shell</label>
+      <input type="color" id="shellColor" value="#c8a05a" />
+      <div class="styles" id="styles">
+        <button data-s="bands" title="banded"><i class="s-bands"></i></button>
+        <button data-s="swirl" title="swirled"><i class="s-swirl"></i></button>
+        <button data-s="spots" title="spotted"><i class="s-spots"></i></button>
+      </div>
+    </div>
+    <div id="stats"></div>
+    <p class="note">A fruit costs <b>10g</b> and lifts one trait by 1, up to 24. Stamina sets how long the bar lasts. Gold is what you finish on: every race pays the points you scored in it.</p>
+    <button class="big danger" id="wipeSave" title="throw the saved game away and start a new snail">Delete save</button>
+  </div>
+
+  <div class="panel" id="fieldCard">
+    <div class="row">
+      <h2 id="tierName">Sunday Cup</h2>
+      <span class="cap" id="tierRating">you · 10</span>
+    </div>
+    <div class="seasband" id="tierNote">0–750 rating</div>
+    <div class="tierbar"></div>
+    <div id="field"></div>
+    <button class="quiet" id="pickSeason">choose season</button>
+    <p class="note" id="fieldNote">Seven rivals, shown before you race a yard of it.</p>
+  </div>
+
+  <!-- the graphics settings, which live in the bottom-left corner where nothing
+       else is: the field card above is placed by script and grows downwards, so
+       the bar is pinned and the card is capped short of it (see #fieldCard) -->
+  <div class="optbar" id="optbar">
+    <button class="big ghost" id="openOptions" title="graphics, quality and effects">Options</button>
+  </div>
+
+  <div class="panel" id="raceList">
+    <h2>Season card</h2>
+    <div id="cards"></div>
+    <div class="btns">
+      <button class="big ghost" id="freeLook" title="walk the stable and look at it">Look about</button>
+      <button class="big ghost" id="newSeason" title="start the season over">New</button>
+      <button class="big" id="startRace">To the start</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LOOKING ABOUT THE STABLE ============ -->
+<div id="stroll">
+  <div class="ibar">
+    <span class="inm">the stable</span>
+    <span class="ihelp">WASD to walk · hold the mouse to look · Q and E for up and down · shift to hurry · esc to go back</span>
+    <button class="ibtn" id="strollBack">back to the stable</button>
+  </div>
+</div>
+
+<!-- ============ RACE HUD ============ -->
+<section id="hud" class="screen">
+  <div class="box" id="hudTL">
+    <div class="rname" id="raceName">—</div>
+    <div class="rsub" id="raceSub">—</div>
+  </div>
+  <div class="box" id="hudTR">
+    <div class="cap">order</div>
+    <div id="standings"></div>
+  </div>
+  <div class="box" id="hudBL">
+    <div class="stamline"><span class="cap">stamina</span><span class="num" id="stamOut">100</span></div>
+    <div class="bar"><i id="stamBar" style="width:100%;background:#3f8f4f"></i></div>
+    <div class="sline">
+      <span id="spd">0.0</span>
+      <span class="cap">m/s</span>
+      <span id="cond" style="margin-left:auto">footpath</span>
+    </div>
+    <button id="surge">surge · space</button>
+  </div>
+  <div class="box" id="hudBC">
+    <div id="trackbar">
+      <div class="rail" id="rail"></div>
+      <div class="flag" style="left:0">start</div>
+      <div class="flag" style="right:0;margin-right:0">finish</div>
+    </div>
+  </div>
+  <div class="box" id="hudBR"><span class="cap">hold <b>space</b> to surge<br>spend stamina for speed</span></div>
+</section>
+
+<!-- ============ PERFORMANCE ============
+     One panel, for both places you race in and both places you walk a course in.
+     It is not inside #hud or #inspect on purpose: it is shown by `mode` rather
+     than by whichever screen was switched on, so there is one node and one set of
+     numbers and no fourth call site to remember when a mode is added. -->
+<div id="perf">
+  <div class="pbig">
+    <b id="pNow">—</b><span class="pcap">fps</span>
+    <div class="psec">
+      <span class="pl">avg</span><b id="pAvg">—</b>
+      <span class="pl">1% low</span><b id="pLow">—</b>
+      <span class="pl">min</span><b id="pMin">—</b>
+    </div>
+  </div>
+  <div class="pgrid">
+    <span class="pl">frames</span><b id="pFrames">—</b>
+    <span class="pl">dpr</span><b id="pDpr">—</b>
+      <span class="pl">msaa</span><b id="pMsaa">—</b>
+      <span class="pl">scaling</span><b id="pScale">—</b>
+    <span class="pl">pixels</span><b id="pPix">—</b>
+    <span class="pl">ssao</span><b id="pSsao">—</b>
+    <span class="pl">refl</span><b id="pRefl">—</b>
+      <span class="pl">fx</span><b id="pFx">—</b>
+    <span class="pl">draws</span><b id="pCalls">—</b>
+    <span class="pl">tris</span><b id="pTris">—</b>
+    <span class="pl">geometries</span><b id="pGeo">—</b>
+    <span class="pl">textures</span><b id="pTex">—</b>
+    <span class="pl">programs</span><b id="pProg">—</b>
+    <span class="pl">probes</span><b id="pProbe">—</b>
+  </div>
+  <div class="pbot">
+    <div class="pwide"><span class="pl">path</span><b id="pPath">—</b></div>
+    <div class="pwide"><span class="pl">tier</span><b id="pTier">—</b></div>
+    <div class="pwide"><span class="pl">passes</span><b id="pPasses">—</b></div>
+  </div>
+  <div class="pfoot" id="pFoot">—</div>
+</div>
+
+<div id="count"></div>
+<div id="flash"></div>
+
+<!-- ============ RESULTS ============ -->
+<div class="modal" id="results">
+  <div class="card-modal">
+    <h2 id="resTitle">Result</h2>
+    <div class="sub" id="resSub">—</div>
+    <div class="seas" id="resStrip"></div>
+    <table class="res">
+      <thead><tr><th></th><th>racer</th><th style="text-align:right">time</th><th style="text-align:right">pts</th><th style="text-align:right">rating</th></tr></thead>
+      <tbody id="resBody"></tbody>
+    </table>
+    <div class="tot" id="resTot"></div>
+    <div class="btns">
+      <button class="big ghost" id="resStay">Watch the rest</button>
+      <button class="big" id="resNext">On to the stable</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SEASON SUMMARY ============ -->
+<div class="modal" id="summary">
+  <div class="card-modal">
+    <h2 id="sumTitle">Season complete</h2>
+    <div class="sub" id="sumSub">—</div>
+    <div class="tot" id="sumTot"></div>
+    <table class="res">
+      <thead><tr><th></th><th>race</th><th>trait</th><th style="text-align:right">place</th><th style="text-align:right">pts</th></tr></thead>
+      <tbody id="sumBody"></tbody>
+    </table>
+    <button class="big" id="sumNew">Run a new season</button>
+  </div>
+</div>
+
+<!-- ============ CHOOSE A SEASON ============ -->
+<div class="modal" id="seasons">
+  <div class="card-modal wide">
+    <h2>Choose a season</h2>
+    <div class="sub" id="seasSub">—</div>
+    <div id="seasList"></div>
+    <div class="btns"><button class="big ghost" id="seasClose">Not now</button></div>
+  </div>
+</div>
+
+<!-- ============ OPTIONS ============ -->
+<div class="modal" id="options">
+  <div class="card-modal wide">
+    <h2>Options</h2>
+    <div class="sub">preset sets every row but the render scale · everything applies as you click</div>
+    <div id="optRows"></div>
+    <div class="btns">
+      <button class="big ghost" id="optDefaults">Reset to current</button>
+      <button class="big" id="optClose">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ WALKING A COURSE ============ -->
+<div id="inspect">
+  <div class="ibar">
+    <span class="inm" id="inspectName">—</span>
+    <span class="ihelp">WASD to walk · hold the mouse to look · Q and E for up and down · shift to hurry · esc to go back</span>
+    <button class="ibtn" id="inspectBack">back to the stable</button>
+  </div>
+</div>
+
+<div id="boot">warming the shell…</div>
+
+<script type="module" src="snail-race.js"></script>
+</body>
+</html>

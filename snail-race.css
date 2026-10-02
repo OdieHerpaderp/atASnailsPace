@@ -1,0 +1,615 @@
+/* snail-race.css - styling for Snail Grand Prix. Split out of snail-race.html. */
+
+/* ------------------------------------------------------------------ *
+ * Maple Mono, which is the county's one typeface. Both the headings
+ * and the figures used to be two different families - a geometric sans
+ * for the names and a system mono for everything with a number in it -
+ * and they are now one, because a card that says `Marl` in one hand and
+ * `120` in the other is a card with two typefaces on it.
+ *
+ * It is a **webfont**, which is a thing this project has not had before
+ * and the reason it is worth spelling out: it is a fetch, and a fetch
+ * can fail. So every face below is declared with its own real fallback
+ * and `font-display: swap`, which means a network that cannot reach
+ * jsDelivr costs the county a few hundred kilobytes of download and
+ * **nothing else** - the game boots, the text is in the font that was
+ * already there, and nothing is measured or positioned off a font that
+ * has not arrived. Every face is loaded on the same four weights, so
+ * there are four requests and not sixteen: the browser fetches one per
+ * weight and reuses it.
+ * ------------------------------------------------------------------ */
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.3.0/files/maple-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.3.0/files/maple-mono-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.3.0/files/maple-mono-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.3.0/files/maple-mono-latin-700-normal.woff2') format('woff2');
+}
+
+:root {
+    --ink: #22303a;
+    --dim: rgba(34, 48, 58, 0.62);
+    --faint: rgba(34, 48, 58, 0.42);
+    --line: rgba(34, 48, 58, 0.16);
+    --line2: rgba(34, 48, 58, 0.28);
+    --panel: rgba(255, 255, 255, 0.66);
+    --panel-solid: rgba(255, 255, 255, 0.9);
+    --gold: #b8912a;
+    --good: #3f8f4f;
+    --warn: #d2912b;
+    --bad: #bf4a37;
+    /* The one typeface, with the families it replaces behind it. The sans that
+       the headings used to ask for is still in this list on purpose: it is what
+       the page is measured in until Maple Mono arrives, and a layout that only
+       works once a webfont has loaded is a layout that breaks when a network
+       does not. */
+    --mono: 'Maple Mono', "SF Mono", "Fira Mono", "Roboto Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    overflow: hidden;
+    /* Maple Mono for the lot - there is no second family any more, and the
+       geometric sans is kept in the list for the same reason it is kept in
+       `--mono`: it is what the page falls back to, not a second choice for
+       some of the text. */
+    font-family: 'Maple Mono', "Futura", "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+    color: var(--ink);
+    background: linear-gradient(#2b76c4 0%, #6aa8dc 26%, #a8cbe8 46%, #dfeaf2 56%, #e4eef3 62%, #d9e4e0 100%);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  canvas { position: fixed; inset: 0; display: block; }
+
+  .screen {
+    position: fixed; inset: 0; z-index: 10;
+    pointer-events: none;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.4s ease;
+  }
+  .screen.on { opacity: 1; visibility: visible; }
+  .panel {
+    position: absolute; pointer-events: auto;
+    background: var(--panel);
+    -webkit-backdrop-filter: blur(12px) saturate(1.15);
+    backdrop-filter: blur(12px) saturate(1.15);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    box-shadow: 0 10px 34px rgba(24, 40, 52, 0.13);
+  }
+  h1, h2 { margin: 0; font-weight: 600; }
+  .cap {
+    font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: 0.085em; text-transform: uppercase;
+    color: var(--faint);
+  }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---------------- brand ---------------- */
+  #brand { position: absolute; left: 50%; top: 20px; transform: translateX(-50%); text-align: center; pointer-events: none; }
+  #brand .logo {
+    font-size: 21px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+  #brand .tag {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.07em;
+    color: var(--dim); margin-top: 3px; text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+  }
+  #pips { display: flex; gap: 5px; justify-content: center; margin-top: 8px; }
+  #pips i {
+    width: 22px; height: 3px; border-radius: 2px; display: block;
+    background: rgba(34, 48, 58, 0.18);
+  }
+  #pips i.won { background: var(--good); }
+  #pips i.raced { background: var(--ink); opacity: 0.55; }
+  #pips i.now { background: var(--gold); box-shadow: 0 0 0 3px rgba(184, 145, 42, 0.18); }
+
+  /* ---------------- snail card ---------------- */
+  #snailCard { left: 22px; top: 22px; width: 328px; padding: 10px 16px 11px; }
+  /* the field sits under the snail card, wherever that card happens to end */
+  /* and it is capped short of the options bar pinned in the corner below it:
+     the card is placed by script from the snail card's own height, so on a
+     short viewport it can otherwise run straight over the button */
+  #fieldCard {
+    position: absolute; left: 22px; width: 328px; padding: 9px 16px 10px;
+    max-height: calc(100vh - 280px); overflow: auto;
+  }
+  #snailCard .row { display: flex; align-items: center; gap: 8px; }
+  #snailName {
+    flex: 1; min-width: 0;
+    font: 600 17px/1.2 "Futura", "Avenir Next", "Trebuchet MS", sans-serif;
+    letter-spacing: 0.01em; color: var(--ink);
+    background: transparent; border: none; border-bottom: 1px dashed var(--line2);
+    padding: 2px 1px; outline: none;
+  }
+  #snailName:focus { border-bottom-color: var(--ink); }
+  .gold { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 16px; }
+  .coin {
+    width: 12px; height: 12px; border-radius: 50%; display: inline-block;
+    background: radial-gradient(circle at 34% 30%, #f6e08a, var(--gold) 62%, #8a6a14);
+    box-shadow: inset 0 0 0 1px rgba(90, 70, 10, 0.4);
+  }
+  .picker { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; }
+  .picker label { width: 38px; }
+  input[type=color] {
+    -webkit-appearance: none; appearance: none;
+    width: 40px; height: 22px; padding: 0; border: 1px solid var(--line2);
+    border-radius: 3px; background: none; cursor: pointer;
+  }
+  input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+  input[type=color]::-webkit-color-swatch { border: none; border-radius: 2px; }
+  input[type=color]::-moz-color-swatch { border: none; border-radius: 2px; }
+  .styles { display: flex; gap: 4px; margin-left: auto; }
+  .styles button {
+    width: 22px; height: 22px; padding: 0; border-radius: 3px;
+    border: 1px solid var(--line2); background: rgba(255,255,255,0.5); cursor: pointer;
+    display: grid; place-items: center;
+  }
+  .styles button.sel { border-color: var(--ink); background: #fff; }
+  .styles button i { display: block; width: 13px; height: 13px; border-radius: 2px; opacity: 0.8; }
+  .s-bands { background: repeating-linear-gradient(90deg, #555 0 2px, #ddd 2px 4px); }
+  .s-swirl { background: conic-gradient(#555, #ddd, #555, #ddd, #555); }
+  .s-spots { background: radial-gradient(circle at 30% 35%, #555 1.6px, transparent 2px), radial-gradient(circle at 70% 70%, #555 1.6px, transparent 2px), #ddd; }
+
+  #stats { margin-top: 10px; }
+  .stat { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .stat .nm { width: 62px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; color: var(--dim); }
+  .stat .pips { display: flex; gap: 2px; flex: 1; }
+  .stat .pips b {
+    flex: 1; height: 8px; border-radius: 1px; display: block;
+    background: rgba(34, 48, 58, 0.12);
+  }
+  .stat .pips b.on { background: var(--ink); opacity: 0.82; }
+  .stat .pips b.up { background: var(--gold); opacity: 1; }
+  .stat .v { width: 26px; text-align: right; font-family: var(--mono); font-size: 13px; }
+  .stat .feed {
+    font: inherit; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.03em;
+    padding: 2px 7px; border-radius: 3px; cursor: pointer; color: var(--ink);
+    background: rgba(255,255,255,0.5); border: 1px solid var(--line2);
+    transition: background 0.15s ease;
+  }
+  .stat .feed:hover:not(:disabled) { background: #fff; }
+  .stat .feed:disabled { opacity: 0.32; cursor: default; }
+  .note { margin: 9px 0 0; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.03em; color: var(--faint); line-height: 1.32; }
+
+  /* ---------------- the season's rivals ---------------- */
+  #fieldCard .row { display: flex; align-items: baseline; gap: 8px; }
+  #fieldCard h2 { font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; }
+  #fieldCard .row .cap { margin-left: auto; }
+  #fieldCard .seasband {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.4; letter-spacing: 0.025em;
+    color: var(--dim); margin-top: 5px; text-transform: uppercase;
+  }
+  #fieldCard .tierbar { display: flex; gap: 3px; margin: 8px 0 9px; }
+  #fieldCard .tierbar i { flex: 1; height: 3px; border-radius: 2px; display: block; background: rgba(34, 48, 58, 0.14); }
+  #fieldCard .tierbar i.on { background: var(--gold); }
+  #field { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+  #field .rival { display: flex; align-items: center; gap: 6px; }
+  #field .rival .nm { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #field .rival .rt { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  #field .me { grid-column: 1 / -1; padding-top: 5px; margin-top: 3px; border-top: 1px solid var(--line); }
+  #field .me .nm { font-weight: 600; }
+  #field .me .rt { color: var(--gold); }
+  button.quiet {
+    display: block; width: 100%; margin-top: 11px; padding: 6px;
+    font: 600 9.5px/1 "Futura", "Avenir Next", sans-serif; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink); background: rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--line2); border-radius: 3px; cursor: pointer;
+    transition: transform 0.12s ease, background 0.15s ease;
+  }
+  button.quiet:hover { transform: translateY(-1px); background: rgba(255, 255, 255, 0.85); }
+  @media (max-width: 900px) { #fieldCard { width: 268px; } }
+
+  /* ---------------- options ---------------- */
+  /* Pinned in the corner the panels above do not use, and the one thing on this
+     screen that is about the machine rather than about the season. */
+  .optbar {
+    position: absolute; left: 22px; bottom: 22px; width: 200px;
+    pointer-events: auto;
+  }
+  /* One flat list, one grid, and the cell count is the row's own - `--nc` is set
+     from the label list, so a ladder is six equal cells and a switch is two or
+     three. Identical widths inside a row on purpose, because a cascade you cannot
+     see is a cascade you cannot check. Modelled on `.styles button`, which is the
+     same idea at a smaller size.
+     `minmax(0, 1fr)` and not `1fr`, for the same reason the perf grid is built
+     that way: a `1fr` floors at its content, and a switch cell saying `bloom hi`
+     with `white-space: nowrap` is content, so two of them set the width of the row
+     and the other one gets the remainder. */
+  .optrow { padding: 7px 0 8px; border-top: 1px solid var(--line); }
+  .optrow:first-child { border-top: none; padding-top: 2px; }
+  .optrow .head { display: flex; align-items: baseline; gap: 10px; }
+  .optrow .nm { font-size: 13.5px; font-weight: 600; letter-spacing: 0.02em; }
+  .optrow .cap { margin-left: auto; white-space: nowrap; }
+  .optbtns {
+    display: grid; grid-template-columns: repeat(var(--nc, 6), minmax(0, 1fr));
+    gap: 4px; margin-top: 6px;
+  }
+  .optbtn {
+    padding: 5px 2px; border-radius: 3px; cursor: pointer; color: var(--ink);
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.03em;
+    background: rgba(255, 255, 255, 0.5); border: 1px solid var(--line2);
+    transition: background 0.15s ease, border-color 0.15s ease;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .optbtn:hover { background: #fff; }
+  .optbtn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  /* the preset row, when the rows it owns do not all agree and the six switches
+     are not the level's set either: no cell lit, which is the honest answer and
+     the only one that cannot be misread. **Not "every row below it"**: the render
+     scale is not the preset's, so the label goes faint for a disagreement and not
+     for a player having picked their own scale. */
+  .optrow.preset .nm { color: var(--faint); }
+  /* The heading between the ladders and the switches, and a rule on the first
+     switch row rather than a gap: a modal with a group in it and nothing marking
+     where the group starts is a modal whose second half reads as a ninth ladder. */
+  .optgroup {
+    margin: 10px 0 2px; padding-top: 9px; border-top: 1px solid var(--line2);
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--faint);
+  }
+  @media (max-width: 900px) {
+    .optbar { width: 168px; }
+    .optbtn { font-size: 10px; padding: 4px 1px; }
+  }
+
+  /* ---------------- race cards ---------------- */
+  #raceList { right: 22px; top: 22px; width: 330px; padding: 10px 15px 11px; max-height: calc(100vh - 44px); overflow: auto; }
+  #raceList h2 { font-size: 15px; letter-spacing: 0.1em; text-transform: uppercase; }
+  #cards { margin: 10px 0 12px; }
+  .card {
+    display: flex; gap: 9px; align-items: stretch;
+    padding: 6px 0; border-top: 1px solid var(--line);
+  }
+  .card:first-child { border-top: none; }
+  .card.done { opacity: 0.45; }
+  .card .idx {
+    width: 20px; font-family: var(--mono); font-size: 13px; color: var(--faint);
+    padding-top: 2px;
+  }
+  .card .info { flex: 1; min-width: 0; }
+  .card .cname { font-size: 15px; font-weight: 600; letter-spacing: 0.015em; }
+  .card .cmeta { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.025em; color: var(--dim); margin-top: 1px; }
+  .card .chips { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.045em; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 2px; border: 1px solid var(--line2);
+    background: rgba(255,255,255,0.5);
+  }
+  .chip.run { color: #7a5a1e; border-color: #c9a86a; }
+  .chip.climb { color: #6b5a52; border-color: #a99a90; }
+  .chip.swim { color: #2a5a7a; border-color: #7fa8c4; }
+  .chip.fly { color: #55607a; border-color: #9aa6c2; }
+  .chip.push { color: #7a5320; border-color: #c9a86a; }
+  .card svg { display: block; margin-top: 5px; }
+  .card .move { display: flex; flex-direction: column; gap: 3px; justify-content: center; }
+  .card .move button {
+    width: 20px; height: 15px; padding: 0; font-size: 10px; line-height: 1;
+    border-radius: 2px; border: 1px solid var(--line); background: rgba(255,255,255,0.55);
+    cursor: pointer; color: var(--ink);
+  }
+  .card .move button:disabled { opacity: 0.25; cursor: default; }
+  /* the one that is not a reordering arrow: it stands you in the course */
+  .card .move button.peek {
+    width: 20px; height: auto; padding: 2px 0; font-size: 9px; letter-spacing: 0.01em;
+    writing-mode: vertical-rl; text-orientation: mixed; color: var(--dim);
+  }
+  .card .move button.peek:hover { color: var(--ink); background: #fff; }
+  .card .pts { font-family: var(--mono); font-size: 12px; color: var(--good); }
+  .card.marathon { border-top: 1px dashed var(--line2); margin-top: 4px; padding-top: 9px; }
+  .card.marathon .cname::after {
+    content: 'finale'; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--gold); margin-left: 7px; border: 1px solid var(--gold);
+    border-radius: 2px; padding: 1px 4px; vertical-align: 1px;
+  }
+  button.big {
+    display: block; width: 100%; padding: 9px;
+    font: 600 12px/1 "Futura", "Avenir Next", sans-serif; letter-spacing: 0.11em; text-transform: uppercase;
+    color: #fff; background: var(--ink); border: none; border-radius: 3px; cursor: pointer;
+    transition: transform 0.12s ease, opacity 0.15s ease;
+  }
+  button.big:hover { transform: translateY(-1px); }
+  button.big.ghost { background: rgba(255,255,255,0.5); color: var(--ink); border: 1px solid var(--line2); }
+  button.big:disabled { opacity: 0.4; cursor: default; transform: none; }
+  /* the one destructive action on the page, so it is kept quiet until you
+     have actually asked for it */
+  button.danger { background: none; color: #a8492f; border: 1px solid rgba(168, 73, 47, 0.3); font-size: 11px; }
+  button.danger:hover { background: rgba(168, 73, 47, 0.08); }
+  button.danger.armed { background: #a8492f; color: #fff; border-color: #a8492f; }
+  .btns { display: flex; gap: 6px; }
+  .btns .big { font-size: 12.5px; padding: 7px 6px; letter-spacing: 0.07em; }
+
+  /* ---------------- walking a course ---------------- */
+  /* A bar across the top and nothing else: the whole point is to be in the
+     country, so the screen is left alone. */
+  /* over the canvas, like the other screens, and only the bar itself takes
+     the pointer - the country is what you came for */
+  #inspect { position: fixed; inset: 0; z-index: 10; display: none; pointer-events: none; }
+  #inspect.on { display: block; }
+
+  /* The same bar as the inspector's, for the stable - the two places you can walk
+     about are the same place to walk about, and they say so the same way. */
+  #stroll { position: fixed; inset: 0; z-index: 10; display: none; pointer-events: none; }
+  #stroll.on { display: block; }
+  #stroll .ibar {
+    position: absolute; left: 50%; top: 20px; z-index: 1; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px; padding: 6px 12px;
+    background: var(--panel); backdrop-filter: blur(12px) saturate(1.15);
+    -webkit-backdrop-filter: blur(12px) saturate(1.15);
+    border: 1px solid var(--line); border-radius: 5px; pointer-events: auto;
+    box-shadow: 0 8px 26px rgba(24, 40, 52, 0.12);
+  }
+  #stroll .inm { font-size: 15px; font-weight: 600; letter-spacing: 0.03em; white-space: nowrap; }
+  #stroll .ihelp { font-family: var(--mono); font-size: 11.5px; color: var(--dim); white-space: nowrap; }
+  #inspect .ibar {
+    position: absolute; left: 50%; top: 20px; z-index: 1; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px; padding: 6px 12px;
+    background: var(--panel); backdrop-filter: blur(12px) saturate(1.15);
+    -webkit-backdrop-filter: blur(12px) saturate(1.15);
+    border: 1px solid var(--line); border-radius: 5px; pointer-events: auto;
+    box-shadow: 0 8px 26px rgba(24, 40, 52, 0.12);
+  }
+  #inspect .inm { font-size: 15px; font-weight: 600; letter-spacing: 0.03em; white-space: nowrap; }
+  #inspect .ihelp { font-family: var(--mono); font-size: 11.5px; color: var(--dim); white-space: nowrap; }
+  #inspect .ibtn {
+    font: 600 10px/1 "Futura", "Avenir Next", sans-serif; letter-spacing: 0.07em;
+    text-transform: uppercase; color: #fff; background: var(--ink); border: none;
+    border-radius: 3px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
+  }
+  #inspect .ibtn:hover { opacity: 0.88; }
+
+  /* ---------------- race HUD ---------------- */
+  #hud .box {
+    position: absolute; pointer-events: auto;
+    background: var(--panel); backdrop-filter: blur(12px) saturate(1.15);
+    -webkit-backdrop-filter: blur(12px) saturate(1.15);
+    border: 1px solid var(--line); border-radius: 5px;
+    box-shadow: 0 8px 26px rgba(24, 40, 52, 0.12);
+    padding: 8px 13px;
+  }
+  #hudTL { left: 22px; top: 22px; min-width: 196px; }
+  #hudTL .rname { font-size: 16px; font-weight: 600; letter-spacing: 0.03em; }
+  #hudTL .rsub { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.05em; color: var(--dim); margin-top: 2px; }
+  #hudTR { right: 22px; top: 22px; width: 214px; padding: 7px 11px; }
+  #hudTR .cap { margin-bottom: 6px; }
+  .row2 { display: flex; align-items: center; gap: 7px; margin: 2px 0; font-size: 13.5px; }
+  .row2 .pl { width: 13px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .row2.me { font-weight: 600; }
+  .row2 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18); }
+  .row2 .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row2 .g { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+  #hudBL { left: 22px; bottom: 22px; width: 264px; }
+  .bar { height: 9px; border-radius: 5px; background: rgba(34, 48, 58, 0.14); overflow: hidden; position: relative; }
+  .bar i { display: block; height: 100%; border-radius: 5px; transition: width 0.1s linear, background 0.3s ease; }
+  /* The stamina label and its number, on a line each side of the bar. This was
+     written as `.bar .stamline` - a descendant - and the markup has the line as
+     a **sibling** of the bar, so the rule never matched and the two spans sat
+     shoulder to shoulder with no gap at all. It read as a thin bug before, when
+     the label was a proportional font and a narrower number; on Maple Mono the
+     number is as wide as the label and they touch. */
+  .stamline { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 5px; }
+  #hudBL .sline { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; }
+  #spd { font-family: var(--mono); font-size: 19px; font-variant-numeric: tabular-nums; }
+  #cond { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.055em; text-transform: uppercase; color: var(--dim); }
+  #surge {
+    margin-top: 9px; width: 100%; padding: 7px; border-radius: 3px; cursor: pointer;
+    font: 600 11px/1 "Futura", "Avenir Next", sans-serif; letter-spacing: 0.1em; text-transform: uppercase;
+    color: #fff; background: var(--ink); border: none;
+  }
+  #surge.on { background: var(--gold); }
+  #surge:disabled { background: rgba(34,48,58,0.25); cursor: default; }
+  #hudBC { left: 50%; bottom: 22px; transform: translateX(-50%); width: min(46vw, 460px); padding: 7px 13px 8px; }
+  #trackbar { position: relative; height: 16px; }
+  #trackbar .rail { position: absolute; left: 0; right: 0; top: 7px; height: 3px; border-radius: 2px; background: rgba(34,48,58,0.16); overflow: hidden; display: flex; }
+  #trackbar .rail i { display: block; height: 100%; }
+  #trackbar .mark { position: absolute; top: 0; width: 11px; height: 11px; margin-left: -5.5px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgba(255,255,255,0.85); transition: left 0.1s linear; }
+  #trackbar .flag { position: absolute; top: 3px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  #hudBR { right: 22px; bottom: 22px; }
+  #hudBR .cap { line-height: 1.4; text-align: right; }
+
+  /* ---------------- performance readout ----------------
+     Middle right, between the standings and the surge hint rather than over
+     either: the standings are 214px wide at the top and the hint is a third of
+     that at the bottom, so a 236px panel on the same edge lands in the gap at
+     every viewport the game is played at. `top: 50%` and a translate, not a
+     fixed offset, so it stays in the middle of the screen rather than the middle
+     of a guess about how tall the top box is.
+
+     `pointer-events: none`, unlike #hud's boxes: a readout is furniture and a
+     drag that starts on it is a drag that misses. It is above the two screens at
+     11 and below the modals at 30, so the options panel still covers it. */
+  #perf {
+    position: fixed; right: 22px; top: 50%; z-index: 11; transform: translateY(-50%);
+    width: 292px; padding: 8px 12px 7px; pointer-events: none;
+    background: var(--panel); backdrop-filter: blur(12px) saturate(1.15);
+    -webkit-backdrop-filter: blur(12px) saturate(1.15);
+    border: 1px solid var(--line); border-radius: 5px;
+    box-shadow: 0 8px 26px rgba(24, 40, 52, 0.12);
+    opacity: 0; visibility: hidden; transition: opacity 0.18s ease;
+  }
+  #perf.on { opacity: 1; visibility: visible; }
+  #perf .pbig { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
+  #perf .pbig b { font-family: var(--mono); font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1; }
+  #perf .pcap { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
+  #perf .pbig.warn b { color: #b4552f; }
+  /* **The average and the two windowed lows share the top line with the current
+     number**, because that is the line the eye arrives at and a reader who has to
+     look down for the other three is reading four numbers instead of one. They are
+     set at 12px against the current number's 24px because six figures on one
+     baseline is a ledger and four is a headline. `.psec` is pushed to the far edge
+     with `margin-left: auto`, so the headline and the tail are the two ends of one
+     row however many digits either of them grows to. */
+  #perf .psec { display: flex; align-items: baseline; gap: 5px; margin-left: auto; }
+  #perf .psec b {
+    font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums;
+    text-align: right; white-space: nowrap;
+  }
+  /* label, value, label, value: the two pairs are what let twelve numbers into a
+     panel short enough to sit in the middle of a screen without covering the road.
+     **The two value columns are a fixed width and the two label columns take what
+     is left**, so a long label like `geometries` cannot push the far column off the
+     panel - which is what an `auto auto auto auto` grid does, and it clipped
+     `ssao/refl/fx` and `textures` to nothing on the first try. `minmax(0, 1fr)`
+     where the shorthand said `1fr`: a `1fr` is `minmax(auto, 1fr)`, so a label that
+     will not break is also a label the column cannot shrink below, and the two of
+     those together are how a nowrap label walks out of the panel sideways. Both
+     value columns are the same width and both are 3.4em, because the widest value
+     in the panel is five characters - `9999k` of triangles - and `geometries` is
+     ten characters of label needing 64px, so every pixel a value column takes is
+     a pixel one of those two label columns does not. */
+  #perf .pgrid {
+    display: grid; grid-template-columns: minmax(0, 1fr) 3.4em minmax(0, 1fr) 3.4em;
+    gap: 1px 7px; align-items: baseline;
+  }
+  #perf .pl { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--dim); white-space: nowrap; }
+  #perf .pgrid b, #perf .pwide b {
+    font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums;
+    text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /**The three full-width rows at the foot: which path is running, which settings
+     asked for it, and what the composer is actually made of. `path` and `tier` sit
+     there and not in the grid because the two of them are long strings next to each
+     other - `compositor` is ten characters and the grid's value column is 3.4em -
+     and because a reader asks for them last and wants them beside the pass chain
+     they explain. The border is on the block, not on `passes`, so the rule above
+     the group does not sit between two rows that answer one question. */
+  #perf .pbot { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+  #perf .pwide { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: baseline; }
+  #perf .pwide + .pwide { margin-top: 1px; }
+  #perf .pfoot {
+    /* 8.5px and not 9px because the sentence is the longest string in the panel
+       and the one with a two-digit window in it: `avg whole visit · lows last 12s ·
+       resets on entry` is forty-five characters, which at 9px is a hundred and
+       seventy-nine pixels of the hundred and sixty-six the panel has, and the
+       ellipsis took the answer to "why is my average lower than my minimum". */
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: 0; color: var(--faint);
+    margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  #count {
+    position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+    pointer-events: none; font-size: 94px; font-weight: 600; letter-spacing: 0.05em;
+    color: #fff; text-shadow: 0 3px 24px rgba(30, 50, 70, 0.35);
+  }
+  #count span { animation: pop 0.85s ease-out both; }
+  @keyframes pop { 0% { transform: scale(0.5); opacity: 0; } 22% { transform: scale(1.06); opacity: 1; } 70% { opacity: 1; } 100% { transform: scale(1); opacity: 0.85; } }
+  #flash { position: fixed; inset: 0; z-index: 15; pointer-events: none; background: #fff; opacity: 0; transition: opacity 0.5s ease; }
+  #flash.on { opacity: 0.55; transition: opacity 0.06s ease; }
+
+  /* ---------------- modals ---------------- */
+  .modal {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    place-items: center; background: rgba(30, 46, 58, 0.34);
+    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  }
+  .modal.on { display: grid; }
+  .card-modal {
+    pointer-events: auto; width: min(560px, calc(100vw - 44px)); max-height: calc(100vh - 48px); overflow: auto;
+    background: var(--panel-solid); backdrop-filter: blur(16px);
+    border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 24px 70px rgba(20, 34, 46, 0.3);
+    padding: 16px 26px 18px;
+  }
+  .card-modal h2 { font-size: 19px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .card-modal .sub { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; color: var(--dim); margin: 4px 0 16px; }
+  table.res { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  table.res th {
+    text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--faint); font-weight: 400;
+    padding: 0 6px 5px; border-bottom: 1px solid var(--line);
+  }
+  table.res td { padding: 4px 6px; border-bottom: 1px solid rgba(34,48,58,0.07); font-size: 14.5px; }
+  table.res tr.me td { font-weight: 600; background: rgba(184, 145, 42, 0.10); }
+  table.res td.p { font-family: var(--mono); font-size: 12.5px; color: var(--faint); width: 26px; }
+  table.res td.pts { font-family: var(--mono); font-size: 13px; text-align: right; }
+  table.res td.rt { font-family: var(--mono); font-size: 13px; text-align: right; width: 78px; white-space: nowrap; }
+  table.res td.rt .was { opacity: 0.45; }
+  table.res td.rt.up { color: var(--good); }
+  table.res td.rt.dn { color: var(--bad); }
+  table.res td.rt.flat { color: var(--faint); }
+  table.res td.tm { font-family: var(--mono); font-size: 12.5px; text-align: right; color: var(--dim); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.2); vertical-align: -1px; }
+  .tot { display: flex; gap: 18px; margin: 4px 0 18px; }
+  .tot div { flex: 1; }
+  .tot .v { font-family: var(--mono); font-size: 23px; }
+  .tot .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); }
+  .seas { display: flex; gap: 5px; margin-bottom: 14px; overflow: hidden; }
+  .seas i { flex: 1; text-align: center; font-family: var(--mono); font-size: 11px; padding: 4px 0; border-radius: 3px; background: rgba(34,48,58,0.08); }
+  .seas i.p1 { background: var(--good); color: #fff; }
+  .seas i.p2 { background: rgba(34,48,58,0.62); color: #fff; }
+  .seas i.p3 { background: rgba(34,48,58,0.34); color: #fff; }
+  .seas i.p4 { background: rgba(34,48,58,0.2); }
+  .seas i.m { background: var(--gold); color: #fff; }
+
+  /* ---------------- choosing a season ---------------- */
+  .card-modal.wide { width: min(760px, calc(100vw - 44px)); }
+  /* Ten rows of six cells is a tall card, and this is the only modal here that
+     cannot simply be short. So it scrolls rather than running off a short
+     viewport, with the row grid left whole rather than wrapped. */
+  #options .card-modal { max-height: calc(100vh - 36px); overflow: auto; }
+  #seasList { display: grid; gap: 8px; margin-bottom: 16px; }
+  .season {
+    border: 1px solid var(--line); border-radius: 5px; padding: 9px 14px 10px;
+    background: rgba(255, 255, 255, 0.42);
+    display: grid; grid-template-columns: 1fr 250px; gap: 4px 18px;
+  }
+  .season.now { border-color: var(--gold); background: rgba(184, 145, 42, 0.09); }
+  .season.locked { opacity: 0.52; }
+  .season .shead { display: flex; align-items: baseline; gap: 10px; }
+  .season .shead h3 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  .season .shead .cap { margin-left: auto; white-space: nowrap; }
+  .season .sblurb { grid-column: 1; font-family: var(--mono); font-size: 11.5px; line-height: 1.34; color: var(--dim); margin: 5px 0 9px; }
+  .season .srivals { grid-column: 2; grid-row: 1 / span 3; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; align-content: start; }
+  .season .srivals .rival { display: flex; align-items: center; gap: 6px; }
+  .season .srivals .nm { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .season .srivals .rt { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .season .sfoot { grid-column: 1; display: flex; align-items: center; gap: 12px; }
+  .season .sfoot .cap { flex: 1; }
+  .season .sfoot button.big { width: auto; padding: 7px 20px; font-size: 12px; letter-spacing: 0.08em; }
+  .season .sfoot .sneed { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.04em; color: #a8492f; text-transform: uppercase; }
+  .season .sfoot .sneed em { font-style: normal; color: var(--dim); }
+  @media (max-width: 720px) {
+    .season { grid-template-columns: 1fr; }
+    .season .srivals { grid-column: 1; grid-row: auto; margin-bottom: 8px; }
+  }
+
+  #boot {
+    position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; text-align: center;
+    background: linear-gradient(#2b76c4 0%, #6aa8dc 30%, #dfeaf2 60%, #d9e4e0 100%);
+    font-family: var(--mono); font-size: 14px; letter-spacing: 0.08em; color: #35506a;
+    transition: opacity 0.6s ease;
+  }
+  #boot.gone { opacity: 0; visibility: hidden; pointer-events: none; }
+
+  @media (max-width: 900px) {
+    #snailCard, #raceList { width: 268px; }
+    #hudTR { width: 172px; }
+  }
+  /* The options modal is the only one with a grid in it, so the one breakpoint
+     that matters is the one where the six cells stop being readable. */
+  @media (max-width: 640px) {
+    .optrow .nm { font-size: 12px; }
+    .optrow .cap { font-size: 10px; letter-spacing: 0.04em; }
+    .card-modal.wide { padding: 14px 16px 16px; }
+  }
