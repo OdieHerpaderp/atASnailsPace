@@ -10,23 +10,24 @@
 // one and costs no round trip of its own.
 import { COUNTY as C, FLOWER_COLORS as FLOWER_HEX, GREEN as GREEN_T, STONE as STONE_T } from './meshes/palette.js';
 import { CONVERTED, MAPS, SURFACE, allMaps, allParts, mapSlots, mapsFor, slotFor } from './meshes/maps.js';
-let THREE;
-try {
-  THREE = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js');
-} catch (err) {
-  document.getElementById('boot').textContent = 'Could not load three.js from the CDN — connect and reload.';
-  throw err;
-}
+// The leaf: three.js, the numbers, the tuning and the county's own data. It is
+// imported here and not in ten places because every module needs it, and one
+// edge is one edge.
+import {
+  THREE, $, TAU, clamp, lerp, smoothstep, easeInOut,
+  CATS, CAT_BY_ID,
+  RUN, CLIMB, SWIM, FLY, WALK, PUSH, CLIMB_GRADE, LANE_HW,
+  CRATE_S, CRATE_X, CRATE_BACK, CRATE_GAP, CRATE_LANE, CRATE_HW, CRATE_FLARE, CRATE_WALL,
+  HOURS_PER_SECOND, LEVEL_Y, POOL_BANK, POOL_SPREAD, POOL_BERM, COND, ATTRS, ELEMENTS,
+  STAT_MAX, STAT_MIN, GOLD_PER_FRUIT, START_GOLD, START_RATING, POINTS, FIELD, POOL_SIZE,
+  CLUB_SNAILS, CLUB_ATTR, ATTR_MAX, RATING_PER_ATTR, RATING_EASE, RATING_STEP, RATING_PER_WIN,
+  SURGE_MULT, SURGE_DRAIN, PASSIVE_DRAIN, TIRED_MULT, SWIM_Y, REGEN, STEP, START_S, freshSnail,
+  seasonWord, TIERS, TIER_BY_ID, eligibleSeasons, canEnter, seasonFor, seasonDef,
+  seasonScale, seasonPicks, seasonFinaleId, seasonRoster, effFor, effTraits,
+  makeRng, rand, vnoise, fbm, hills,
+  bake, M, colored,
+} from './src/core.js';
 
-const TAU = Math.PI * 2;
-const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-const lerp = (a, b, t) => a + (b - a) * t;
-const smoothstep = (e0, e1, x) => {
-  const t = clamp((x - e0) / (e1 - e0), 0, 1);
-  return t * t * (3 - 2 * t);
-};
-const easeInOut = (x) => x * x * (3 - 2 * x);
-const $ = (id) => document.getElementById(id);
 
 /* ================================================================== *
  * Graphics settings
@@ -444,44 +445,6 @@ function gfxSave() {
 }
 gfxLoad();
 
-// The courses and the seasons live in their own files, so a season can be
-// rebalanced, a tier moved up the ladder, or a course resized without touching
-// any code. A season names the races it runs and the one that closes it; a
-// course's `scale` multiplies its length: 1, 1.5 and 3 are the sizes that have
-// been played, and anything in between works.
-async function loadData(file, what) {
-  let res;
-  try {
-    res = await fetch(file);
-  } catch (err) {
-    document.getElementById('boot').textContent = `Could not load ${file} — is it being served next to the page?`;
-    throw err;
-  }
-  if (!res.ok) {
-    document.getElementById('boot').textContent = `Could not load ${file} (${res.status}).`;
-    throw new Error(file + ' ' + res.status);
-  }
-  const data = await res.json();
-  if (!Array.isArray(data) || !data.length) {
-    document.getElementById('boot').textContent = `${file} did not contain a list of ${what}.`;
-    throw new Error(file + ' is not a list of ' + what);
-  }
-  return data;
-}
-const [SEASONS, RACES] = await Promise.all([
-  loadData('seasons.json', 'seasons'),
-  loadData('races.json', 'courses'),
-]);
-const CATS = RACES;
-for (const c of CATS) {
-  if (typeof c.len !== 'number' || typeof c.scale !== 'number' || c.scale <= 0) {
-    document.getElementById('boot').textContent = `races.json: "${c.id || '?'}" needs a positive len and scale.`;
-    throw new Error('bad course ' + c.id);
-  }
-  // the length the course is actually laid out to
-  c.len = c.len * c.scale;
-}
-const CAT_BY_ID = Object.fromEntries(CATS.map((c) => [c.id, c]));
 
 /* ================================================================== *
  * The meshes live in meshes/ as .glb files: a prop is written once and
@@ -687,422 +650,11 @@ try {
   throw err;
 }
 
-/* ================================================================== *
- * Tuning
- * ================================================================== */
-const RUN = 0, CLIMB = 1, SWIM = 2, FLY = 3, WALK = 4, PUSH = 5;
-/* What a snail covers a second at its best, by what it is doing. Every speed in
- * the sim is one of these times a factor for the trait that suits the ground and
- * one for how well the snail races. Footpath is the reference: everything else
- * is a fraction of a snail going along a flat path, and the gaps between them
- * are the whole argument for building a snail. */
-const BASE_RUN = 4.5;                       // footpath
-const BASE_CLIMB = 3.1;                     // a wall
-const BASE_FLY = 2.8;                       // the air over a gap
-const BASE_SWIM = 2.9;                      // water
-const BASE_WALK = BASE_RUN * 0.9;          // the floor of a chasm: on its feet, on broken ground
-const BASE_PUSH = BASE_RUN * 0.42;         // a crate: on its feet again, and a snail against a box
-const CLIMB_GRADE = 0.5;                    // how hard a wall's steepness bites on the speed of a climb
-/** The lane everywhere else: half of five and a half metres, and eight abreast. */
-const LANE_HW = 2.8;
-/**
- * The crate, and it is seven numbers and one shape.
- *
- * **A crate is a cube**, and that is the whole of its silhouette: a long low box
- * reads as a plank with sides on, and the thing a snail pushes across a road is a
- * box with boards on it. So all three of its edges are `CRATE_S`, and the model
- * is built to that number rather than fitted to anything.
- *
- * **And `CRATE_S` is set by the lane and not by taste.** The lane is five and a
- * half metres wide and eight racers abreast, which is 660 mm of pitch, and a
- * crate for every racer has to sit in its own 660 mm with air either side of it:
- * 620 mm leaves forty. That is a crate about the size of the snail pushing it,
- * which is what a fruit crate is, and it is also the only cube the county has
- * room for - a metre and a half cube would overlap its neighbour by nine hundred
- * millimetres.
- *
- * **The dish is the crate's own size, and its ends are cut rather than eased.**
- * `CRATE_X` is its length in the planner's `x`, and the whole of the drop is
- * taken in the **first sample** of it and the whole of the rise in the last -
- * which is what a `leap` does with its chasm and the reason a leap reads as a
- * hole. Eased over a quarter at each end it came out as a trough: `CRATE_X` was
- * 2.8 m of `x`, the dish 3.4 m of road and 0.45 deep, and a bowl you could put a
- * cart in. **A crate is 620 tall, so a hole it bridges cannot be a `leapClimb`'s
- * cliff and it is not pretending to be one** - the 2.6 m of water under a
- * `leapClimb`'s lip is what makes that face stand at seventy degrees, and a
- * notch a snail is meant to walk a box across is half a metre of the same
- * bargain. What the notch can be is a **crease**: a hard lip taken in one sample,
- * a bare stone floor, and a length of about the box's own, so the crate fills it
- * and overhangs it and the road is broken where the crate stands.
- *
- * **And the crate's lid is the road.** The depth is a little under `CRATE_S`, so
- * the box stands ninety millimetres proud of the clay at each end of a bridge
- * that is otherwise level, and the whole of the obstacle is a nine-centimetre
- * step on and off a hole. The snail is on the lid from the near lip to the far
- * one and never in the notch, so a notch the crate does not cover is not a hole
- * a snail has to climb out of.
- *
- * `CRATE_BACK` is how far back the crate starts, and `CRATE_GAP` is the snail's
- * own `s` to the crate's centre: it begins shoving the moment the crate is that
- * far ahead of it, so the shove run is the two of them together and `CRATE_LANE`
- * is the clear road a course has to give it, in the planner's `x` - which is the
- * shorter of the two distances here, so a floor in `x` is a longer run in `s` than
- * the number looks.
- *
- * **And the apron a crate is shoved down is a wider lane and not a wider crate.**
- * Eight abreast at `LANE_HW` is 657 mm of pitch and a cube of 620 leaves 37
- * between neighbours - and the field does not hold the slot it was given, it
- * drifts a snail 120 either side of it, so two of them met with 200 mm of
- * overlap and a row of boxes that walked sideways down the road as it went. So the
- * road opens out to `CRATE_HW` for the whole shove, which is 857 of pitch and 240
- * of air, **and the field's lane is a share of the half-width rather than a
- * distance off the centre line**: a road that opens for a crate is a road the
- * eight of them spread into, and a crate row stepped wider on its own would be
- * eight boxes standing in the verge with a snail walking between two of them.
- *
- * The apron opens over `CRATE_FLARE` and not at a row, because a row is 0.75 m
- * apart and the edge would step a third of a metre sideways between two of them,
- * which is a crease and not a shoulder. **And it is the drift that goes and not
- * the width alone**, read off the same `fr.w` the slot comes off, so the wander
- * reaches nothing exactly where the road is widest and a snail with its hands on a
- * box walks it straight.
- *
- * **And the notch is packed, which is the whole of what makes it a hole.**
- * A hole cut in a lane is only the shape its samples carry: the lane carries one
- * row every `STEP`, so a notch cut across it has two walls a whole row apart and a
- * floor of no length at all - a crease, and a crease reads as rounded however deep
- * it is. So `roadRows()` lays four rows of its own either side of the two lips,
- * `CRATE_WALL` apart on each side, which puts the drop into eight centimetres of
- * arc and leaves a floor the width of the crate between them: eighty-four degrees
- * of wall, a floor of six hundred and seventy, and a box that fills it. **All three
- * of those meshes take the packed rows and not the samples** - ribbon, flank and
- * ground - because the ground's surface is a straight line between two samples it
- * was given, and a ground that eases down the notch over three quarters of a metre
- * puts a hillside over the bottom two thirds of the hole.
- */
-const CRATE_S = 0.62;                       // a cube crate: side, and height, and width
-const CRATE_X = 0.95;                       // the dish's length in design x: about the crate's own
-const CRATE_BACK = 2.6;                     // the crate's start centre, back from the near lip
-const CRATE_GAP = CRATE_S / 2 + 0.25;       // the snail's `s` to its own crate's centre
-const CRATE_LANE = 3.0;                     // clear road a crate needs in front of its dish
-const CRATE_HW = 3.5;                       // the half-width of the apron, and not the half-width of the county
-const CRATE_FLARE = 1.2;                    // metres either side of the shove over which the lane opens
-const CRATE_WALL = 0.04;                    // metres of arc either side of a lip: the wall is twice this
-
-
-const HOURS_PER_SECOND = 1 / 60;            // a minute of racing is an hour of the day: the clock a course is raced on
-const LEVEL_Y = 0;                          // the height a course runs at when it asks to run level
-const POOL_BANK = 5.2;                      // how far a pool's water reaches past the lane's own edge
-const POOL_SPREAD = 0.28;                   // and how much wider it gets for every metre of gap
-const POOL_BERM = 1.4;                      // and how far the sand keeps on past the water's edge
-const COND = [
-  { key: 'run',   name: 'footpath', attr: 'running',  base: BASE_RUN,   cls: 'run' },
-  { key: 'climb', name: 'wall',      attr: 'power',    base: BASE_CLIMB, cls: 'climb' },
-  { key: 'swim',  name: 'water',     attr: 'swimming', base: BASE_SWIM,  cls: 'swim' },
-  // A gap is only a gap while you are in the air over it. The bottom of one is
-  // ground like any other, and it is a separate state so a snail that missed
-  // the jump is walking on the floor of the chasm at walking pace - on its
-  // feet and on its running, not flying along it.
-  { key: 'fly',   name: 'gap',       attr: 'flying',   base: BASE_FLY,   cls: 'fly' },
-  { key: 'walk',  name: 'walking',   attr: 'running',  base: BASE_WALK,  cls: 'walk' },
-  // A crate is a wall you push through rather than over, and it is **appended**
-  // and not inserted: the index of every condition is load-bearing for the
-  // progress rail, the card's stroke list and the readout, and a sixth in the
-  // middle of this array moves all three without one of them saying so.
-  { key: 'push',  name: 'crate',     attr: 'power',    base: BASE_PUSH,  cls: 'push' },
-];
-const ATTRS = [
-  { key: 'running', name: 'running' },
-  // **Power, and not climbing.** It is the stat that gets a snail up a wall, and
-  // it is also the stat that shoves a crate across a hole - and a name that said
-  // `climbing` was a name that read as a description of the first of those two
-  // jobs and said nothing about the second. `EFFor` reads every key in this list
-  // out of a save without asking, so the rename is a save **version** and not a
-  // migration: see `load()`.
-  { key: 'power',    name: 'power' },
-  { key: 'swimming', name: 'swimming' },
-  { key: 'flying',   name: 'flying' },
-  { key: 'stamina',  name: 'stamina' },
-];
-/**
- * The things a course is made of. A `leap` is a cliff and a gap with nothing
- * in it: the far side is the floor of a chasm a long way down, so a snail
- * that does not make it is down there climbing back out, and it is taken at
- * height. A `water` is a pool - the same hole much smaller, with water in it,
- * a bank low enough to step off and a hop so low there is no flying over it -
- * so it is water you get through rather than a hole you fall into. A course
- * that lists only `leap` has no water on it at all, and one that lists
- * `water` has no chasms; that is what makes a course a swimming course or a
- * flying one. A course says which elements it has in the `pool` list in
- * races.json, and that list can name the same element twice for it to come
- * round more often.
- */
-const ELEMENTS = {
-  run:   { x: 12.0 },
-  climb: { x: 5.2 },
-  leap:  { x: 18.0, wet: false, gap: 1.00, lip: 1.00, chasm: [0.9, 1.3], back: 2.2, vy: 0.71, lipW: 0.9 },
-  water: { x: 15.0, wet: true, gap: 0.62, deep: 0.42, lip: 0.24, drop: 0.40, bank: 2.3, vy: 0.40, lipW: 0.95 },
-  // A flooded chasm, and the hardest thing on any course: a slope to run up,
-  // a cliff to launch off it, deep water at the bottom, and a wall on the far
-  // side. Fly far enough and you come down on that wall and climb it; come
-  // down short and you are swimming, and then you climb out of the water the
-  // same way - so the same wall is the prize at either end of the fall.
-  leapClimb: {
-    x: 20.0, wet: true, wall: true, runUp: 0.55,
-    gap: 1.05, deep: 2.2, lip: 3.0, drop: 2.6, back: 2.6, vy: 0.75,
-    lipW: 0.94,
-  },
-  // A **dish cut in the road for a crate to stand in**, and the only way over it
-  // is to shove the crate into the middle of it. It is a `leap` with two things
-  // turned off, and each of them is a thing a `leap` does for a different reason:
-  //
-  // - `noLip`: there is no launch, because nothing jumps a crate. The *ramp* is
-  //   skipped and the flat top is not - see the branch - and `lipX` ends up on
-  //   the road, which is the only height a crate can be shoved along.
-  // - `crate`: the span is `PUSH` rather than `WALK`, so the progress rail and
-  //   the card have a colour for it and a snail that ends up on the floor of one
-  //   moves at crate pace rather than walking pace.
-  //
-  // **And the dish's ends are cut and not eased**, which is the load-bearing half
-  // of it and is in the samples rather than in this declaration. The road on a
-  // course is sampled every 750 mm, so the shape of a notch is only the shape its
-  // samples carry, and a notch the planner eases over the first quarter of its
-  // length in each direction comes out as a trough: a cart could have stood in
-  // this one. **The whole of the drop is in the first sample of the dish and the
-  // whole of the rise in the last**, which is what a `leap` does with its chasm,
-  // and what comes out is a lip. It is not a `leapClimb`'s cliff and does not
-  // pretend to be: 2.6 m of water under that lip is what stands a face at seventy
-  // degrees, and a notch a snail is meant to walk a box across is half a metre of
-  // the same bargain. It is a crease and not a bowl, and the crate is its own
-  // size, so the box fills it and overhangs it rather than standing in a hollow
-  // with a trench round it.
-  pushCrate: {
-    x: 5.0, wet: false, crate: true, noLip: true, farRise: 0.15,
-    chasm: [0.50, 0.56],
-  },
-};
-// Each element needs the numbers it is built out of, and a leap needs no
-// depth and no water: it is a hole, not a pond. Say so at boot rather than
-// half way round the first lap.
-const NEEDS = {
-  run: [], climb: ['climb', 'climbRun'], leap: ['gap', 'lip'], water: ['gap', 'lip', 'deep'],
-  leapClimb: ['gap', 'lip', 'deep'],
-  // nothing: the gap is the element's own and the crate is put there by hand
-  pushCrate: [],
-};
-for (const c of CATS) {
-  const unknown = (c.pool || []).filter((k) => !ELEMENTS[k]);
-  const missing = (c.pool || []).filter((k) => (NEEDS[k] || []).some((f) => !Array.isArray(c[f])));
-  // every element a course names is dealt into the course at least once, so
-  // it needs room for all of them
-  const tooMany = Array.isArray(c.pool) && new Set(c.pool).size > c.feats;
-  if (!Array.isArray(c.pool) || !c.pool.length || unknown.length || missing.length || tooMany) {
-    document.getElementById('boot').textContent =
-      `races.json: "${c.id || '?'}" needs a pool of known elements` +
-      (unknown.length ? ` (unknown: ${[...new Set(unknown)].join(', ')})` : '') +
-      (missing.length ? `, and for the rest: ${[...new Set(missing)].map((k) => NEEDS[k].join('/')).join(', ')}` : '') +
-      (tooMany ? `, and at least ${new Set(c.pool).size} feats for the ${new Set(c.pool).size} different elements it names` : '') + '.';
-    throw new Error('bad course ' + c.id);
-  }
-}
-const STAT_MAX = 24;
-const STAT_MIN = 1;
-const GOLD_PER_FRUIT = 10;
-const START_GOLD = 50;
-const START_TRAIT = 5;                        // every trait a new snail begins on
-const freshSnail = () => ({ running: START_TRAIT, power: START_TRAIT, swimming: START_TRAIT, flying: START_TRAIT, stamina: START_TRAIT });
-const POINTS = [25, 20, 15, 10, 5, 3, 2, 1];              // 1st through 8th, and the gold they pay
-const FIELD = 8;                            // the player plus seven rivals
-const POOL_SIZE = 64;                       // the rivals are drawn from here
-const CLUB_SNAILS = 9;                      // ...and the bottom rung of it is this many club snails
-const CLUB_ATTR = 3;                        // three of everything, every one of them
-const ATTR_MAX = 16;                        // a rival's attributes run 1 to 32
-const RATING_PER_ATTR = 10;                  // so a total of 160 is a rating of 1280
-const START_RATING = 10;                    // where the player starts on the ladder
-const RATING_EASE = 0.25;                   // how much of the way to its target one race moves a rating
-const RATING_STEP = 15;                    // and the most it can move in a single race, either way
-const RATING_PER_WIN = 2;                  // and what a race's points are worth, which sets the top of the ladder
-const SURGE_MULT = 1.18;
-const SURGE_DRAIN = 11;
-const PASSIVE_DRAIN = 0.90;
-const TIRED_MULT = 0.25;                    // quarter speed on an empty bar
-const SWIM_Y = 0.18;                         // how deep a swimmer sits
-const REGEN = 6.0;
-const STEP = 0.75;                          // track sample spacing
-const START_S = 11.0;                      // the start line, measured in from the end
-
-// Everything that counts the season reads the roster out of seasons.json, so
-// a season can gain or lose a course without leaving a stale number behind.
-const seasonWord = (n) => ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][n] || String(n);
-
-/* ================================================================== *
- * The seasons, read out of seasons.json. The bands are allowed to overlap,
- * so a snail can be good enough for two seasons at once and pick either -
- * the ladder is a choice, not a queue. Everything about a season comes out
- * of its own entry, so a season can gain or lose a course, or move up the
- * ladder, without touching any code.
- * ================================================================== */
-const TIERS = SEASONS.map((s) => Object.assign({}, s, { hi: s.hi == null ? Infinity : s.hi }))
-  .sort((a, b) => a.lo - b.lo);
-const seenSeasonIds = new Set();
-for (const s of TIERS) {
-  const roster = s.races || [];
-  const bad = roster.concat(s.finale ? [s.finale] : []).filter((id) => !CAT_BY_ID[id]);
-  const badScale = s.scale != null && (typeof s.scale !== 'number' || !(s.scale > 0));
-  if (bad.length || !roster.length || badScale || typeof s.lo !== 'number' || !(s.hi > s.lo)) {
-    document.getElementById('boot').textContent = `seasons.json: "${s.id || '?'}" needs a rating band, a positive scale, and races that exist in races.json${bad.length ? ` (unknown: ${bad.join(', ')})` : ''}.`;
-    throw new Error('bad season ' + s.id);
-  }
-  // two seasons with the same id would leave one of them unreachable: the
-  // picker draws a season's seven by its id, and the last one would win
-  if (seenSeasonIds.has(s.id)) {
-    document.getElementById('boot').textContent = `seasons.json: two seasons are called "${s.id}". Give them each their own id.`;
-    throw new Error('duplicate season id ' + s.id);
-  }
-  seenSeasonIds.add(s.id);
-}
-const TIER_BY_ID = Object.fromEntries(TIERS.map((s) => [s.id, s]));
-/** The seasons a rating is good enough for. Overlaps mean more than one. */
-function eligibleSeasons(rating) {
-  return TIERS.filter((t) => rating >= t.lo && rating < t.hi);
-}
-/** Can this snail go in? The bottom rung is always open, so nobody is stuck. */
-function canEnter(id, rating) {
-  const t = seasonDef(id);
-  return rating >= t.lo && rating < t.hi;
-}
-/** The best season a rating earns, for a save or a new game that picks for you. */
-function seasonFor(rating) {
-  const ok = eligibleSeasons(rating);
-  return ok.length ? ok[ok.length - 1] : TIERS[0];
-}
-/** The season you are racing. */
-function seasonDef(id) { return TIER_BY_ID[id] || TIERS[0]; }
-/** How long this season's courses are, as a multiple of races.json's own. */
-function seasonScale(id) {
-  const s = seasonDef(id);
-  return typeof s.scale === 'number' && s.scale > 0 ? s.scale : 1;
-}
-/** The courses you get to pick the order of. */
-function seasonPicks(id) { return seasonDef(id).races.slice(); }
-/** The one that closes the season, whatever order you pick. */
-function seasonFinaleId(id) { return seasonDef(id).finale || null; }
-/** Every course in the season, in running order. */
-function seasonRoster(id) {
-  const f = seasonFinaleId(id);
-  return f ? seasonPicks(id).concat([f]) : seasonPicks(id);
-}
+/** How many races the season runs, and the one function of the season ladder
+ *  that reads `state` - so it did not go with the ladder. All three of its
+ *  callers are labels on a HUD element, and `state` is the race's, and a leaf
+ *  module that imports the thing nine modules up the graph is not a leaf. */
 const seasonLength = (id) => seasonRoster(id === undefined ? state.tier : id).length;
-/**
- * Both scales read off the same curve. A player's traits run 1 to STAT_MAX and
- * a rival's attributes 1 to ATTR_MAX, but the ends of each range are the same
- * snail, so a maxed player is exactly as quick as a maxed rival and there is
- * no reading of the sim that quietly favours one over the other.
- */
-function effFor(v, lo, hi) { return 1 + ((v - lo) * (STAT_MAX - 1)) / (hi - 1); }
-function effTraits(sn) {
-  const lo = sn.player ? STAT_MIN : 1, hi = sn.player ? STAT_MAX : ATTR_MAX;
-  const src = sn.player ? sn.stats : sn.attrs;
-  const out = {};
-  for (const a of ATTRS) out[a.key] = effFor(src[a.key], lo, hi);
-  return out;
-}
-
-/* ================================================================== *
- * Random + noise. Everything is seeded, so a track looks the same
- * every time it is rebuilt and the season card can promise a course
- * before the player ever sees it.
- * ================================================================== */
-function makeRng(seed) {
-  let s = (seed | 0) || 1;
-  return function () {
-    s ^= s << 13; s |= 0; s ^= s >>> 17; s ^= s << 5; s |= 0;
-    return ((s >>> 0) % 100000) / 100000;
-  };
-}
-const rand = makeRng(20260926);
-function hash2(x, y) {
-  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-  return n - Math.floor(n);
-}
-function vnoise(x, y) {
-  const xi = Math.floor(x), yi = Math.floor(y);
-  const xf = x - xi, yf = y - yi;
-  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
-  const a = hash2(xi, yi), b = hash2(xi + 1, yi);
-  const c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
-  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
-}
-function fbm(x, y, oct = 3) {
-  let s = 0, a = 0.5, f = 1, norm = 0;
-  for (let i = 0; i < oct; i++) { s += a * vnoise(x * f, y * f); norm += a; a *= 0.5; f *= 2.05; }
-  return s / norm;
-}
-// the rolling countryside the lane is cut through
-function hills(x, z) {
-  // the two coarse octaves carry the shape; the fine one is kept small, or
-  // the ground beside the lane breaks into hard little facets
-  let h = 6.2 * (fbm(x * 0.0085, z * 0.0085, 3) - 0.5);
-  h += 2.2 * (fbm(x * 0.026, z * 0.026, 2) - 0.5);
-  h += 0.32 * (fbm(x * 0.105, z * 0.105, 2) - 0.5);
-  h += Math.max(0, Math.abs(z) - 26) * 0.034;
-  return h;
-}
-
-/* ================================================================== *
- * Geometry helpers, borrowed from the horse
- * ================================================================== */
-/** Bake primitives into one vertex-coloured geometry (one draw call). */
-function bake(parts) {
-  let vc = 0, ic = 0;
-  for (const p of parts) {
-    vc += p.g.attributes.position.count;
-    ic += p.g.index ? p.g.index.count : p.g.attributes.position.count;
-  }
-  const pos = new Float32Array(vc * 3), nor = new Float32Array(vc * 3), col = new Float32Array(vc * 3);
-  const idx = new Uint16Array(ic);
-  const v = new THREE.Vector3(), nm = new THREE.Matrix3();
-  let vo = 0, io = 0;
-  for (const p of parts) {
-    const g = p.g, n = g.attributes.position.count;
-    nm.getNormalMatrix(p.m);
-    for (let i = 0; i < n; i++) {
-      v.fromBufferAttribute(g.attributes.position, i).applyMatrix4(p.m);
-      pos.set([v.x, v.y, v.z], (vo + i) * 3);
-      v.fromBufferAttribute(g.attributes.normal, i).applyMatrix3(nm).normalize();
-      nor.set([v.x, v.y, v.z], (vo + i) * 3);
-      col.set(p.c, (vo + i) * 3);
-    }
-    if (g.index) { for (let i = 0; i < g.index.count; i++) idx[io + i] = g.index.getX(i) + vo; io += g.index.count; }
-    else { for (let i = 0; i < n; i++) idx[io + i] = vo + i; io += n; }
-    vo += n;
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  g.setIndex(new THREE.BufferAttribute(idx, 1));
-  return g;
-}
-const M = (x, y, z, sx = 1, sy = 1, sz = 1, rz = 0) =>
-  new THREE.Matrix4().compose(
-    new THREE.Vector3(x, y, z),
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, rz)),
-    new THREE.Vector3(sx, sy, sz)
-  );
-function colored(geo, fn) {
-  const pos = geo.attributes.position;
-  const col = new Float32Array(pos.count * 3);
-  const c = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    c.setRGB(1, 1, 1);
-    fn(pos.getX(i), pos.getY(i), pos.getZ(i), c, i);
-    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  return geo;
-}
-
 /* ================================================================== *
  * Track planning. A course is a list of sections laid end to end; the
  * section list is turned into control points, the control points into a
@@ -3092,15 +2644,11 @@ function syncPasses(force) {
 
 /**
  * **The Light step is a half-resolution G-buffer**, so its AO pass draws a
- * quarter of the pixels and its denoise reads a quarter of them. The scene render
- * behind the buffer is the whole county - every tuft and every instanced prop - so
- * this is the single largest saving available on the row and the reason level 2 is
- * not just a smaller radius on level 3. It is also, visibly, softer - which is the
- * honest trade and the reason the level is called Light and not Cheap.
- *
- * **The buffer is the county's own now** (`makeGBuffer()`), so this function sizes
- * one target rather than two, and `GTAOPass` is told to read it rather than to
- * render one.
+ * quarter of the pixels and its denoise reads a quarter of them. `_renderGBuffer`
+ * re-renders the whole scene with a normal material every frame, so this is the
+ * single largest saving available on the row and the reason level 2 is not just a
+ * smaller radius on level 3. It is also, visibly, softer - which is the honest
+ * trade and the reason the level is called Light and not Cheap.
  *
  * **The ladder decides, not the pass.** The two disagree for the length of one
  * `applyGraphics()`, because the pass is dropped in `syncComposer()` at the end of
@@ -3116,13 +2664,26 @@ function sizeGtao() {
   const half = !!a.half;
   gtaoPass.setSize(half ? Math.max(1, Math.round(w / 2)) : w,
     half ? Math.max(1, Math.round(h / 2)) : h);
-  // **The shared buffer is sized here and not in a function of its own**, because
-  // `a.half` is the one answer to "how many pixels is a G-buffer" and this is now
-  // the one G-buffer. The bounce reads it, the occlusion reads it, and both are
-  // standing at the size this line wrote; a resize that moved one and not the other
-  // is a bounce ray marched against a depth buffer of the wrong size, which is not a
-  // crash but a bounce landing on the wrong piece of the county.
-  if (gBuffer) gBuffer.setGBufferSize(half ? Math.max(1, Math.round(w / 2)) : w,
+}
+
+/**
+ * The bounce's own buffer, and it is **the same `a.half` the G-buffer just read**
+ * rather than a second decision about resolution. Two answers to the same question
+ * would be two that could disagree, and the failure is not a crash: a bounce ray
+ * marched against a depth buffer of the wrong size is a bounce that lands on the
+ * wrong piece of the county, and the picture comes out plausible.
+ *
+ * The same reason it asks the ladder and not the pass as `sizeGtao()` does: this
+ * is reached for the length of one `applyGraphics()` with a pass that is about to
+ * be dropped still standing and a row that says there is nothing to size.
+ */
+function sizeGtaoGi() {
+  if (!gtaoGiPass) return;
+  const a = gfxSsao();
+  if (!a) return;
+  const [w, h] = scenePixels();
+  const half = !!a.half;
+  gtaoGiPass.setGBufferSize(half ? Math.max(1, Math.round(w / 2)) : w,
     half ? Math.max(1, Math.round(h / 2)) : h);
 }
 
@@ -3180,20 +2741,21 @@ function tuneBloom() {
  * not a soft halo but a dark rectangle punched through the picture, square,
  * camera-facing, and moving with the lamp it belongs to.
  *
- * **Scoped to the scene the pass is about to render**, and the county has two of
- * everything, a race and a stable, each with its own dome and its own hills. Hiding
- * both scenes' worth left whichever one the buffer was *not* being built from
+ * **Scoped to the scene the pass is about to render.** `overrideVisibility()`
+ * walks `this.scene` and `restoreVisibility()` walks the same one, so anything
+ * hidden outside it is never put back - and the county has two of everything,
+ * a race and a stable, each with its own dome and its own hills. Hiding both
+ * scenes' worth left whichever one the pass was *not* building its buffer from
  * switched off for good, and the stable came up with no sky at all.
  */
 function hideFromGBuffer(sc, cache) {
   if (!sc) return;
   sc.traverse((o) => {
     // **The record is optional and is what makes this function usable twice.**
-    // `GTAOPass` used to walk in here with no map and nothing to put back, keeping
-    // its own visibility cache for `restoreVisibility()` to walk; it no longer walks
-    // in here at all, because it no longer renders the buffer - see `makeGBuffer()`,
-    // which is the one caller now and brings its own map because there is nobody
-    // else's to fill.
+    // `GTAOPass` has its own cache and its own `restoreVisibility()`, so it walks
+    // in here with no map and nothing to put back; the bounce's albedo render
+    // keeps its own, because it is not a `GTAOPass` and the map `overrideVisibility`
+    // fills is emptied before the frame loop reaches it.
     if (cache) cache.set(o, o.visible);
     if (!o.visible || o.isPoints || o.isLine) return;
     const m = o.material;
@@ -3209,12 +2771,13 @@ function hideFromGBuffer(sc, cache) {
 }
 
 /**
- * The other half, and **the reason it is a function and not a line repeated at the
- * call site**: the county's own map is emptied by the restore that walks it, and a
- * caller that hid a piece of the dome and never put it back would take the sky with
- * it. A sky that came back on the next pass rather than the next frame is the bug
- * this pair was written to stop, and there is now exactly one caller - which is the
- * better reason still, because one caller cannot forget to pair them.
+ * The other half of the bounce's pair, and **the reason it is a function and not a
+ * line repeated at the call site**: `GTAOPass` restores through
+ * `restoreVisibility()`, which walks the map *its* `overrideVisibility()` filled,
+ * and that map is cleared before the bounce's turn comes round. A bounce that hid
+ * a piece of the dome and never put it back would take the sky with it, and a sky
+ * that came back on the next pass rather than the next frame is the county's own
+ * `restoreVisibility()` bug all over again.
  */
 function restoreGBuffer(sc, cache) {
   if (!sc) return;
@@ -3225,244 +2788,19 @@ function restoreGBuffer(sc, cache) {
   cache.clear();
 }
 
-/* ------------------------------------------------------------------ *
- * One G-buffer for both halves of the chain: **the colour a surface has in
- * attachment 0 and the view normal in attachment 1, off a single scene render.**
- *
- * **It is a `WebGLMultipleRenderTargets` and not a `WebGLRenderTarget`, and that
- * is the whole of the saving.** r160 has no MRT on the render target itself - the
- * `count` option arrived in r162 and `WebGLMultipleRenderTargets` was removed in
- * r165 - but r160 *does* have the class, and `WebGLState.drawBuffers()` honours
- * `isWebGLMultipleRenderTargets` by writing one `COLOR_ATTACHMENT0 + i` per entry
- * of `texture`. So the two attachments are two `drawBuffers` in one draw, rather
- * than two draws of the same scene: the bounce's albedo render is **gone**, not
- * cheaper, and what it bought back is a full scene traversal - the tufts, the
- * instanced props, the rock walls, all of it - that used to happen twice.
- *
- * **The alternative was a second material and a second pass, which is what it was
- * before**: `MeshBasicMaterial` for the colour and `MeshNormalMaterial` for the
- * normal, a `GtaoGiPass` between them. One material that writes both is smaller
- * than two materials that write one each, and it cannot disagree with itself about
- * which pieces are in the county - `hideFromGBuffer()` runs once and the two
- * attachments cannot be out of step, which is the whole reason the clear colour
- * below is a single answer rather than two.
- *
- * **Both attachments are half-float**, and the colour one did not used to be: a
- * colour buffer at `UnsignedByteType` puts the bounce in steps of 1/255 and the
- * bounce is a *sum* of eight directions of already-dim colour, so the step shows.
- * GTAO's own buffer has been half-float from the start, and matching it means the
- * two attachments also share one format, which is a requirement of MRT - so this
- * is the format the colour gets whether or not it asked.
- *
- * **The normal is written exactly the way `MeshNormalMaterial` writes it** -
- * `packNormalToRGB` into `location = 1` - because `GTAOPass` reads it back with
- * `unpackRGBToNormal` under `NORMAL_VECTOR_TYPE == 1`, and the bounce reads it
- * the same way. That is a compatibility requirement, not a choice: a differently
- * packed normal is not a slightly wrong normal here, it is a surface leaning
- * somewhere else and a bounce marching off it.
- *
- * **GLSL3 and two locations, because that is the only way to name two outputs.**
- * three's prefix declares `pc_fragColor` at location 0 for a GLSL1-style material
- * and nothing at all for a `GLSL3` one (`WebGLProgram.js:873-874`), so the second
- * output has to be written with an explicit `layout(location = 1)` in the shader
- * itself. The material therefore declares **both**, which is why location 0 is
- * named here as well rather than left to the prefix.
- *
- * **The vertex colours are read straight out of the attributes** rather than
- * through `color_fragment`, because this material has no `diffuseColor` for them
- * to modify: `vColor` is accumulated here exactly as `<color_vertex>` does
- * (`USE_COLOR`, then `USE_INSTANCING_COLOR`), and a mesh carrying neither is white
- * - which is what the `MeshBasicMaterial` this replaces did with `color: 0xffffff`.
- * ------------------------------------------------------------------ */
-const GBUFFER_VERT = /* glsl */`
-  #include <common>
-  varying vec3 vGfxColor;
-  varying vec3 vGfxNormal;
-  void main() {
-    // **The same four includes in the order three's own basic and normal materials
-    // use them**, so instancing, instance colour, morph and skin come off the same
-    // chunks rather than being re-spelled here.
-    #include <beginnormal_vertex>
-    #include <defaultnormal_vertex>
-    #include <begin_vertex>
-    #include <project_vertex>
-    #ifdef USE_COLOR
-      vGfxColor = color;
-    #else
-      vGfxColor = vec3( 1.0 );
-    #endif
-    #ifdef USE_INSTANCING_COLOR
-      vGfxColor *= instanceColor;
-    #endif
-    // **View space, and not world**: both readers ask for view space - the
-    // occlusion unpacks it straight out of the attachment and hands it to the
-    // bounce's own frame, and normalMatrix is the matrix that puts it there.
-    vGfxNormal = normalize( transformedNormal );
-  }
-`;
-
-const GBUFFER_FRAG = /* glsl */`
-  precision highp float;
-  #include <packing>
-  layout(location = 0) out highp vec4 gGfxAlbedo;
-  layout(location = 1) out highp vec4 gGfxNormal;
-  varying vec3 vGfxColor;
-  varying vec3 vGfxNormal;
-  void main() {
-    gGfxAlbedo = vec4( vGfxColor, 1.0 );
-    gGfxNormal = vec4( packNormalToRGB( vGfxNormal ), 1.0 );
-  }
-`;
-
-/**
- * The shared buffer, made once and given back by `dropGBuffer()`.
- *
- * **The depth texture is attached to the MRT and not to a target of its own**,
- * which is the second half of why this is one render: the bounce reads the same
- * depth the occlusion reads, at the same size, with the same `DepthStencilFormat`
- * and the same `UnsignedInt248Type`, so `perspectiveDepthToViewZ()` answers the
- * same in both passes by construction.
- *
- * **`setGBuffer()` is called by `syncPasses()` and not from here**, because r160's
- * `setGBuffer` reads `this.normalRenderTarget.depthTexture` on its way out - a
- * field its *external* branch never creates - so calling it on a pass that was not
- * first constructed without a `depthTexture` throws. See `syncPasses()`.
- */
-function makeGBuffer() {
-  const { Pass } = GFX_ADDONS;
-  const depth = new THREE.DepthTexture(1, 1);
-  depth.format = THREE.DepthStencilFormat;
-  depth.type = THREE.UnsignedInt248Type;
-  const target = new THREE.WebGLMultipleRenderTargets(1, 1, 2, {
-    minFilter: THREE.NearestFilter,
-    magFilter: THREE.NearestFilter,
-    type: THREE.HalfFloatType,
-    depthTexture: depth,
-  });
-  target.texture[0].name = 'GBuffer.albedo';
-  target.texture[1].name = 'GBuffer.normal';
-  const material = new THREE.ShaderMaterial({
-    uniforms: {},
-    vertexShader: GBUFFER_VERT,
-    fragmentShader: GBUFFER_FRAG,
-    glslVersion: THREE.GLSL3,
-    side: THREE.FrontSide,
-    fog: false,
-  });
-  // **The wind, and now there is only one place to put it.** Two G-buffers meant
-  // two materials to keep in step; a tree that leaned in the beauty pass and in
-  // one buffer and stood still in the other was a ghost of its own canopy hanging
-  // under it, 22 cm of the county's own shape doing nothing. One buffer has one
-  // material, so the two cannot disagree - which is `gtaoWind()`'s whole argument
-  // for being per-material, made unnecessary by there being one.
-  gtaoWind(material);
-  const vis = new Map();
-  const clear = new THREE.Color();
-
-  // **A `Pass`, and `needsSwap` false.** It has nothing to composite and nothing to
-  // hand on, so `EffectComposer` must not swap its buffers over it - a pass that
-  // swapped would leave the frame in the other one of the two and every later pass
-  // would read a target nobody wrote.
-  class GBufferPass extends Pass {
-    constructor() {
-      super();
-      this.needsSwap = false;
-      // **The scene is a field and not the module's `scene`**, for the reason the
-      // frame loop's three lines give: the county has two of everything and which
-      // one is up changes with the mode. The loop writes this every frame beside
-      // `renderPass.scene` and `gtaoPass.scene`; a buffer built from the county
-      // while the occlusion marched the stable's depth is an irradiance estimate
-      // of a place nobody is standing, and it reads as a colour cast rather than
-      // as an error.
-      this.scene = scene;
-      this.target = target;
-      this.material = material;
-      this.vis = vis;
-    }
-    /**
-     * **A no-op, and not an omission.** The one number that decides this buffer's
-     * size is `a.half`, and `sizeGtao()` is what reads it - the same `setSize()` the
-     * occlusion's own targets are sized by, from the same answer. A `setSize()`
-     * here would be a second answer to the same question, and the two would be
-     * right on different frames.
-     */
-    setSize() {}
-    setGBufferSize(w, h) { target.setSize(Math.max(1, w), Math.max(1, h)); }
-    /**
-     * The one scene render both halves read, and it is **not** inside either pass.
-     *
-     * `GTAOPass` runs before `GtaoGiPass` in the chain, so a buffer filled inside
-     * the bounce would hand the occlusion the *previous* frame's normals and depth
-     * - an AO a frame behind the camera, which reads as a lag nobody can name. So
-     * this is its own `Pass`, ahead of both, and `syncPasses()` owns where it sits.
-     *
-     * **The signature is `EffectComposer`'s, not this pass's**: it calls
-     * `render( renderer, writeBuffer, readBuffer, deltaTime, maskActive )`, so the
-     * first argument is the renderer and the second is a *buffer*. Naming the
-     * parameters `scene, camera` reads as a private entry point and is a lie that
-     * costs the whole frame - the buffer is handed to `renderer.render()` as a
-     * camera and every draw is refused. Nothing is passed in: `renderer` is the
-     * module's and so is `camera`, exactly as the beauty path calls it.
-     */
-    render() {
-      hideFromGBuffer(this.scene, vis);
-      const prevAuto = renderer.autoClear;
-      const prevAlpha = renderer.getClearAlpha();
-      renderer.getClearColor(clear);
-      this.scene.overrideMaterial = material;
-      renderer.setRenderTarget(target);
-      // **One clear for two attachments, and it is GTAO's own sky colour.** That
-      // pass cleared its buffer to `0x7777ff`, a mid blue `unpackRGBToNormal`
-      // reads as a normal pointing at the camera, and that is the answer its shader
-      // sees on a pixel with no geometry - so it is kept byte for byte. The colour
-      // attachment takes the same clear and nobody reads it: both passes gate on
-      // depth, and a pixel the depth test did not write is a pixel the bounce
-      // returns from before it samples anything.
-      renderer.setClearColor(0x7777ff, 1.0);
-      // **`autoClear` on rather than a `clear()` of our own**, so the depth texture
-      // is cleared with the colour in the one call - the bounce and the occlusion
-      // both read that depth, and a stale one is an AO over last frame's county.
-      renderer.autoClear = true;
-      renderer.render(this.scene, camera);
-      renderer.autoClear = prevAuto;
-      renderer.setClearColor(clear);
-      renderer.setClearAlpha(prevAlpha);
-      this.scene.overrideMaterial = null;
-      restoreGBuffer(this.scene, vis);
-    }
-    dispose() {
-      target.dispose();
-      material.dispose();
-      vis.clear();
-    }
-  }
-  const pass = new GBufferPass();
-  pass.albedo = target.texture[0];
-  pass.normal = target.texture[1];
-  pass.depth = target.depthTexture;
-  return pass;
-}
-
-/** Handed back with the rest of the chain's hardware, in `dropComposer()`. */
-function dropGBuffer() {
-  if (!gBuffer) return;
-  gBuffer.dispose();
-  gBuffer = null;
-}
 
 /* ------------------------------------------------------------------ *
- * The bounce: a diffuse-irradiance estimate off **the same G-buffer the
- * occlusion reads**, off the colour attachment rather than a buffer of
- * its own.
+ * The bounce: a diffuse-irradiance estimate off the occlusion pass's own
+ * normal-and-depth buffer, and one extra scene render for a colour to sample
+ * with it.
  *
- * **It used to cost a second scene render, and it no longer does.** r160's
- * `GTAOPass` already rendered the county into a half-float view-normal buffer
- * every frame; this pass rendered it *again* through a second override material to
- * get a colour to sample, which was the same traversal of the same six thousand
- * tufts and the same instanced props twice a frame. Both are now one
- * `WebGLMultipleRenderTargets` drawn once - colour in attachment 0, normal in
- * attachment 1 - and `GTAOPass` is told to read it rather than to build one
- * (`setGBuffer()`, in `syncPasses()`). See `makeGBuffer()`.
+ * **It reads `GTAOPass`'s buffer rather than building a G-buffer of its own,
+ * and that is the whole of the design.** r160's `GTAOPass` already renders the
+ * scene into a half-float view-normal target with a depth texture attached, one
+ * `MeshNormalMaterial` and one extra draw, every frame - and the county's
+ * `sizeGtao()` already decides how many pixels that is. A pass that wanted its
+ * own would be a second scene render of its own before it could march a single
+ * step, and the two buffers would be two answers to the same question.
  *
  * What r160's pass does *not* give us is a place to hang a second effect off: the
  * GTAO compute reads no albedo, its hemisphere sampling and reconstruction live
@@ -3671,13 +3009,23 @@ const GI_VERT = /* glsl */`
  */
 function newGtaoGiPass(gtao, cam) {
   const { Pass, FullScreenQuad } = GFX_ADDONS;
-  // **No target and no override material of its own any more**, and both are the
-  // cost this arrangement exists to remove. It used to own an `RGBA8` colour
-  // buffer and draw the whole scene into it a second time through a
-  // `MeshBasicMaterial` reading the vertex colours; that colour is attachment 0 of
-  // the shared G-buffer now, written by the same draw that wrote the normals, so the
-  // two buffers cannot be out of step about which pieces are in the county - and a
-  // second scene traversal of six thousand tufts and every instanced prop is gone.
+  const target = new THREE.WebGLRenderTarget(1, 1);
+  target.texture.name = 'GtaoGi.albedo';
+  // **A fresh basic material, and not `gtaoPass.normalMaterial`**: that one is a
+  // `MeshNormalMaterial` and its whole output is a direction. This one reads the
+  // vertex colours and stops, and it opts out of the tone map for the same reason
+  // `matSky` does - the buffer is a light source to be read by a later pass, and
+  // a second ACES on it is a second curve through the county's colours.
+  const albedo = new THREE.MeshBasicMaterial({
+    color: 0xffffff, vertexColors: true, toneMapped: false, fog: false,
+  });
+  // **The wind, again, on this one too** - see `gtaoWind()`. The injection is per
+  // material and this is a different material from the one the occlusion buffer is
+  // built out of, so `gtaoWind(gtaoPass.normalMaterial)` covers none of it. Without
+  // this line a tree leans in the beauty pass, leans in the occlusion buffer and
+  // stands still in the buffer the bounce reads, which is a ghost of its own
+  // colour hanging under it.
+  gtaoWind(albedo);
   const material = new THREE.ShaderMaterial({
     uniforms: {
       tDiffuse: { value: null }, tAlbedo: { value: null },
@@ -3699,24 +3047,29 @@ function newGtaoGiPass(gtao, cam) {
     constructor() {
       super();
       this.needsSwap = true;
+      this.scene = scene;
       this.camera = cam;
       this.gtao = gtao;
-      this.gbuffer = gBuffer;
+      this.target = target;
+      this.albedo = albedo;
       this.material = material;
       this.fsQuad = new FullScreenQuad(material);
       this.strength = 0;
+      this._vis = new Map();
+      this._clear = new THREE.Color();
     }
     /**
      * The composer's own resize is a no-op here **by design and not by
      * omission**: the county draws this pass's inputs at the *G-buffer's* size and
      * not at the chain's, so the one number that decides it is `a.half` and
-     * `sizeGtao()` is what reads it now - it sizes the shared buffer this pass
-     * samples. A `setSize()` that resized anything here would be a second answer to
-     * the same question, and the two would be right on different frames.
+     * `sizeGtaoGi()` is the only thing that reads it. A `setSize()` that resized
+     * the target would be a second answer to the same question, and the two would
+     * be right on different frames.
      */
     setSize() {}
+    setGBufferSize(w, h) { this.target.setSize(Math.max(1, w), Math.max(1, h)); }
     render(renderer, writeBuffer, readBuffer) {
-      if (this.strength <= 0 || !this.gtao || !this.gbuffer) {
+      if (this.strength <= 0 || !this.gtao) {
         // **A pass with nothing to add still has to pass the frame along**, and
         // the cheap way to do that is not to be in the chain at all - which is why
         // `syncPasses()` drops this one on the same breath it finds `gi` at zero.
@@ -3729,18 +3082,33 @@ function newGtaoGiPass(gtao, cam) {
         this.fsQuad.render(renderer);
         return;
       }
-      // **Three textures off one buffer, and no render of its own.** The colour is
-      // attachment 0, the normal attachment 1, and the depth is the texture attached
-      // to that same target - all three written by the one scene draw the occlusion
-      // pass reads too. The clear colour, the half-float format and the
-      // `packNormalToRGB` encoding are all inherited rather than re-chosen, which is
-      // what makes this a read of the occlusion's own buffer rather than a second
-      // buffer that happens to agree with it.
+      // The colour to bounce with, off the same scene and behind the same
+      // traversal the occlusion's G-buffer is built behind, so the two buffers
+      // agree about what is a piece of county and what is a sky.
+      const sc = this.scene;
+      hideFromGBuffer(sc, this._vis);
+      const prevOverride = sc.overrideMaterial;
+      const prevAuto = renderer.autoClear;
+      const prevAlpha = renderer.getClearAlpha();
+      renderer.getClearColor(this._clear);
+      sc.overrideMaterial = this.albedo;
+      renderer.setRenderTarget(this.target);
+      // `autoClear` on rather than a `clear()` of our own, because the colour it
+      // leaves is never read: a pixel the G-buffer has geometry in is a pixel this
+      // render drew, since both are the same geometry behind the same test.
+      renderer.autoClear = true;
+      renderer.render(sc, this.camera);
+      renderer.autoClear = prevAuto;
+      renderer.setClearColor(this._clear);
+      renderer.setClearAlpha(prevAlpha);
+      sc.overrideMaterial = prevOverride;
+      restoreGBuffer(sc, this._vis);
+
       const u = this.material.uniforms;
       u.tDiffuse.value = readBuffer.texture;
-      u.tAlbedo.value = this.gbuffer.albedo;
-      u.tNormal.value = this.gbuffer.normal;
-      u.tDepth.value = this.gbuffer.depth;
+      u.tAlbedo.value = this.target.texture;
+      u.tNormal.value = this.gtao.normalRenderTarget.texture;
+      u.tDepth.value = this.gtao.depthTexture;
       u.uGi.value = this.strength;
       u.cameraNear.value = this.camera.near;
       u.cameraFar.value = this.camera.far;
@@ -3752,6 +3120,8 @@ function newGtaoGiPass(gtao, cam) {
       this.fsQuad.render(renderer);
     }
     dispose() {
+      this.target.dispose();
+      this.albedo.dispose();
       this.material.dispose();
       this.fsQuad.dispose();
     }
