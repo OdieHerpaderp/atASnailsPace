@@ -81,7 +81,16 @@ function owns(src) {
   // the brace tells the two apart - a call is followed by `)` and then `.`, a
   // method by `)` and then `{` - and the brace is what makes it worth knowing
   // about.
-  for (const m of bare.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) out.add(m[1]);
+  for (const m of bare.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/gm)) {
+    out.add(m[1]);
+    // and its parameters, which is the other half: `domeToneFix(c, chainUp)` has a
+    // `chainUp` of its own, and a parameter is not a read of anybody else's.
+    for (const q of m[2].split(',')) {
+      const n = q.split('=')[0].trim().replace(/^\.\.\./, '').replace(/[{}]/g, '');
+      if (/^[A-Za-z_$][\w$]*$/.test(n)) out.add(n);
+    }
+  }
+  for (const m of bare.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*\(/gm)) out.add(m[1]);
   return out;
 }
 

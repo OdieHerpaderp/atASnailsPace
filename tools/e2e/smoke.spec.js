@@ -28,6 +28,29 @@ test('the county boots, the boot screen goes, and the surface is the one the bas
   expect(await page.evaluate(() => Object.keys(window.__snail).sort())).toEqual(BASELINE.surface);
 });
 
+test('the stable is what the first frame draws, and not the county', async ({ page }) => {
+  const { errors } = await boot(page);
+  // **This is the one the registry's empty fields could not fail loudly.** The
+  // frame loop asks `world.renderScene()` which scene it is about, and the
+  // answer is a predicate over `world.stage` - so a registry whose `stage` was
+  // never written answers "not the stable" and draws the county's scene
+  // instead: an empty stage, no snail, no plinth, and **no error anywhere**. The
+  // first frame came to 32 draw calls and 2,750 triangles where it should be 68
+  // and a whole stable, and the texture count was five against twenty-three.
+  //
+  // So the numbers are pinned, and the triangle count is the one that matters:
+  // a blank scene is not a smaller scene, it is the wrong scene.
+  const first = await page.evaluate(async () => {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const i = window.__snail.info();
+    return { calls: i.calls, tris: i.tris, targets: i.targets, geometries: i.geometries };
+  });
+  expect(first.calls, 'draw calls on the first frame of the stable').toBeGreaterThan(60);
+  expect(first.tris, 'triangles on the first frame of the stable').toBeGreaterThan(20000);
+  expect(first.targets, 'the stable\'s own textures are uploaded').toBe(BASELINE.info.targets);
+  noErrors(errors);
+});
+
 test('a course builds, draws, and leaves no program broken and no gl error', async ({ page }) => {
   const { errors } = await boot(page);
   // the tallest course there is: four pools, five crates, the whole spread of

@@ -33,25 +33,59 @@ import { THREE, TAU, clamp, lerp } from './core.js';
 
 /**
  * Where the county's scenes are, for the code that needs them and does not own
- * them. **Filled at module scope by `race.js` and `stage.js`, read by `post.js`
- * and by the frame loop.**
+ * them. **Filled at module scope by `surfaces.js`, `race.js` and `stage.js`, read
+ * by `post.js`, `scenery.js` and the frame loop.**
  *
- * `renderScene()` is a method rather than a field because a screen that is not
- * up has no scene to name and a stale one is worse than none: the frame loop
- * draws whatever it returns, and a dropped course left in it is a course that
- * keeps being drawn. `mode` is not consulted, because `mode` is the frame loop's
- * business and this file is upstream of it - and the thing that decides whether
- * the stable is up is whether the stable is visible, which is the same answer
- * without the ordering.
+ * It is a registry rather than an import of each one because `race.js` and
+ * `stage.js` import *this* module for the fog and the ladder, and three modules
+ * that need each other's data is a cycle; a registry both ends can write is the
+ * shape that is not. Nothing waits on it being filled, because `app.js` imports
+ * every module before its own body runs.
+ *
+ * **`env` and `stageEnv` are here rather than only `scene`, and that is because
+ * the post chain reads the light out of them** - `refreshEnvironment()` hangs a
+ * pre-filter on both, `updateTimeOfDay()` sets the sun's colour on both, and
+ * `applySky()` swaps both domes' geometry - and a module upstream of the two
+ * that build them has to be handed them.
+ *
+ * **`shadowRoots` and `restage` are functions and not lists**, because every one
+ * of the things behind them changes with the race: the course's group is built
+ * per course and the field is eight snails standing on it. A list filled once at
+ * module scope is a list of last race's meshes, and the shadows row would then
+ * stamp a course that is no longer in the scene - which is silent, because
+ * stamping a missing mesh does nothing at all.
+ *
+ * `renderScene()` asks `modeOf()` because the discriminator **is** the mode, and
+ * it was written here on the belief that `stage.visible` said the same thing. It
+ * does not: `stage` is `{group, snail, pool, ...}` and has no `visible` of its
+ * own, so the predicate was always false and every frame drew the **county's**
+ * scene - an empty scene, on the stable, with no error anywhere: 32 draw calls
+ * and 2,750 triangles where there should be 68 and a plinth. The stable group is
+ * in the stable scene permanently and the *scene* is what switches, so the mode
+ * is the only thing that knows, and the mode is the frame loop's.
  */
 export const world = {
   scene: null,
   stageScene: null,
   stage: null,
+  env: null,
+  stageEnv: null,
   camera: null,
   water: [],
+  /** Put down again at the density the rows now say. Filled by `stage.js`. */
+  restage: () => {},
+  /** The roots `applyShadows()` walks. Filled by `race.js`. */
+  shadowRoots: () => [],
+  /** The field's eight, for the same walk. Filled by `race.js`. */
+  racers: () => [],
+  /** Which mode the frame loop is in. Filled by `app.js`, and a **function and not
+   *  a copied number** because `mode` is a `let` reassigned on every start and
+   *  every finish, and a registry field written once is a registry field that is
+   *  wrong on the frame after the race ends. */
+  modeOf: () => 'stable',
   renderScene() {
-    return (this.stage && this.stage.visible) ? this.stageScene : this.scene;
+    const m = this.modeOf();
+    return (m === 'stable' || m === 'stroll') ? this.stageScene : this.scene;
   },
 };/* ================================================================== *
  * Graphics settings
@@ -369,6 +403,13 @@ const gfxPropDensity = () => PROP_DENSITY[gfx.props - 1];
  *  middle step, so today's placement is untouched. */
 const triesBoost = () => clamp(1 + (gfxPropDensity() - 1) * 0.5, 1, 2);
 const gfxGrassDensity = () => GRASS_DENSITY[gfx.grass - 1];
+
+/** Tufts on a course, which is most of what is out there, **read through the grass
+ *  row rather than written down** so a density step is one number. It lives here
+ *  and not in the scenery because the settings panel's caption reads it too, and
+ *  a caption asking a module further down the graph for a number the module it
+ *  is a caption *for* already knows is a caption with a cycle in it. */
+const grassCount = () => Math.max(64, Math.round(4800 * gfxGrassDensity()));
 const gfxSsao = () => AO_LADDER[gfx.ssao - 1];
 const gfxReflSize = () => REFL_LADDER[gfx.refl - 1];
 const gfxReflOn = () => gfxReflSize() > 0;
@@ -753,8 +794,8 @@ const rrtFit = (v) => (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v +
  * rule and would be a behaviour change inside a move, and a move is not the
  * place for one.
  */
-function domeToneFix(c, chainUp) {
-  if (!chainUp) return c;
+function domeToneFix(c, chainIsUp) {
+  if (!chainIsUp) return c;
   const k = TOD.exposure / 0.6;
   const l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
   if (l <= 1e-4) return c;
@@ -782,11 +823,11 @@ function setSkyGeo(geo) {
   return old;
 }
 
-function paintSky(colours, chainUp) {
+function paintSky(colours, chainIsUp) {
   const pos = skyGeo.attributes.position, col = skyGeo.attributes.color;
   for (let i = 0; i < pos.count; i++) {
     skyAt(colours, (1 - pos.getY(i) / SKY_R) / 2, _c2);
-    domeToneFix(_c2, chainUp);
+    domeToneFix(_c2, chainIsUp);
     col.setXYZ(i, _c2.r, _c2.g, _c2.b);
   }
   col.needsUpdate = true;
@@ -917,7 +958,7 @@ export {
   PROP_DENSITY, GRASS_DENSITY, SKY_LADDER, AO_LADDER, GI_RADIUS, GI_INNER, GI_THICK,
   REFL_LADDER, REFL_FRESNEL, MSAA_LADDER, MSAA_NAMES, MSAA_PRESET, PRESET_NAMES,
   FX_TOGGLES, FX_KEYS, FOG_MATCH,
-  gfxMsaa, gfxEdge, gfxGroundFloor, gfxWideRows, gfxPropDensity, gfxGrassDensity,
+  gfxMsaa, gfxEdge, gfxGroundFloor, gfxWideRows, gfxPropDensity, gfxGrassDensity, grassCount,
   gfxSsao, gfxReflSize, gfxReflOn, triesBoost,
   renderer,
   buildSkyGeo, setSkyGeo, skyGeo, matSky, paintSky, domeToneFix, timeOfDay,
