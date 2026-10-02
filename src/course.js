@@ -20,10 +20,6 @@
  * `scenery.js` two files rather than one: the ribbon wants `groundYAt()` and does
  * not want `buildTrack()`, and the lamps want `bankRadius()` and neither.
  *
- * The one thing here that is not geometry is `midwayOf()`'s caller - the line the
- * half-way mark is put down on - and that is in `scenery.js` with the tower that
- * stands on it, because **the two have to agree and they were written a hundred
- * lines apart**.
  * ================================================================== */
 import {
   THREE, TAU, clamp, lerp, smoothstep, easeInOut, vnoise, hills,
@@ -32,11 +28,11 @@ import {
 } from './core.js';
 import { gfxEdge, gfxGroundFloor } from './graphics.js';
 import { planTrack, MID_CROWN } from './plan.js';
-
 /** The two sample counts the bend radius is read over, and they are not the same
  *  number. */
 const BEND_BASIS = 4;
 const gfxBendReach = () => Math.round(gfxEdge() / STEP);
+
 /** How close to the centre of a bend the ground on its inside may be drawn, as
  *  a fraction of the radius, and the floor on that in metres. Just short of the
  *  radius is the cusp; a tenth short is a ribbon that is narrow on the inside
@@ -654,13 +650,51 @@ function lanePoint(tr, s, d, out) {
   out.p.addScaledVector(out.right, d);
   return out;
 }
+
+/**
+ * Where the half-way mark goes.
+ *
+ * The middle of a race is the middle of the **raced** span - the grid to the
+ * finish - and not the middle of the course's plan, because a plan's `x` is not
+ * its arc length: by the half-way the lane has been round a good many corners
+ * and through whatever the features put in it. So the mark starts at
+ * `(START_S + finish) / 2` exactly, which is the right answer whenever it is
+ * usable.
+ *
+ * And quite often it is not, because the middle of a course is quite often the
+ * middle of a pool, and a line laid across two metres of water is not a line
+ * anybody sees. So it walks outward to the nearest stretch of dry plain lane,
+ * within a fifth of the race, which is far enough to always find one and near
+ * enough that the mark is still the half-way. A wall will do as a second
+ * answer, because a line on a ramp is a line and a line in a chasm is not.
+ *
+ * The tower goes wherever the mark went. A tower and a line that disagree about
+ * where the half-way is would be worse than having neither.
+ *
+ * **And the ground has to be there.** Dry lane is a question about the road; a
+ * tower is a seventeen-metre building on a nine-metre footprint standing fifteen
+ * metres off it, and it needs two things the lane beside it says nothing about.
+ * Its ground has to be **level across that footprint**, or the tower shows a
+ * metre of its own base above the grass on the downhill side and is buried to
+ * the first course on the other. And the lane beside it must not be **perched**:
+ * a lane standing well above the country is a lane on the lip of a drop, and the
+ * ground fifteen metres out from under it is the bottom of a face - which on
+ * Crag Ascent is a tower at the bottom of a three-metre step, which is not a
+ * flat site whatever the arithmetic half-way says about it.
+ *
+ * So the walk outward asks for those first and settles for the road's own
+ * dryness only if it cannot have them, which is the same order the two tests
+ * already had: the best answer that is still the half-way, and an answer at worst
+ * a whole clear stretch away. A course that is all cliff gets the road's answer,
+ * because a tower is better than no tower.
+ */
 // ------------------------------------------------------------------
-// The lane and the ground under it. `farCountry()` and `lanePoint()` are
-// exported because `buildCrates()` - which is the race's - and the
-// surfaces' row reader both need them; `BEND_BASIS`, `gfxBendReach()`,
-// `NEST`, `NEST_FRACTION` and `EDGE_THIRD` go with them because each is
-// the arithmetic of a function in this file and a constant exported on
-// its own is a number two modules from its own explanation.
+// The lane and the ground under it. The five constants go with them
+// because each is the arithmetic of a function in this file, and a
+// constant exported on its own is a number two modules from its own
+// explanation. **The half-way is not here** - `src/surfaces.js` says why
+// in the terms that decided it, and the short version is that it reads
+// `groundDrawnAt()`.
 // ------------------------------------------------------------------
 export {
   buildTrack, trackAt, newFrame, bankRadius, vergeBand, wallProfile,

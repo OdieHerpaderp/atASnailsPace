@@ -78,6 +78,12 @@ export const world = {
   shadowRoots: () => [],
   /** The field's eight, for the same walk. Filled by `race.js`. */
   racers: () => [],
+  /** Every water material a course has made, so `dropReflections()` can hand
+   *  them back. `surfaces.js` fills it because it is the surfaces that make the
+   *  pools, and the post chain empties it because the pre-filter hanging off
+   *  each one is the reflections row's business - and a list emptied by the
+   *  module that does not fill it is a list two modules argue about. */
+  courseWater: [],
   /** Which mode the frame loop is in. Filled by `app.js`, and a **function and not
    *  a copied number** because `mode` is a `let` reassigned on every start and
    *  every finish, and a registry field written once is a registry field that is
@@ -386,17 +392,50 @@ const sceneRatio = () => clamp(nativePixelRatio() * gfxRenderScale(), 0.25, REND
 const needsResample = () => Math.abs(gfxRenderScale() - 1) > 1e-3;
 const gfxMsaa = () => MSAA_LADDER[gfx.msaa - 1];
 const gfxEdge = () => EDGE_LADDER[gfx.distance - 1];
-/** The drawn ribbon's *width*, and **it is a piece of scenery, not a radius** - the
- *  widest thing a course puts down is a farmstead whose berth stands twenty-eight
- *  metres off the lane. So a draw distance that reaches less than that has its
- *  floor pulled down with it, rather than being clamped back up to it. */
+/** The narrowest the ground is ever drawn, and **it is a piece of scenery, not a
+ *  radius.** The widest thing the courses put down is a farmstead: its berth is
+ *  put twenty-eight metres off the lane, and its own layout runs a further
+ *  twenty-eight from that - the house at nil, the windmill at eighteen and
+ *  twelve, and a mill six metres across. Seventy-eight is that whole figure with
+ *  a little ground behind it, and it is the number the *drawn* outline is checked
+ *  against rather than the number a corner would like.
+ *
+ * **The radius model would not have allowed it, and the measurement says the
+ * model is the pessimistic one.** A ground row is the lane's path pushed out to
+ * that row's distance, and the local radius of the lane is what decides whether
+ * an offset of that distance folds: `0.9 * R` for the tightest bend in reach. On
+ * the tightest corner on each of the five courses that is between eleven and
+ * fifty metres, so the model caps the ground at the old floor of fifty-eight -
+ * and fifty-eight is what it was drawn at, and it was *narrower than its own
+ * scenery*, which is the whole of the complaint. Pushed to seventy-eight, and
+ * then to a hundred and ten, the **drawn** edge was measured on every course and
+ * every sample: the worst turn between real edge segments is 1.7 degrees, the
+ * ribbon's width does not vary by a metre along any course, and no edge stands
+ * above the terrain it is sitting on. A brief wiggle makes an offset *spike* -
+ * reverse a few metres and come back - where the model reads it as a cusp, and a
+ * spike in the outline is a wrinkle, not the ribbon crossing itself.
+ *
+* So the cap is the safety net and the floor is the width, and the floor is
+ * above the cap's reach on all five courses - which is worth saying plainly,
+ * because it means the bend passes below are **inert here** and are the thing
+ * that would hold a course tighter than its scenery. Fifty-eight was not a limit
+ * found by measuring; it was a number a model produced, and the scenery was built
+ * to a different one.
+ *
+ * The floor is read through `gfxGroundFloor()`, which is seventy-eight at every
+ * draw distance from the middle step up and **follows the edge down below it** -
+ * because at eighty-five metres of ribbon the scenery would hang off the end of
+ * it, and clamping the floor back up to seventy-eight would answer a shorter
+ * reach with a wider one, which is the opposite of what the row is for.
+ */
 const gfxGroundFloor = () => Math.min(78, gfxEdge());
-/** How many rows the country between the verge and the edge is packed on. A fixed
- *  count, because the ground mesh is laid on one row stride for the whole course
- *  and a sample with a different number of rows than its neighbour quietly writes
- *  over the end of the vertex array. Scaled with the reach so the far-field row
- *  spacing stays roughly constant - and exactly 10 at level 3, as it has always
- *  been. */
+/** How many rows the country between the verge and the edge is packed on, read
+ * through `gfxWideRows()`: a fixed count *per build*, because the ground mesh is
+ *  laid on one row stride for the whole course and a sample with a different
+ *  number of rows than its neighbour quietly writes over the end of the vertex
+ *  array. It scales with the reach so the far-field row spacing stays roughly
+ *  constant as the draw distance changes, and it is ten at the middle step, which
+ *  is what the far-country work below was tuned at. */
 const gfxWideRows = () => Math.max(6, Math.round(10 * gfxEdge() / 120));
 const gfxPropDensity = () => PROP_DENSITY[gfx.props - 1];
 /** How much more searching a denser scatter is allowed, per piece. One at the

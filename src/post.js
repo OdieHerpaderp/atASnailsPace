@@ -1276,7 +1276,6 @@ function syncGlow(e) {
 const courseProbes = [];
 /** Every water material a course has built, whether or not a probe is on it.
  *  `dropCourse()` frees these; nothing else in the county owns them. */
-const courseWaterMats = [];
 /** Probes that want a refresh, and how many are left. */
 const probeQueue = [];
 let probeLast = -1e9;
@@ -1337,7 +1336,7 @@ function dropProbe(p) {
 }
 function dropReflections() {
   for (const p of courseProbes.slice()) dropProbe(p);
-  for (const m of courseWaterMats.splice(0)) m.dispose();
+  for (const m of world.courseWater.splice(0)) m.dispose();
 }
 
 /**
@@ -1712,7 +1711,7 @@ export {
   composer, renderPass, applyChainSize, dropComposer, syncComposer,
   setChainScene, chainUp, chainScene,
   drawOverlay, grabWanted, grabPixels, doGrab,
-  addGlows, syncGlow, courseProbes, courseWaterMats, probeQueue,
+  addGlows, syncGlow, courseProbes, probeQueue,
   dropProbe, dropReflections, queueProbes, pumpProbes, syncProbes,
   STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, gfxCastApplied, applyShadows,
   renderOptions, optionsOpen, openOptions, closeOptions,
