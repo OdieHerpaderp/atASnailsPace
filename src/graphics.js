@@ -157,6 +157,11 @@ export const world = {
   updateHUD: () => {},
   flashGo: () => {},
   showResults: () => {},
+  /** The snail's colours onto the plinth's snail, and the two colour inputs and
+   *  the style buttons with them. Filled by `app.js` because two thirds of it is a
+   *  screen, and asked for by `stage.js` on every rebuild - which is the one
+   *  place a rebuilt stable would otherwise come up wearing the county's colours. */
+  applyLook: () => {},
   renderScene() {
     const m = this.modeOf();
     return (m === 'stable' || m === 'stroll') ? this.stageScene : this.scene;
