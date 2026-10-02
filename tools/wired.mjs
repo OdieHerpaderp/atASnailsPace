@@ -57,17 +57,31 @@ function declared(src) {
   return out;
 }
 
-/** every binding a file declares *at any depth*, and object-literal keys. A file
- *  that has a local `const scene` inside `makeEnv()` is not missing an import of
- *  somebody else's `scene`, and the check has to be able to tell the two apart or
- *  it is noise on every run and nobody reads it. */
+/**
+ * Every binding a file has of its own, at any depth: a `const` inside a
+ * function, an object-literal key, a method shorthand. A file that has a local
+ * `const scene` inside `makeEnv()` is not missing an import of somebody else's
+ * `scene`, and the check has to tell the two apart or it is noise on every run.
+ *
+ * **Declarations, keys and method shorthands - and deliberately not "anything
+ * followed by a bracket".** That was in the first version and it made
+ * `$('boot').textContent` claim that `materials.js` owns a `$`, which silenced
+ * exactly the report it existed for: a `$(...)` call in a module that had not
+ * imported `$` from `core.js` came back clean. Three shapes, no more.
+ */
 function owns(src) {
   const out = new Set(declared(src));
   const bare = strip(src);
-  for (const m of bare.matchAll(/(?:^|[\s(,;{]|\b(?:const|let|var|function|class)\s+)([A-Za-z_$][\w$]*)\s*(?::|[=,);(])/g)) {
-    out.add(m[1]);
-  }
-  for (const m of bare.matchAll(/(?:^|\s)([A-Za-z_$][\w$]*)\s*\(/g)) out.add(m[1]);
+  for (const m of bare.matchAll(/\b(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) out.add(m[1]);
+  for (const m of bare.matchAll(/(?:^|[{,\s])([A-Za-z_$][\w$]*)\s*:/gm)) out.add(m[1]);
+  // **A method shorthand is `NAME(...) {` and not `NAME(`.** The first version of
+  // this line matched any call and so claimed `$('boot').textContent` as a
+  // method named `$`, which silenced the report it existed for: a `$(...)` in a
+  // module that had not imported `$` from `core.js` came back clean. Requiring
+  // the brace tells the two apart - a call is followed by `)` and then `.`, a
+  // method by `)` and then `{` - and the brace is what makes it worth knowing
+  // about.
+  for (const m of bare.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) out.add(m[1]);
   return out;
 }
 
@@ -95,10 +109,22 @@ function importsOf(src, f) {
   return out;
 }
 
-/** is NAME read bare - a statement position, not a property, not a key */
+/**
+ * Is NAME read bare - a statement position, not a property, not a key.
+ *
+ * **The word-boundary guards are only there when the name has word characters at
+ * its ends**, because `\b` is defined against `[A-Za-z0-9_]` and the county's `$`
+ * is not one of those: `\b\$\b` matches nothing anywhere, so a bare `$(...)` in a
+ * module that had not imported it was invisible here. That is the second time
+ * this checker has been wrong about a name that is not spelled like a word, and
+ * both times it was on a one-character identifier.
+ */
 function reads(bare, name) {
+  const lead = /^[A-Za-z0-9_]/.test(name) ? '\\b' : '';
+  const tail = /[A-Za-z0-9_]$/.test(name) ? '\\b' : '';
+  const esc = name.replace(/[$]/g, '\\$');
   const re = new RegExp(
-    `(?:^|[(,=+\\-*/%;?:&|!<>~^\\[\\]{}]|\\b(?:return|typeof|new|await|&&|\\|\\|)\\s*)\\s*${name}\\b\\s*(?![:.\\w$])`,
+    `(?:^|[(,=+\\-*/%;?:&|!<>~^\\[\\]{}]|\\b(?:return|typeof|new|await|&&|\\|\\|)\\s*)\\s*${lead}${esc}${tail}\\s*(?![:.\\w$])`,
     'm');
   return re.test(bare);
 }
