@@ -46,9 +46,9 @@ are not, and they are `src/graphics.js`'s registry.
 | `src/surfaces.js` | 1,463 | the four surfaces, the water, and the half-way |
 | `src/scenery.js` | 1,533 | the tower, the lamps, `scatter()`, the farms, the backdrop |
 | `src/post.js` | 1,774 | the settings panel, the chain, the probes, the readback |
-| `src/race.js` | 1,397 | the snail, the field, the sim, the crates, the save |
+| `src/race.js` | 1,489 | the snail, the field, the sim, the crates, the save |
 | `src/stage.js` | 696 | the stable and its rebuild |
-| `src/app.js` | 1,965 | the camera, the frame loop, the perf panel, every screen, the boot |
+| `src/app.js` | 2,061 | the camera, the frame loop, the perf panel, every screen, the boot |
 
 **The imports, and they are the whole dependency story:**
 
@@ -131,6 +131,50 @@ rebuilt the stable. **A default is an answer, and an empty one is the answer to
 a question nobody asked.** That is why `wired.mjs` has a direction for it, and
 why `tools/e2e/` has a test that reads the three rows rather than the registry:
 a field is only worth a test if something visible hangs off it.
+
+**A rank is one more than how many snails rate strictly above it, out of the 64
+rivals and you, so the player is counted as the 65th.** `rankOf()` in `race.js`
+counts `state.pool` and then adds the player, because the pool is a ladder in
+the literal sense — `makePool()` spreads 64 rivals over the whole range one per
+rung — and the ladder says `of 65` in five places. Two other sets were available
+and both are worse: the season band overlaps on purpose (`open` is 250–1000 and
+`invitational` is 750–1500), so a snail on 800 would read 11th of 31 in one season
+and 48th of 25 in the other for the same rating, which is a number about the pick;
+and the field is drawn with a pull towards your own rating (`FIELD_BIAS`) and a
+penalty on the seven you raced last season, so it is a fixture rather than a
+standing and is redrawn every season.
+
+**Counting the player is what makes `of 65` a promise the number can keep.** You
+are not in `state.pool`, so without the extra term a snail on 810 reads 33rd
+while you on 823 also read 33rd — and with 65 members on the ladder and you 33rd,
+a 34th has to exist. **The price is that a rival's number moves when you pass
+him**: Holl is 33rd while you are on 10 and 34th once you are on 823. That is
+what a ladder is, though — it is one order — and the alternative is a number that
+said 33rd on your stable and 34th on everybody else's, which is two standings
+wearing one rival's name. **Two rows on different ratings can never share a
+number**: for any two rivals the higher is counted in the lower one's total, so
+the lower is strictly behind, and a rating above the higher rival is above the
+lower one too, so the player cannot flatten it by standing between them. Checked
+across all 64 and there are none, so the only snails that ever share a number are
+the ones on one rating.
+
+That tie rule is the rest of what stops it lying. `CLUB_SNAILS` of the pool are
+the same modest snail — three of everything — and every one of them sits on
+exactly **150**, so a fresh player at `START_RATING` sees nine identical rivals
+140 points up and then a 270-point gap to anything else. Anything that invents an
+order among equals is making it up: "Pike is 9th" says only that `p.id` is the
+lower number, and the top five of the ladder modal would look decisive while all
+five of them were on one rating. So a snail on your rating shares your number and
+is counted separately, and what is given up is a clean 1–65 with no gaps — which
+was never true: a fresh snail on 10 and a snail on 130 are both 65th, because
+nothing on the ladder rates between them and 150. **Which is why the modal's note
+states both**, rather than leaving the list to speak for itself.
+
+And **a new game reading like a wall is a sentence and not a rung.** A fresh
+snail is 65th of 65 with nothing below it, and the honest fix for that is a word
+in the modal's note — `makePool()` is the seed `tools/e2e/baseline.json` captured
+four races' finishing order and times to six decimals against, so a snail that is
+not a club snail at the foot of the ladder changes every one of them.
 
 **Everything is built in lane space.** A course is a list of samples along a
 spline: `s` is metres along it, `d` is metres to the right of the centre line,

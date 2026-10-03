@@ -377,6 +377,98 @@ function inTier(rating, id) {
   const t = TIERS.find((x) => x.id === id) || TIERS[0];
   return rating >= t.lo && rating < t.hi;
 }
+
+/**
+ * Where a rating stands on the county ladder: one more than how many snails
+ * rate strictly above it, out of the 64 rivals **and you**.
+ *
+ * **The whole pool and not the season, and not the seven you are racing.** The
+ * bands overlap on purpose - `open` is 250-1000 and `invitational` is 750-1500 -
+ * so a snail on 800 belongs to two seasons at once and would read 11th of 31 in
+ * one and 48th of 25 in the other for the same rating, which is a number about
+ * the pick and not about the snail. The field is worse: it is drawn with a pull
+ * towards your own rating (`FIELD_BIAS`) and a penalty on the seven you raced
+ * last season, so the grid is made to be *about* you rather than *around* you,
+ * it is a fixture and not a standing, and it is redrawn every season - ranking
+ * inside it would put you somewhere between 1st and 8th at all times and mean
+ * nothing about the ladder. The pool is a ladder in the literal sense, because
+ * `makePool()` spreads 64 snails across the whole range one per rung rather than
+ * piling them at the middle, and it is the same 64 snails for every player in
+ * the county.
+ *
+ * **And you are counted, which is the whole of what it means to be the 65th.**
+ * You are not in `state.pool`, so the count has to carry you separately or the
+ * number is a count of 64 answering a question about 65 - and the ladder says
+ * `of 65` in five places. Without it a snail on 810 reads 33rd while you on 823
+ * also read 33rd, and `of 65` beside it is a promise the number cannot keep: with
+ * 65 members on the ladder and you 33rd, a 34th has to exist. **So you are a
+ * member of the set and the row under yours is the row under you**, and the price
+ * is that a rival's number moves when you pass him - Holl is 33rd while you are
+ * on 10 and 34th once you are on 823. That is what a ladder is: it is a single
+ * order, and a number that said 33rd on your stable and 34th on everybody else's
+ * would be two standings wearing one rival's name.
+ *
+ * **And a snail on your rating shares your number, because a tie has no other
+ * honest answer.** `CLUB_SNAILS` of the pool are the same modest snail - three of
+ * everything - and they all sit on exactly 150, so the first thing a new player
+ * sees is a block of identical rivals above them and no order among them at all.
+ * Breaking the tie on `id` would say that Pike is ninth, which is only that
+ * `p.id` is the lower number, and the top five of the modal would look decisive
+ * while all five of them were on one rating. So it is strictly greater, a snail on
+ * your rating shares your number and is counted separately, and what is given up
+ * is a clean 1-65 with no gaps - which was never true: a fresh snail on 10 and a
+ * snail on 130 are both 65th, because nothing on the ladder rates between them
+ * and 150.
+ *
+ * **Two rows on different ratings can never share a number, and that is worth
+ * having said out loud.** For any two rivals the higher is counted in the
+ * lower's total, so the lower is strictly behind; and the player cannot land
+ * between two rivals and flatten it either, because a rating above the higher
+ * rival is above the lower one as well. Checked across all 64 and there are no
+ * two - so the only snails that ever share a number are the ones on one rating.
+ */
+const LADDER_SPAN = 5;            // the rows either side of you the modal shows
+function rankOf(rating) {
+  let n = 1;
+  for (const p of state.pool) if (p.rating > rating) n += 1;
+  // and you, the 65th member - read off the rating and not off an id, so a snail
+  // asked about *its own* rating is never counted in its own total.
+  if (state.rating > rating) n += 1;
+  return n;
+}
+/**
+ * The slice of the ladder around a rating: the nearest five above, you, and the
+ * nearest five below, and how many snails you are level with.
+ *
+ * **Sorted into a copy, never in place.** `drawSeasonField()` reads `state.pool`
+ * by band and the results read it by `sn.id`, so a pool left in ladder order is a
+ * pool whose positions and ids disagree with every field the last four seasons
+ * recorded.
+ *
+ * And nothing is cached. Sixty-four entries and a handful of calls a render is
+ * nothing, and a cache is a rating that moves on every race against a results
+ * screen holding last week's answer - which is the quiet kind of wrong.
+ *
+ * `above` and `below` are **snails and not rows**, because a row that carried a
+ * `{ rank, snail }` would be a second copy of a number `rankOf()` already has:
+ * the caller draws the rank off the snail it is given, so a tie *among the five*
+ * cannot be flattened by the slice the way one baked in at slicing time can.
+ */
+function ladderAt(rating) {
+  const sorted = state.pool.slice().sort((a, b) => b.rating - a.rating);
+  const rank = rankOf(rating);
+  const tied = sorted.filter((p) => p.rating === rating).length;
+  return {
+    rank, of: state.pool.length + 1, tied,
+    // `rank - 1` is how many rate above, so it is also the index of the first
+    // that does not: the first of the tied, or the first below where there are
+    // none of those.
+    above: sorted.slice(Math.max(0, rank - 1 - LADDER_SPAN), rank - 1),
+    // and `+ tied` steps over the block you are level with rather than standing
+    // one of them under you and calling it a snail you have beaten.
+    below: sorted.slice(rank - 1 + tied, rank - 1 + tied + LADDER_SPAN),
+  };
+}
 /**
  * The seven a season would put you up against. Everyone in the pool belongs to
  * a season by their rating, and a field is drawn from yours, so it is always
@@ -1385,7 +1477,7 @@ function load() {
 // ------------------------------------------------------------------
 export {
   state, race, waterMeshes, env, scene,
-  makePool, ratingFor, inTier,
+  makePool, ratingFor, inTier, rankOf, ladderAt,
   buildCrates, buildCourse, dropCourse, startRace,
   makeFxPool, buildSurgeFx, takeFx, updateFx, surgeFx,
   buildRipples, spawnRipple, updateRipples, leapShot, flightY, flightPitch,

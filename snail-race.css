@@ -204,13 +204,24 @@
   #fieldCard .tierbar { display: flex; gap: 3px; margin: 8px 0 9px; }
   #fieldCard .tierbar i { flex: 1; height: 3px; border-radius: 2px; display: block; background: rgba(34, 48, 58, 0.14); }
   #fieldCard .tierbar i.on { background: var(--gold); }
-  #field { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
-  #field .rival { display: flex; align-items: center; gap: 6px; }
+  #field { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; }
+  #field .rival { display: flex; align-items: center; gap: 5px; }
   #field .rival .nm { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #field .rival .rt { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  /* The rank is fixed-width so the two columns of names stay square whatever
+     they say, and it is `minmax` rather than nothing at all because it is a
+     column and not a decoration. 2.4em is three digits at 11px mono: the whole
+     of it is spent on a 3-digit rank, and at the 900px breakpoint the card is
+     268px - two cells of 113px, of which the rank, the dot, the rating and
+     three gaps take 72 and a six-letter name gets the rest. */
+  #field .rival .rk, .season .srivals .rk {
+    flex: 0 0 2.4em; text-align: right; font-family: var(--mono); font-size: 11px;
+    font-variant-numeric: tabular-nums; color: var(--faint);
+  }
   #field .me { grid-column: 1 / -1; padding-top: 5px; margin-top: 3px; border-top: 1px solid var(--line); }
   #field .me .nm { font-weight: 600; }
   #field .me .rt { color: var(--gold); }
+  #field .me .rk { color: var(--gold); }
   button.quiet {
     display: block; width: 100%; margin-top: 11px; padding: 6px;
     font: 600 9.5px/1 "Futura", "Avenir Next", sans-serif; letter-spacing: 0.1em; text-transform: uppercase;
@@ -219,6 +230,11 @@
     transition: transform 0.12s ease, background 0.15s ease;
   }
   button.quiet:hover { transform: translateY(-1px); background: rgba(255, 255, 255, 0.85); }
+  /* At 268px the season name and the rank beside it wrap onto two lines apiece -
+     `SNAIL INVITATIONAL` next to `YOU · 1300 · 13TH` is fifteen characters each in
+     236px, and nothing can be shortened without losing either the season you are
+     in or the number this row is for. It costs eighteen pixels of card height and
+     hides nothing. */
   @media (max-width: 900px) { #fieldCard { width: 268px; } }
 
   /* ---------------- options ---------------- */
@@ -543,6 +559,10 @@
   table.res tr.me td { font-weight: 600; background: rgba(184, 145, 42, 0.10); }
   table.res td.p { font-family: var(--mono); font-size: 12.5px; color: var(--faint); width: 26px; }
   table.res td.pts { font-family: var(--mono); font-size: 13px; text-align: right; }
+  table.res td.rk {
+    font-family: var(--mono); font-size: 13px; text-align: right; width: 44px;
+    font-variant-numeric: tabular-nums; color: var(--dim);
+  }
   table.res td.rt { font-family: var(--mono); font-size: 13px; text-align: right; width: 78px; white-space: nowrap; }
   table.res td.rt .was { opacity: 0.45; }
   table.res td.rt.up { color: var(--good); }
@@ -593,6 +613,35 @@
     .season { grid-template-columns: 1fr; }
     .season .srivals { grid-column: 1; grid-row: auto; margin-bottom: 8px; }
   }
+
+  /* ---------------- the county ladder ---------------- */
+  /* Four columns and not a flex row, because the rank is a column and a rating
+     is a column. Each row is its own grid rather than four cells of one, so that
+     your own row's rule spans the whole width and the list cannot fall out of
+     step with itself if a row ever grows a fifth number. `minmax(0, 1fr)` for
+     the name is the perf panel's rule arriving here for the same reason: a `1fr`
+     is `minmax(auto, 1fr)`, so a name that will not break is a minimum width the
+     column cannot shrink under, and a snail called Quill takes the row's width
+     off the number beside it. */
+  #ladderRows { margin-bottom: 12px; }
+  #ladderRows > div {
+    display: grid; grid-template-columns: 2.6em auto minmax(0, 1fr) auto;
+    gap: 3px 9px; align-items: center;
+  }
+  #ladderRows .nm { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ladderRows .rk, #ladderRows .rt { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
+  #ladderRows .rk { text-align: right; color: var(--faint); }
+  #ladderRows .rt { text-align: right; color: var(--dim); }
+  /* A snail on your own rating shares your number, so it is neither of the five
+     above nor of the five below - and the modal says so in its note rather than
+     in a gap in the list, which would read as a mistake in the drawing. */
+  #ladderRows .me { padding-top: 6px; border-top: 1px solid var(--line); font-weight: 600; }
+  #ladderRows .me .rk, #ladderRows .me .rt { color: var(--gold); }
+  /* And one of the seven you are about to race, which is the only other mark in
+     this modal: an inset shadow rather than a class on the dot, because the dot
+     is 9px across and this has to read at a glance. */
+  #ladderRows .here { box-shadow: inset 2px 0 0 var(--gold); }
+  #ladder .note { margin: 0 0 18px; }
 
   #boot {
     position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; text-align: center;

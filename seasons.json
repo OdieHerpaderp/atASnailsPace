@@ -5,6 +5,7 @@
     "lo": 0,
     "hi": 250,
     "scale": 0.8,
+    "payMult": 0.5,
     "blurb": "the first rung: a field of club snails, four courses and the marathon",
     "races": ["dash", "ascent", "splash", "sky"],
     "finale": "marathon"
@@ -15,6 +16,7 @@
     "lo": 250,
     "hi": 1000,
     "scale": 1.1,
+    "payMult": 1.0,
     "blurb": "county standard: better snails than you, and they know the courses",
     "races": ["dash", "ascent", "splash", "sky"],
     "finale": "marathon"
@@ -25,6 +27,7 @@
     "lo": 750,
     "hi": 1500,
     "scale": 1.5,
+    "payMult": 1.5,
     "blurb": "the meeting: the best of the county, and the longest walks between the jumps",
     "races": ["dash", "ascent", "splash", "sky"],
     "finale": "marathon"
@@ -35,6 +38,7 @@
     "lo": 1000,
     "hi": null,
     "scale": 2.3,
+    "payMult": 2.5,
     "blurb": "the top of the ladder: everybody here is rated in four figures, and the ground goes on for ever",
     "races": ["dash", "ascent", "splash", "sky"],
     "finale": "marathon"

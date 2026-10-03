@@ -56,6 +56,8 @@ import {
   forgetSeasonFields,
   seasonRivals,
   lastSeasonField,
+  rankOf,
+  ladderAt,
 } from './race.js';
 
 // The stable: the lawn, the plinth, the pool, and the rebuild a density row
@@ -167,6 +169,7 @@ import {
   GOLD_PER_FRUIT,
   START_GOLD,
   START_RATING,
+  CLUB_SNAILS,
   FIELD,
   START_S,
   // **And the lane's own sample spacing**, which is here for one reason: the lip test
@@ -1024,6 +1027,29 @@ function terrainChips(plan) {
 }
 
 /**
+ * One rival, wherever a rival is listed: the field card, a season card, and the
+ * ladder. **One builder for all of them, because the rank went into all of them
+ * and two copies of a row is two copies of a mistake** - the picker had its own
+ * five lines of it and a rank added to one and not the other is a screen that
+ * agrees with itself and not with the stable.
+ *
+ * The player's row is **not** a special case. `state.pool` is the same 64 snails
+ * for everybody, so `rankOf(state.rating)` is the player's own rank by exactly
+ * the definition that gives the rivals theirs, and a row that had to be told it
+ * was the player would be a second answer to the same question.
+ */
+function rivalRow(sn, cls) {
+  const d = document.createElement('div');
+  d.className = 'rival' + (cls ? ' ' + cls : '');
+  d.innerHTML = '<span class="rk"></span><span class="dot"></span><span class="nm"></span><span class="rt"></span>';
+  d.querySelector('.rk').textContent = rankOf(sn.rating);
+  d.querySelector('.dot').style.background = '#' + sn.body.toString(16).padStart(6, '0');
+  d.querySelector('.nm').textContent = sn.name;
+  d.querySelector('.rt').textContent = sn.rating;
+  return d;
+}
+
+/**
  * The season you are in and the seven in it with you, shown before you have
  * raced any of it. The player is listed with them and their rating marked, so
  * the ladder is legible: the number under the rivals is what you are trying
@@ -1031,8 +1057,9 @@ function terrainChips(plan) {
  */
 function renderField() {
   const tier = seasonDef(state.tier);
+  const mine = rankOf(state.rating);
   $('tierName').textContent = tier.name;
-  $('tierRating').textContent = `you · ${state.rating}`;
+  $('tierRating').textContent = `you · ${state.rating} · ${ordinal(mine)}`;
   $('tierNote').textContent = `${tier.lo}${tier.hi === Infinity ? '+' : '–' + tier.hi} rating`
     + (tier.blurb ? ` · ${tier.blurb}` : '');
 
@@ -1049,19 +1076,9 @@ function renderField() {
 
   const wrap = $('field');
   wrap.innerHTML = '';
-  const row = (sn, cls) => {
-    const d = document.createElement('div');
-    d.className = 'rival' + (cls ? ' ' + cls : '');
-    d.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="rt"></span>';
-    d.querySelector('.dot').style.background = '#' + sn.body.toString(16).padStart(6, '0');
-    d.querySelector('.nm').textContent = sn.name;
-    d.querySelector('.rt').textContent = sn.rating;
-    wrap.appendChild(d);
-    return d;
-  };
   const rivals = seasonRivals();
-  for (const p of rivals) row(p);
-  row({ name: state.name, body: state.body, rating: state.rating }, 'me');
+  for (const p of rivals) wrap.appendChild(rivalRow(p));
+  wrap.appendChild(rivalRow({ name: state.name, body: state.body, rating: state.rating }, 'me'));
 
   // what the season is actually worth, and how you stand in it
   const lo = Math.min(...rivals.map((p) => p.rating)), hi = Math.max(...rivals.map((p) => p.rating));
@@ -1073,6 +1090,7 @@ function renderField() {
       : `You are only good enough for this one, for now. `) +
     'Your rating, your snail and your purse all come with you; only the season is new.';
   $('pickSeason').textContent = `choose season · ${open.length > 1 ? open.length + ' open to you' : 'one open to you'}`;
+  $('openLadder').textContent = `the ladder · ${ordinal(mine)} of ${state.pool.length + 1}`;
   layoutFieldCard();
 }
 
@@ -1087,7 +1105,8 @@ function renderSeasons() {
   wrap.innerHTML = '';
   const started = state.results.length > 0;
   $('seasSub').textContent =
-    `rating ${state.rating} · ${eligibleSeasons(state.rating).length} of ${TIERS.length} open to you`
+    `rating ${state.rating} · ${ordinal(rankOf(state.rating))} of ${state.pool.length + 1}`
+    + ` · ${eligibleSeasons(state.rating).length} of ${TIERS.length} open to you`
     + (started && state.tier ? ` · you are in the ${seasonDef(state.tier).name} now` : '');
 
   for (const t of TIERS) {
@@ -1104,15 +1123,7 @@ function renderSeasons() {
       `<div class="srivals"></div>` +
       `<div class="sfoot"><span class="cap">seven rivals · ${lo}–${hi}</span></div>`;
     const list = el.querySelector('.srivals');
-    for (const p of rivals) {
-      const r = document.createElement('div');
-      r.className = 'rival';
-      r.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="rt"></span>';
-      r.querySelector('.dot').style.background = '#' + p.body.toString(16).padStart(6, '0');
-      r.querySelector('.nm').textContent = p.name;
-      r.querySelector('.rt').textContent = p.rating;
-      list.appendChild(r);
-    }
+    for (const p of rivals) list.appendChild(rivalRow(p));
     const foot = el.querySelector('.sfoot');
     if (open) {
       const b = document.createElement('button');
@@ -1135,6 +1146,63 @@ function openSeasons() {
   $('seasons').classList.add('on');
 }
 function closeSeasons() { $('seasons').classList.remove('on'); }
+
+let ladderOpen = false;
+
+/**
+ * The county ladder: the five nearest above you, you, and the five nearest
+ * below, out of the whole 64-strong pool. **Rendered on every open, so it is a
+ * read of the present and never a copy of it** - a rating moves on every race,
+ * and a modal that held the ladder as it was when it was last opened would be
+ * the one screen in the county quietly disagreeing with the stable.
+ *
+ * The note underneath is where the two awkward facts live. A fresh snail is
+ * 65th of 65 with nothing below it and nine identical club snails above, because
+ * `makePool()` puts the same modest snail on 150 for the first `CLUB_SNAILS` of
+ * them and the player's own 10 is below that - which is what the foot of a
+ * ladder looks like from the inside, and **the fix for a first game that reads
+ * like a wall is a sentence and not a rung**, because `tools/e2e/baseline.json`
+ * holds four races' finishing order and times to six decimals against this pool.
+ * And a snail level with you shares your number, so it is in neither list.
+ */
+function renderLadder() {
+  const L = ladderAt(state.rating);
+  const mine = new Set(seasonRivals().map((p) => p.id));
+  $('ladderSub').textContent = `you · ${state.rating} · ${ordinal(L.rank)} of ${L.of}`
+    + (L.tied ? ` · level with ${L.tied} other${L.tied === 1 ? '' : 's'}` : '');
+
+  // **The same row builder the field card and the picker use**, because this is
+  // the same question answered on a third screen: where does this snail stand,
+  // and what is it rated. Each row reads its own rank off the snail it is handed,
+  // so five rivals on one rating read as five and not as five consecutive slots.
+  const wrap = $('ladderRows');
+  wrap.innerHTML = '';
+  for (const p of L.above) wrap.appendChild(rivalRow(p, mine.has(p.id) ? 'here' : ''));
+  wrap.appendChild(rivalRow({ name: state.name, body: state.body, rating: state.rating }, 'me'));
+  for (const p of L.below) wrap.appendChild(rivalRow(p, mine.has(p.id) ? 'here' : ''));
+
+  // **One order and not two, and the note is where the two ways it can repeat
+  // live.** The count is one more than how many of the other 64 rate above, and
+  // you are one of the 65 - so your row and the row under it can never show the
+  // same number on different ratings. What can share a number is a snail on your
+  // own rating, which is counted separately and appears in neither list, and the
+  // `CLUB_SNAILS` club snails at the foot, all of them on 150 and every one of
+  // them the same snail.
+  $('ladderNote').textContent =
+    `one more than how many of the other ${L.of - 1} rate above you, and you are one of the ${L.of}`
+    + ' · two snails share a number only when they are on one rating: a snail level with you stands in neither list,'
+    + ` and ${CLUB_SNAILS} club snails share 150 outright`
+    + ' · a gold rule down the left is one of your seven';
+}
+function openLadder() {
+  renderLadder();
+  ladderOpen = true;
+  $('ladder').classList.add('on');
+}
+function closeLadder() {
+  ladderOpen = false;
+  $('ladder').classList.remove('on');
+}
 
 /**
  * The field card hangs off the bottom of the snail card, so it has to be
@@ -1177,7 +1245,7 @@ function renderStable() {
   const races = seasonLength();
   $('goldOut').textContent = state.gold;
   $('snailName').value = state.name;
-  $('seasonTag').textContent = `season ${state.season} · ${seasonDef(state.tier).name} · rating ${state.rating} · ${Math.min(races, state.results.length)} of ${races} raced · ${state.pts} pts`;
+  $('seasonTag').textContent = `season ${state.season} · ${seasonDef(state.tier).name} · rating ${state.rating} · ${ordinal(rankOf(state.rating))} of ${state.pool.length + 1} · ${Math.min(races, state.results.length)} of ${races} raced · ${state.pts} pts`;
   renderField();
 
   // pips: which of the season's races are done
@@ -1248,7 +1316,7 @@ function renderStable() {
       `<div class="info">` +
       `<div class="cname">${cat.name}</div>` +
       `<div class="cmeta">${cat.trait ? 'tests ' + cat.trait : 'everything, all at once'} · ${Math.round(plan.length)} m` +
-      (rec ? ` · finished ${rec.place}${placeWord(rec.place)}${rec.points ? ' · +' + rec.points + ' pts' : ''}` : '') + `</div>` +
+      (rec ? ` · finished ${ordinal(rec.place)}${rec.points ? ' · +' + rec.points + ' pts' : ''}` : '') + `</div>` +
       `<div class="chips">${terrainChips(plan)}</div>` +
       profileSVG(plan) +
       `</div>`;
@@ -1279,7 +1347,7 @@ function renderStable() {
       `<div class="info">` +
       `<div class="cname">${cat.name}</div>` +
       `<div class="cmeta">${cat.trait ? 'tests ' + cat.trait : 'every trait'} · ${Math.round(plan.length)} m` +
-      (rec ? ` · finished ${rec.place}${placeWord(rec.place)} · +${rec.points} pts` : ' · runs last, whatever order you pick') + `</div>` +
+      (rec ? ` · finished ${ordinal(rec.place)} · +${rec.points} pts` : ' · runs last, whatever order you pick') + `</div>` +
       `<div class="chips">${terrainChips(plan)}</div>` +
       profileSVG(plan) + `</div>`;
     const mi = document.createElement('div');
@@ -1299,7 +1367,20 @@ function renderStable() {
     btn.onclick = () => { startRace(nextRaceId()); showRace(); };
   }
 }
-function placeWord(p) { return p === 1 ? 'st' : p === 2 ? 'nd' : p === 3 ? 'rd' : 'th'; }
+/**
+ * An ordinal, whole: 1st, 2nd, 3rd, 4th, and the 21st and the 12th and the 65th.
+ * `placeWord()` was the last-digit test and nothing more, which is right for a
+ * **place** - they run 1 to 8 and there is no 21st race in the county - and wrong
+ * the moment the number beside it is a rank: a ladder to 65 puts the 21st in at
+ * 21nd and the 12th at 12nd, on the one screen whose whole argument is that the
+ * number can be trusted. So it reads the last digit and the last two, and the
+ * places keep the bytes they had.
+ */
+function ordinal(n) {
+  const one = n % 10, two = n % 100;
+  const suf = one === 1 && two !== 11 ? 'st' : one === 2 && two !== 12 ? 'nd' : one === 3 && two !== 13 ? 'rd' : 'th';
+  return n + suf;
+}
 /** The button that stands you in a course, for the card of any of them. */
 function inspectButton(catId) {
   const b = document.createElement('button');
@@ -1584,6 +1665,13 @@ function showResults(rec) {
       `<td><span class="dot" style="background:#${(f.player ? state.body : (state.pool.find((p) => p.name === f.name) || { body: 0x888888 }).body).toString(16).padStart(6, '0')}"></span> ${f.name}</td>` +
       `<td class="tm">${f.time ? f.time.toFixed(1) + 's' : '—'}</td>` +
       `<td class="pts">${f.points || '—'}</td>` +
+      // **The rank sits beside the rating and not in the strip**, because the
+      // two are the same statement and a screen that showed one without the
+      // other is the one place a player would ask where the number came from.
+      // `finishRace()` has already rewritten every rating in the pool by the time
+      // this runs, so these are the ranks the stable will show for these same
+      // ratings - the two screens cannot come to different answers.
+      `<td class="rk">${rankOf(f.rating)}</td>` +
       `<td class="rt ${up}" title="${f.wasRating} → ${f.rating} (${move})">` +
       `<span class="was">${f.wasRating}</span> → ${f.rating}</td>`;
     body.appendChild(tr);
@@ -1594,16 +1682,17 @@ function showResults(rec) {
   for (const r of state.results.slice(-6)) {
     const el = document.createElement('i');
     el.className = r.place <= 4 ? 'p' + r.place : (r.catId === finale ? 'm' : '');
-    el.textContent = r.place + placeWord(r.place);
+    el.textContent = ordinal(r.place);
     el.title = CAT_BY_ID[r.catId].name;
     strip.appendChild(el);
   }
   $('resTitle').textContent = rec.place <= 3 ? ['Winner!', 'Second place', 'Third place'][rec.place - 1] : 'Result';
-  $('resSub').textContent = `${CAT_BY_ID[rec.catId].name} · ${Math.round(rec.length)} m · finished ${rec.place}${placeWord(rec.place)} of ${FIELD} · ${clockText(rec.hour == null ? 12 : rec.hour)}`;
+  $('resSub').textContent = `${CAT_BY_ID[rec.catId].name} · ${Math.round(rec.length)} m · finished ${ordinal(rec.place)} of ${FIELD} · ${clockText(rec.hour == null ? 12 : rec.hour)}`;
   $('resTot').innerHTML =
     `<div><div class="k">points</div><div class="v">+${rec.points}</div></div>` +
     `<div><div class="k">gold</div><div class="v">+${rec.points}</div></div>` +
     `<div><div class="k">season total</div><div class="v">${state.pts}</div></div>` +
+    `<div><div class="k">rank</div><div class="v">${ordinal(rankOf(state.rating))}</div></div>` +
     `<div><div class="k">rating</div><div class="v">${state.rating}</div></div>`;
   const allDone = race.racers.every((r) => r.finished);
   $('resStay').style.display = allDone ? 'none' : '';
@@ -1628,13 +1717,13 @@ function showSummary() {
       `<td class="p">${i + 1}</td>` +
       `<td>${cat.name}</td>` +
       `<td class="cmeta" style="font-family:var(--mono);font-size:10px;color:var(--dim)">${cat.trait || 'all'}</td>` +
-      `<td class="tm">${r.place}${placeWord(r.place)}</td>` +
+      `<td class="tm">${ordinal(r.place)}</td>` +
       `<td class="pts">${r.points}</td>`;
     body.appendChild(tr);
   }
   const champ = state.pool.slice().sort((a, b) => b.wins - a.wins || b.rating - a.rating)[0];
   $('sumTitle').textContent = state.wins >= 3 ? 'A fine season' : 'Season complete';
-  $('sumSub').textContent = `${seasonWord(seasonLength())} races · ${state.wins} win${state.wins === 1 ? '' : 's'} · final rating ${state.rating}`;
+  $('sumSub').textContent = `${seasonWord(seasonLength())} races · ${state.wins} win${state.wins === 1 ? '' : 's'} · final rating ${state.rating} · ${ordinal(rankOf(state.rating))} of ${state.pool.length + 1}`;
   $('sumTot').innerHTML =
     `<div><div class="k">points</div><div class="v">${state.pts}</div></div>` +
     `<div><div class="k">wins</div><div class="v">${state.wins}</div></div>` +
@@ -1735,10 +1824,15 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Space' && mode === 'race') { e.preventDefault(); surging = true; }
 });
 addEventListener('keyup', (e) => { if (e.code === 'Space' && mode === 'race') surging = false; });
-// and Escape closes the options, which nothing else did: it is only handled in
+// and Escape closes a modal, which nothing else did: it is only handled in
 // the two free-camera modes, so no modal on this page has ever closed on it.
+// **Two of them now and not one**, and the test is the order - the options
+// answers it, the ladder answers it, and whichever opened last is the one you
+// meant to leave.
 addEventListener('keydown', (e) => {
-  if (e.code === 'Escape' && optionsOpen) { e.preventDefault(); closeOptions(); }
+  if (e.code !== 'Escape') return;
+  if (optionsOpen) { e.preventDefault(); closeOptions(); }
+  else if (ladderOpen) { e.preventDefault(); closeLadder(); }
 });
 const surgeBtn = $('surge');
 const surgeOn = (e) => { e.preventDefault(); surging = true; };
@@ -1760,6 +1854,8 @@ $('newSeason').addEventListener('click', openSeasons);
 $('pickSeason').addEventListener('click', openSeasons);
 $('seasClose').addEventListener('click', closeSeasons);
 $('sumNew').addEventListener('click', openSeasons);
+$('openLadder').addEventListener('click', openLadder);
+$('ladderClose').addEventListener('click', closeLadder);
 // And the free camera on the stable, which is the same camera a course gets and
 // the same keys; the button is a shortcut into it, and everything else about the
 // place carries on exactly as the orbit left it.

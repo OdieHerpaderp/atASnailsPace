@@ -58,6 +58,7 @@
     <div class="tierbar"></div>
     <div id="field"></div>
     <button class="quiet" id="pickSeason">choose season</button>
+    <button class="quiet" id="openLadder" title="every snail in the county, and where you stand among them">the ladder</button>
     <p class="note" id="fieldNote">Seven rivals, shown before you race a yard of it.</p>
   </div>
 
@@ -166,7 +167,7 @@
     <div class="sub" id="resSub">—</div>
     <div class="seas" id="resStrip"></div>
     <table class="res">
-      <thead><tr><th></th><th>racer</th><th style="text-align:right">time</th><th style="text-align:right">pts</th><th style="text-align:right">rating</th></tr></thead>
+      <thead><tr><th></th><th>racer</th><th style="text-align:right">time</th><th style="text-align:right">pts</th><th style="text-align:right">rank</th><th style="text-align:right">rating</th></tr></thead>
       <tbody id="resBody"></tbody>
     </table>
     <div class="tot" id="resTot"></div>
@@ -198,6 +199,22 @@
     <div class="sub" id="seasSub">—</div>
     <div id="seasList"></div>
     <div class="btns"><button class="big ghost" id="seasClose">Not now</button></div>
+  </div>
+</div>
+
+<!-- ============ THE COUNTY LADDER ============
+     A modal, because the left column of the stable is full - the field card
+     hangs off the snail card's height and is capped short of the options bar,
+     and a ladder eleven rows down is a ladder nobody scrolls to. The rank is on
+     the button that opens it and in the field card's own title row, which is
+     the part of it that is on screen whatever the viewport. -->
+<div class="modal" id="ladder">
+  <div class="card-modal">
+    <h2>The county ladder</h2>
+    <div class="sub" id="ladderSub">—</div>
+    <div id="ladderRows"></div>
+    <p class="note" id="ladderNote">—</p>
+    <div class="btns"><button class="big" id="ladderClose">Back to the stable</button></div>
   </div>
 </div>
 
