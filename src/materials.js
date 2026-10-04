@@ -96,7 +96,7 @@ const partMat = (geo, fallback) => propMatFor.get(geo) || fallback;
  * written yet simply has none, and draws as it always did.
  */
 async function loadMeshes() {
-  const { GLTFLoader } = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js');
+  const { GLTFLoader } = await import('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js');
   const loader = new GLTFLoader();
   const tex = await loadMapTextures();
   const live = CONVERTED_SET;

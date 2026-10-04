@@ -3,7 +3,7 @@
 // The suite drives the game in a browser, so this file answers two questions
 // that are the machine's and not the game's: which browser, and which tier.
 //
-// **SwiftShader, because there is no GPU here.** three r160 will not start
+// **SwiftShader, because there is no GPU here.** three r170 will not start
 // without WebGL2, and headless chromium gets WebGL2 from the software
 // rasteriser - correct, and slow. 480x300 is a county of 144 thousand pixels,
 // which is a size a software rasteriser can hold sixty times a second, and the

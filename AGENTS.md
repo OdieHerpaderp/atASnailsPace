@@ -82,7 +82,7 @@ start, `surging` on every key event, and the ten that are somebody else's screen
 cannot see for itself**, which is what `tools/wired.mjs`'s third direction is for
 and what the registry test in `tools/e2e/` pins.
 
-three.js 0.160 is imported from a CDN and nowhere else, as a **top-level `await`
+three.js 0.170 is imported from a CDN and nowhere else, as a **top-level `await`
 dynamic import of a literal URL** in `src/core.js`; `snail-race.html` carries the
 import map. Do not add a dependency, and do not pin a different three version in
 one place only. The map carries two specifiers, `three` and `three/addons/`, and

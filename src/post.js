@@ -94,7 +94,7 @@ import { gfxU, gtaoWind, waterFresnel } from './materials.js';/* ===============
 /**
  * three's post-processing passes, **fetched only if a tier asks for one.**
  *
- * They are mapped in the same import map at the same 0.160 pin as the library
+ * They are mapped in the same import map at the same 0.170 pin as the library
  * itself - one version, one import map, no skew - but they are not part of the
  * boot. A `GTAOPass` is a big module and a `WebGLRenderTarget` factory's worth of
  * code that a machine on the bottom tier will never execute, and the bottom tier

@@ -52,7 +52,7 @@ const bootFail = (msg) => {
 let THREE = null;
 if (IN_BROWSER) {
   try {
-    THREE = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js');
+    THREE = await import('https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js');
   } catch (err) {
     document.getElementById('boot').textContent = 'Could not load three.js from the CDN — connect and reload.';
     throw err;
