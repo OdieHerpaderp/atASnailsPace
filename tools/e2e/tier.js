@@ -6,8 +6,8 @@
 // page afterwards. The bottom preset at **render scale 1x**, and the render scale
 // is the number that is worth an argument:
 //
-//   `needsResample()` is true at every step of that row but one, and it is one of
-//   the four things that makes `needsComposer()` true, so **the bottom preset at
+//   `needsResample()` is true at every step of that row but one, and it is the
+//   three-thing predicate's only non-pass term, so **the bottom preset at
 //   0.5x builds the post chain anyway**. That is the tier the repo documents as
 //   the one that must not regress - the one that spends no render target and runs
 //   the game's own single `renderer.render()` - and pinning it at 0.5x would have
@@ -15,9 +15,18 @@
 //   pixels, which SwiftShader manages, so the honest tier costs nothing.
 //
 // `ssao: 1` is `null` in `AO_LADDER`, `refl: 1` is `0` in `REFL_LADDER`, `fxBloom`
-// is off and `msaa: 1` is zero samples: no occlusion pass, no cube probes, no
-// target at all. That is what `passes: []` and `targets` at its floor mean, and
-// those two numbers are the ones the golden spec compares.
+// is off and `msaa: 1` is zero samples on the chain's buffer: no occlusion pass, no
+// cube probes, no target at all. That is what `passes: []` and `targets` at its
+// floor mean, and those two numbers are the ones the golden spec compares.
+//
+// **The context is a fourth smoother and this file cannot see it.** `msaa: 1` is
+// `direct only`, which is *not* an unaliased frame - `antialias: true` is on the
+// context and smoothing there is the driver's choice, not this row's. Nothing in
+// `info()` reports the default framebuffer's sample count because WebGL exposes no
+// call to ask for it, so the assertions below are about the chain's own buffer and
+// about nothing else. **A spec that read "no samples" off the bottom tier as "no
+// anti-aliasing anywhere" would be right about the buffer and wrong about the
+// frame**, which is the whole reason the row is called `direct only`.
 //
 // **This object is a literal, and it is checked against the game rather than
 //  derived from it.** Deriving it out of `src/graphics.js` was tried and is worse
@@ -32,13 +41,13 @@
 //  every level.
 //
 // **So the check is the other half.** `smoke.spec.js` boots the county at exactly
-//  this object and asserts that the game's own `gfxAgreed()` reads it back as
-//  preset 1 - which is the game agreeing, out loud, that these seventeen numbers
-//  are the bottom preset. A row added to `GFX_ROWS`, a ladder given a new
-//  bottom cell, or a switch moved in `FX_PRESET` makes that assertion fail and
-//  names the row, instead of every spec continuing to quote a tier the game no
-//  longer recognises. `gfxLoad()` drops a key it does not know and keeps the
-//  game's own default, which is how a stale pin goes quiet.
+// this object and asserts that the game's own `gfxAgreed()` reads it back as
+// preset 1 - which is the game agreeing, out loud, that these numbers are the
+// bottom preset. A row added to `GFX_ROWS`, a ladder given a new bottom cell, or
+// a switch moved in `FX_PRESET` makes that assertion fail and names the row,
+// instead of every spec continuing to quote a tier the game no longer recognises.
+// `gfxLoad()` drops a key it does not know and keeps the game's own default, which
+// is how a stale pin goes quiet.
 // **And no `import.meta` in this file**, which is the same reason `fixtures.js`
 // uses `__dirname`: a `.js` spec is compiled to CommonJS before it runs, so
 // `import.meta` is a syntax error in one and `__dirname` is the only spelling
@@ -56,6 +65,14 @@ export const GFX = {
   preset: 1, render: 3, msaa: 1, scale: 2, distance: 1, shadow: 1,
   props: 1, grass: 1, sky: 1, ssao: 1, refl: 1,
   fxGlow: 1, fxVig: 0, fxGrain: 0, fxCloud: 0, fxBloom: 0, fxWind: 0,
+  // **and `fxSsr` is deliberately absent.** It was added after this literal was
+  // written and the bottom preset is `off` - so writing `fxSsr: 0` would say the
+  // same thing and cost the suite the property this file is built on. `gfxLoad()`
+  // validates an fx key against its row's cell count and drops the ones it does
+  // not know, so a switch that arrives later and is off on this preset is
+  // inherited rather than written down; a switch that arrives later and is *on* on
+  // the bottom preset is a change to what the bottom preset is, and it has to come
+  // here as an edit rather than be picked up quietly.
 };
 
 /** The same tier with the render scale off 1x, which is the cheapest way to make

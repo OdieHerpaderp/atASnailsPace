@@ -509,6 +509,372 @@ function cobbleFields(S) {
   return out;
 }
 
+/* ------------------------------------------------------------------ *
+ * The bower setts
+ *
+ * A floor of small square-ish stones laid in **running bond**: rows of one size,
+ * one bed, every other row pushed half a stone along. It is a field of its own
+ * rather than `COBBLE` at a different gain, because the two disagree about the
+ * two things that matter most here - `COBBLE` is courses of setts on their side
+ * in a **bedded** rock, so its bedding is a minority share of the height and its
+ * stones come out of a jittered lattice with courses showing between them, and a
+ * bower floor has no bedding at all and every stone the same size. One file at
+ * two gains would be `cliff-albedo` on the ramp all over again.
+ * ------------------------------------------------------------------ */
+
+/** How many courses of setts across one tile, and the number **is** the stone:
+ *  on the 0.55 m tile this wears at, three to a side is a sett 183 mm across -
+ *  square-ish, and a stone you can name at race distance. */
+/**
+ * **Five courses of five stones on the tile, which is 110 mm square on 0.55 m.**
+ *
+ * **Both numbers being odd is what makes the bond close**, and it is not a detail:
+ * the tile runs into an unshifted row out of an unshifted one, and an even count
+ * puts a half-stone step on the seam - which is a stripe every 0.55 metres down
+ * the whole length of a bower, repeating over four hundred times, and it is
+ * invisible on the first tile and unmistakable on the road.
+ *
+ * **And 110 and not the 183 the brief worked out.** Three of three on 0.55 m is
+ * 183 mm, and 183 mm is a genuine sett; it is also **nine stones on this canvas**,
+ * and the first export at that count was nine coloured panels with a bond round
+ * them - a bathroom wall with good masonry. All three references put a sett at a
+ * hundred and ten to a hundred and thirty, and a stone is read by the number of
+ * stones beside it more than by its own size, so **the picture overrules the
+ * arithmetic** and the tile the road already projects at is the thing to keep.
+ */
+const BOW_ROWS = 5, BOW_COLS = 5;
+
+/**
+ * The eleven things a sett floor is made of, in one place, because its normal,
+ * its roughness and its colour all have to agree about where the stones are. A
+ * bump that is not under the stone that made it pale is two textures laid over
+ * each other, which is the whole failure this file argues against in
+ * `COBBLE_TERMS`.
+ *
+ * **The bond is a one-dimensional row lattice and not a cellular one**, and the
+ * first version of this field was a jittered `worley` with a half-stone offset on
+ * alternate rows - and it came out as a heap of irregular polygons in three
+ * bands, which is **not a sett floor**. Two lattices half a stone apart meet along
+ * the line where the row changes and the stones above and below it do not line
+ * up; the field admits that in its own comments and then draws a pavement anyway.
+ *
+ * So the stone is **a rectangle found the honest way**: a row index off `v`, a
+ * stone index off `u` shifted half a stone on the odd rows, and the distance to
+ * the nearest edge of that rectangle. **Two stones in a row that line up across a
+ * course boundary and line up nowhere else is the tell**, and it is the whole of
+ * what the reference is; three rows of jittered cells cannot produce it and a row
+ * lattice produces it for free.
+ *
+ * **Three courses of three across the 0.55 m tile, which is 183 mm square** - the
+ * brief's number, and the tile the road already projects at, so this is a change
+ * of frequency and not of resolution. **Three is odd and that is load-bearing:**
+ * the last row is even and so is the first, so the tile closes on an unshifted
+ * row into an unshifted one and the bond runs clean across the seam.
+ *
+ * **Hand-dressed, and the warp is what dresses it.** A true rectangle with clean
+ * edges is a machine-cut tile and reads as a bathroom floor; so the stone's own
+ * edges are pulled about by a low-frequency field **held to a quarter of a
+ * stone**, which is the bound that matters - a warp anywhere near half a stone
+ * puts a row out of step with the row above it, and a running bond with a bent
+ * course is a pavement again.
+ */
+const BOWER_SETTS = (u, v) => {
+  /* The course line wanders, and one warp and not two: a floor of setts has one
+   * bed and the only thing that moves it is the floor. */
+  const dip = (fbm(u, v, 3, 2, 701) - 0.5) * 0.030
+    + (fbm(u, v, 9, 2, 703) - 0.5) * 0.012;
+  const cv = v + dip;
+  /* And the stones' own edges, warped - **in tile units and no more than an
+   * eighth of a cell**, or the joint stops being a joint and becomes a wander. */
+  const wu = (fbm(u, v, 7, 2, 707) - 0.5) * 0.11;
+  const wv = (fbm(u, v, 7, 2, 709) - 0.5) * 0.11;
+  /* **The row, and the stone**, and the offset is the whole of the bond. */
+  const ry = wrap(cv, 1) * BOW_ROWS;
+  const row = Math.floor(ry) % BOW_ROWS;
+  const rx = wrap(u + 0.5 * (row & 1) + wu, 1) * BOW_COLS;
+  const col = Math.floor(rx) % BOW_COLS;
+  /* **The stone's own id**, and it is read off the row and the stone and *not* off
+   * a hash of position, because both sides of a joint have to agree about which
+   * stone they are looking at - which is the one thing a joint cannot do without
+   * and the reason a cellular id works here and a position hash never does. */
+  const id = row * 64 + col;
+  /* Inside the stone: how far out of it, 0 to 1 on each axis. */
+  const fx = ry - Math.floor(ry), fy = rx - Math.floor(rx);
+  /* **The distance to the nearest edge, in tile units**, and it is the *minimum*
+   * of the two, so it is the distance to the joint whichever joint is nearer -
+   * which is what makes the arris round the corner of the stone rather than
+   * running off the end of it. */
+  const edge = Math.min(Math.min(fx, 1 - fx) / BOW_ROWS, Math.min(fy, 1 - fy) / BOW_COLS);
+  /* Each stone's own margin, so **no two joints are the same width**: a floor
+   * laid by hand has a hairline where two stones were struck true together and an
+   * open joint where one has settled, and one width of joint drawn the whole way
+   * round every stone is a net. */
+  const margin = (0.0011 + 0.0022 * hash2(id, 11, 719)) * (0.7 + 0.6 * hash2(id, 12, 721));
+  /**
+   * `inSlab` is how far in from the joint a texel is, 0 at the joint and 1 well
+   * inside, and **the multiplier is the whole of the arris**: at eleven the
+   * rounding carries on across most of the stone, so the joint runs out into a
+   * **pillow** and the floor comes out soft, which is what the three references
+   * in common say a worn sett floor is. A large one takes the face flat within a
+   * third of the way in, which leaves a bevel and reads as cut.
+   */
+  const inSlab = clamp01((edge - margin) / 0.016 * 11);
+  /* The stone's own height, and the dome over it: six stones in a row all crowned
+   * equally is a tray of eggs. */
+  const own = hash2(id, 3, 713);
+  const domeH = 0.34 + 0.66 * hash2(id, 19, 715);
+  const swell = fbm(u, v, 3, 3, 717);
+  const plate = own * 0.46 + inSlab * inSlab * domeH * 0.34 + swell * 0.16;
+  /**
+   * The joint, and it is **narrow** where the arris is soft, because those are
+   * two different numbers: the joint is re-thresholded off `inSlab` rather than
+   * being its inverse, so the rounding can run out a long way into the stone
+   * while the dark line stays a line. The width is the stone's own margin again,
+   * and a fifth of it is added by a coarse field so no two stretches of one
+   * joint are the same.
+   */
+  const wobble = (fbm(u, v, 13, 2, 723) - 0.5) * 0.5 + 0.5;
+  const half = (margin / 1.6) * (0.6 + 0.8 * wobble);
+  const crack = clamp01(1 - clamp01((edge - half) / (0.0006 + half * 0.5)));
+  /**
+   * The moss, and **in the joint and not on the stone**, and the two halves of
+   * that sentence each stopped a real failure:
+   *
+   *  - **not on the stone**, because the first version gated it on `inSlab` with
+   *    `(inSlab - 0.06) / 0.34`, which is 1.0 across the whole face - and a floor
+   *    of green cast with grey stones in it is not a mossy floor, it is a lawn.
+   *  - **not in every joint**, because a coarse field thresholded above its own
+   *    mean puts it in about a third of the joint's length: a floor this old is
+   *    mossy where it is damp and bare where it is walked, and the damp is the
+   *    joint. It is keyed off a field and **not** off the stone's id, so both
+   *    sides of a joint agree about whether it is mossy - which two stones either
+   *    side of a gap cannot do.
+   */
+  const moss = clamp01((fbm(u, v, 5, 2, 725) - 0.60) * 6.0) * crack * crack
+    * (0.3 + 0.7 * fbm(u, v, 17, 2, 727));
+  /* The tooth inside a stone, at two sizes and one ridged, because one size is a
+   * stone that reads as a dome of clay however good the joints around it are. */
+  /**
+   * The tooth inside a stone, **at three sizes and one ridged**, and this term is
+   * the difference between a floor of stone and a floor of nine coloured panels.
+   *
+   * A stone two hundred millimetres across filling three hundred and forty texels
+   * of this canvas is a large flat area, and **a large flat area is the one thing
+   * that reads as a fill at any scale.** `COBBLE` can afford to be quiet here
+   * because its courses are a hand's width and its cells are cut edges that catch
+   * the light anyway; a sett is a soft pillow with a face on it, and the only
+   * thing on a pillow is grain. So the coarse octave is at a hundred and one
+   * which is about two millimetres on this tile and a hundred texels on a stone.
+   *
+   * And the ridged octave is sheared, because un-sheared it draws little closed
+   * loops, which is a scribble and not a rock.
+   */
+  const grit = clamp01(fbm(u, v, 41, 2, 729) * 0.44 + fbm(u, v, 101, 3, 731) * 0.34
+    + ridged(u + v * 3, v, 149, 2, 733) * 0.22);
+  /** **The blotch**, and it is the second half of the same answer. A stone is
+   *  quarried, and a quarried stone has a seam in it and a pale weathered face and
+   *  a shadow where it was cut out of the bed - three values across one stone, and
+   *  a per-texel grain alone cannot put them there because a stone's interior
+   *  variation is a *gradient*, not a noise. Read off the stone's own id so it is
+   *  the same blotch everywhere on that stone and not a cloud drifting over it. */
+  const blot = fbm(u * 3.1 + id * 0.37, v * 3.1 - id * 0.19, 5, 2, 751);
+  /* And the two flecks that are **not** grain: a pale lichen mottle over the face
+   * of the stone, and a crystalline speckle at a hand's tenth of a grain - two
+   * millimetres on this tile, which at 1024 is four texels. The speckle is
+   * **a hash and not a lattice**: a `worley` thresholded on `f1` draws its own
+   * cell centres, which is a honeycomb of perfectly regular hexagons laid over a
+   * stone floor, and it is the single most artificial thing a texture can wear. */
+  const lich = clamp01((fbm(u, v, 23, 3, 735) - 0.52) * 2.6) * inSlab;
+  const sparkle = hash2(Math.round(u * 190), Math.round(v * 190), 737);
+  const speck = clamp01((sparkle - 0.991) * 110) * inSlab * (0.4 + 0.6 * plate);
+  /* The stone's own colour: **a value, a warmth, and a family**, and they are
+   * three numbers rather than one because the three references disagree about
+   * which of them the eye reads. `tone` is the value a stone has weathered to and
+   * it is spread wide - near-black beside cream in the same course, which is the
+   * loudest single thing in a sett floor and the one thing a value ramp across
+   * the map cannot do, because stone against stone is what a floor is made of.
+   * `warm` is a continuous drift on top of that, so a grey stone is still a grey
+   * stone and not one of six. `fam` picks the family outright and never mixes
+   * two: a stone that is half a blue-grey and half a brown is a stone nobody
+   * quarried. */
+  const tone = clamp01(0.05 + 0.91 * Math.pow(hash2(id, 13, 739), 0.86));
+  const warm = clamp01(0.5 + (hash2(id, 17, 741) - 0.5) * 1.30
+    + (fbm(u, v, 9, 2, 743) - 0.5) * 0.34);
+  const fam = clamp01(hash2(id, 23, 745));
+  /* And how walked it is, which the roughness reads and the colour does not: a
+   * stone in the middle of a floor takes a polish and a stone in a corner does
+   * not, and that is a gloss and never a colour. */
+  const wear = clamp01(0.30 + (hash2(id, 29, 747) - 0.5) * 1.10
+    + (fbm(u, v, 4, 2, 749) - 0.5) * 0.50);
+
+  return { plate, inSlab, crack, moss, grit, blot, lich, speck, tone, warm, fam, wear, domeH };
+};
+
+/** The shared terms, for the same reason `COBBLE_TERMS` is: eleven texel fields at
+ *  1024 is a term eleven million times, and the three maps are three more. */
+const BOWER_TERMS = ['plate', 'inSlab', 'crack', 'moss', 'grit', 'blot', 'lich', 'speck',
+  'tone', 'warm', 'fam', 'wear', 'domeH'];
+
+/**
+ * The one calibration number on this colour, and it is **one**, where
+ * `COBBLE_CAL` is 0.952, and the difference is the whole of what this map is.
+ *
+ * **This is the only detail albedo in the county that carries hue.** Every other
+ * one is built about white so it multiplies into a vertex colour without shifting
+ * its hue - `grass-albedo`, `track-albedo`, `cliff-albedo`, `sand-albedo` and
+ * `timber-albedo` are all a mean of about one and a chroma of nothing, because
+ * the surface underneath them already knows what colour it is. This one knows
+ * **stone against stone** - blue-grey beside warm brown, creams, near-blacks, an
+ * ochre and a rust in a course of nine - and it can only do that by carrying the
+ * hue itself, because a per-stone value is a value and not a colour.
+ *
+ * **Every chroma below is normalised to a mean of one**, so the hue rides on top
+ * of a value and never moves it: the table is a set of *hues* at a value of one,
+ * and the value is the field's own `tone`. **A consumer multiplying this into a
+ * neutral vertex colour is the only reason the chroma survives at all** - a
+ * coloured vertex colour would have it multiplied in on top and the stone would
+ * come out the product of two hues. Stated here because the next drawer to reach
+ * for a coloured multiply under a palette will not think to ask.
+ *
+ * **And the level is the shader's job and not this file's, which is the opposite
+ * of every other detail albedo here and is worth a paragraph.** `albedo()` takes
+ * linear and encodes sRGB, so the eight-bit canvas is the only place in this whole
+ * chain where anything clips: `colourGain` is a multiply into `diffuseColor`
+ * before the tone map, and a multiply over one is not a clipped value, it is a lit
+ * stone. So the file's whole job is to **carry the value structure** - to hold the
+ * peak just under the knee and let the field's own distribution put the mean
+ * wherever it lands - and `meshes/biomes.js`'s `bowerSetts.gain` is the number
+ * that brings the level back up in the scene.
+ *
+ * **The first version of this map was built about a linear mean of one, because
+ * every other one here is, and it came out looking like a bathroom wall.** A map
+ * whose mean already spends all of the range has nothing left above one for its
+ * own highlights, so the pale half of the floor piles up against the knee: the
+ * first export measured **p05 0.21 and p95 0.99 and a median of 0.87** - a real
+ * spread at both ends and nothing at all in the middle, which is what "bleached"
+ * is made of. Mean 1.0 in linear is the right answer for a map with **no hue and
+ * no value structure of its own**, which is every other one in this county, and
+ * the wrong answer for one with both.
+ */
+const BOWER_CAL = 0.76;
+/**
+ * The bright end, and it is a **knee and not a clamp**. A highlight rolled off
+ * with `tanh` is worth having for the reason the county's cliffs are built as
+ * narrow as they can be: stretching the range rather than flattening it puts the
+ * pale stones at the top of it with their own variation still in them, and a clamp
+ * spends that variation to buy nothing but the same white. At 0.90 the top of the
+ * range is 0.99, so the knee costs almost nothing and buys the highlights.
+ */
+/**
+ * And the knee, at **0.78** and not at the top of the range: `BOWER_CAL` holds the
+ * peak just under it, so the top of the range is **compressed** rather than
+ * clipped and the palest stones keep a little of their own variation.
+ */
+const BOW_KNEE = 0.78;
+const knee = (x) => (x <= BOW_KNEE ? x
+  : BOW_KNEE + (0.97 - BOW_KNEE) * Math.tanh((x - BOW_KNEE) / (0.97 - BOW_KNEE)));
+
+/**
+ * The seven stones, **every one out of the jar** - nothing outside
+ * `meshes/palette.js` may invent a colour, and a mix of two of its names is the
+ * only way to reach a colour it does not hold. Each is then **normalised to a
+ * mean of 1.0**, which is what makes the calibration above mean anything.
+ *
+ * The weights are not equal and the two smallest are the two that must be. A
+ * floor is mostly grey and brown, a cream is common enough to be the eye's
+ * standard, a near-black is one stone in nine, and an ochre and a rust are **one
+ * in twenty between them** - an ochre at a sixth of the floor is a floor of
+ * ochre, and the references have one because one is what a floor has.
+ */
+const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const BOW_STONE = (() => {
+  const raw = [
+    lin('graniteWarm'),                        /* warm brown, and the county's own */
+    lin('granite'),                            /* mid grey, and half the floor */
+    /* cool grey - `graniteDark` with a twentieth of the water's own blue put into
+     * it, because the county has no cool stone and the reference's one cool stone
+     * is cool by a hair and not by a hue */
+    mix(lin('graniteDark'), lin('waterB'), 0.05),
+    mix(lin('brickPale'), lin('granite'), 0.45), /* cream, the pale standard */
+    lin('brickDeep'),                          /* near-black */
+    mix(lin('cob'), lin('brickPale'), 0.30),   /* the ochre */
+    mix(lin('limeIron'), lin('brickShade'), 0.35), /* and the rust */
+  ];
+  /* Normalised to a mean of one and then **pulled a seventh back toward grey**.
+   * Normalising alone is not enough and this is why: dividing a dark stone by its
+   * own low mean multiplies its *chroma* as well as its value, so a `graniteDark`
+   * with a tenth of the water's blue in it comes out of that division a saturated
+   * sky blue, and the floor reads as a bathroom. **A chroma map has to have its
+   * chroma set as well as its value**, and the number to set it with is not the
+   * one to set its value with. */
+  /**
+   * **And the chroma is pulled back to 0.45 of what the table holds, which is
+   * most of the last line.** The table's names are the county's - a granite brown,
+   * a cream, a near-black, an ochre, a rust - and dividing each by its own mean
+   * makes them *more* saturated than the jar, because a dark stone divided by a
+   * low mean multiplies its chroma as well as its value. Held near full that came
+   * out as a road of **black and cream squares reading as a chessboard**, and the
+   * two faults are one fault: **value and chroma were both competing with the
+   * bond.**
+   *
+   * `references/tunnel.jpg`'s road is a muted grey-brown the whole length of it,
+   * with the colour of a stone showing here and there and nowhere else. So this
+   * ramp is under half the jar's, and the rest of the colour a sett road has is
+   * **warm and cool rather than chromatic** - which is what the `warm` drift below
+   * it is for, and which is why that term nearly doubles.
+   */
+  return raw.map((c) => {
+    const m = (c[0] + c[1] + c[2]) / 3;
+    return [c[0] / m, c[1] / m, c[2] / m].map((x) => 1 + (x - 1) * 0.45);
+  });
+})();
+/** Where the cumulative draw falls, and the two small ones are the last two. */
+/**
+ * **And the weights are the browns' and the greys', not the blue's.** The first
+ * export put thirty per cent of the floor in the blue-grey family and four of its
+ * nine stones read as pale blue: a cool stone is **the one stone in the picture
+ * that is not a brown** and it earns its place by being rare. The order below is
+ * brown, mid grey, cool grey, cream, near-black, ochre, rust.
+ */
+const BOW_STONE_W = [0.22, 0.40, 0.58, 0.74, 0.89, 0.96, 1.001];
+/** The gap, and the moss in it. Both out of the jar and both **dark**, because
+ *  this is a multiply: a joint that comes out pale is a stripe of grout. */
+const BOW_GAP = lin('brickDeep').map((x) => x * 0.55);
+/**
+ * The moss, out of the jar, and **darker than `moss` itself.** The first export
+ * ran it at `mix(moss, mossLight)` and the joints came out a bright olive line
+ * drawn neatly round every stone, which is the most artificial thing a stone floor
+ * can wear: **real moss is a stain in a joint, not a border on one.** So it is
+ * `moss` brought down, and the amount of it is `moss * 0.9` into a field already
+ * thresholded to about a third of the joints.
+ */
+const BOW_MOSS = mix(lin('moss'), lin('mossLight'), 0.18).map((x) => x * 0.8);
+
+let bowerCache = { size: 0, f: null };
+function bowerFields(S) {
+  if (bowerCache.size === S) return bowerCache.f;
+  const f = {};
+  for (const t of BOWER_TERMS) f[t] = new Float32Array(S * S);
+  for (let y = 0; y < S; y++) {
+    const v = (y + 0.5) / S;
+    for (let x = 0; x < S; x++) {
+      const c = BOWER_SETTS((x + 0.5) / S, v);
+      const o = y * S + x;
+      for (const t of BOWER_TERMS) f[t][o] = c[t];
+    }
+  }
+  bowerCache = { size: S, f };
+  return f;
+}
+/** One texel of a shared sett term, at the place a drawer is sampling. */
+function bowerAt(S, u, v) {
+  const f = bowerFields(S);
+  const o = ((Math.round(v * S) % S) * S) + (Math.round(u * S) % S);
+  const out = {};
+  for (const t of BOWER_TERMS) out[t] = f[t][o];
+  return out;
+}
+
 /** How hard each course stands out in value, smoothed around the ring so
  *  neighbours agree. Graded bedding is a face; ungraded bedding is a barcode. */
 const BED_T = (() => {
@@ -1291,6 +1657,39 @@ function heightField(size, fn) {
   }
   return f;
 }
+/**
+ * A height map: the raw unclamped height field, written as a greyscale PNG
+ * (r = g = b), with no strength applied. The height is *relative within the
+ * tile* - the same fact `heightField`'s own comment states, that it is only
+ * ever differenced and nothing reads it except the gradient - so it is
+ * normalized to the field's own [min, max] before it is written: that is the
+ * only way a raw field with no fixed range can become a 0..255 value without
+ * clamping a term away. A `-h` written from `field()` (the clamped version)
+ * would be a plateau where the normal map has a slope, and the two would be
+ * two textures laid over each other - the drawer reads the **same** `fn` the
+ * `-n`'s drawer runs through `heightField()`, so the height and the slope
+ * cannot disagree.
+ */
+function hMap(size, h) {
+  // the field is only ever differenced, so its absolute range is a property
+  // of the map and not of anything outside it: normalize to it rather than
+  // clamping a term away
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < h.length; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
+  const span = (hi - lo) || 1;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+  for (let i = 0; i < h.length; i++) {
+    const g = Math.round(((h[i] - lo) / span) * 255);
+    const o = i * 4;
+    d[o] = g; d[o + 1] = g; d[o + 2] = g; d[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
 /** A canvas, from a function of (u, v) given as an [r, g, b] in 0..1 sRGB. */
 function paint(size, fn) {
   const c = document.createElement('canvas');
@@ -1948,6 +2347,207 @@ function marbleAt(S, u, v) {
   return out;
 }
 
+/* ================================================================== *
+ * The ashlands
+ *
+ * Four fields and a fifth for a shard, and every one of them exists because the
+ * meadow's own answer is the wrong one out here rather than because a dead place
+ * needs different noise. **Ash is not grass with the hue taken out**: it is fine
+ * grit lying on a broad crust, and a crust is a *value* change across a metre
+ * while the grit on it is a centimetre of relief. Grass's field is stems on a mat
+ * and a stem stands; the same field with a grey palette on it is a smooth cone,
+ * because the thing grass reads as is the standing-up part. So `ASH()` is two
+ * scales and they are the two scales of ash.
+ *
+ * And **columnar basalt is the cliff's joints in three dimensions**, which is the
+ * one field here that is a copy of a reference rather than a new idea - and which
+ * is also the one most likely to be got wrong by anybody reading `CLIFF` above it
+ * as a starting point. `crack` stays a **one-dimensional lattice of grooves**,
+ * six to the tile, each with its own width and its own place inside its own cell,
+ * each **thresholded shut over part of its own length**; and `plate` stays out of
+ * `crack` and out of the albedo, because a value discontinuity between two flats
+ * is an edge and a *darkened* one is a joint, and a face with joints in every
+ * direction is a net of closed cells - which is the cobbled road under a new name
+ * and the exact failure `CLIFF`'s comments are longest about.
+ * ================================================================== */
+
+/**
+ * The ash turf. **A crust and grit on it, and nothing standing up.**
+ *
+ * The crust is a broad warp at four to the tile with the cell height quantised
+ * into it, so the mat is *plates of ash at slightly different levels* rather than
+ * a swell - which is what it is: ash falls, sets, and is broken by whatever stood
+ * up before it. The grit is a ridged noise at 61 to the tile cut narrow, which is
+ * `crest()` and the same cut grass's stems use; the difference is that here it is
+ * flat-lying, so it reads as a texture and not as a field of blades.
+ *
+ * The sweep of wind is a fifth of the crust's amplitude and it is **anisotropic**,
+ * 7 by 2, because ash is laid down in streaks and a round patch of it reads as
+ * lichen.
+ */
+const ASH = (u, v) => {
+  const streak = (fbmXY(u, v, 7, 2, 3, 511) - 0.5) * 0.10;
+  // the crust, quantised: ash is set in plates and a plate has an edge
+  const cw = u + streak, ch = v + streak * 0.4;
+  const cell = worley(cw * 5, ch * 4, 5, 4, 513);
+  const crust = hash2(cell.id, 3, 517) * 0.34
+    + clamp01((cell.f2 - cell.f1) * 12) * 0.22
+    + fbm(ch, ch, 9, 2, 521) * 0.16;
+  // the grit on it: a crest, narrow, and at the scale of a centimetre on a five-metre tile
+  const grit = crest(u, v, 61, 3, 523, 0.78, 4.2);
+  const fine = fbm(u, v, 149, 2, 527);
+  const clump = fbm(u, v, 17, 2, 529);
+  // the dust: what is left on top of a crust where nothing has blown off it
+  const dust = clamp01((fbmXY(u, v, 4, 2, 3, 531) - 0.46) * 2.6);
+  return { crust, grit, fine, clump, dust, streak: streak + 0.05 };
+};
+
+/**
+ * The cinder, which is the ashlands' shore. **Coarse gravel, a hand's width of a
+ * crest and nothing finer** - which is the whole of what a shore is out here, and
+ * the reason it cannot borrow the meadow's: a sand ripple is a long low crest a
+ * third of a metre wide, and a band of gravel is a set of stones.
+ *
+ * So this is a **cell field and it is not afraid of that**, because a shore is the
+ * one surface in the county where a closed cell is the right shape: a stone has an
+ * outline. Nine to the tile on a nine-tenths-of-a-metre tile is a stone about a
+ * hand's width across, each one with a flat top of its own, and the joints between
+ * two of them are *gaps* here rather than grooves elsewhere - which is the same
+ * word turned round, because a stone lying on a beach is bounded rather than cut.
+ */
+const CINDER = (u, v) => {
+  const cw = u + (fbmXY(u, v, 5, 3, 2, 541) - 0.5) * 0.16;
+  const cell = worley(cw, v, 9, 8, 547);
+  const edge = clamp01((cell.f2 - cell.f1) * 16);
+  const crag = hash2(cell.id, 5, 551) * 0.5 + edge * 0.5;
+  const grit = fbm(u, v, 73, 2, 557);
+  const flake = clamp01((worley(u * 2.1, v * 2.1, 19, 17, 563).f2 - worley(u * 2.1, v * 2.1, 19, 17, 563).f1) * 18);
+  const patch = fbm(u, v, 6, 3, 569);
+  return { crag, edge, grit, flake, patch };
+};
+
+/**
+ * The ashlands road: **packed ash and grit, swept.**
+ *
+ * This is the meadow's `TRACK` and it is not the meadow's road in the one place
+ * that matters. A clay court is read from four hundred metres by its **colour** -
+ * a red that no grass is - and the ashlands road has no colour, so the sweep is
+ * all it has: the paler grit raked down the middle where a hundred seasons of
+ * feet have gone, and the packed near-black ash either side of it.
+ *
+ * **The sweep is the width of the lane and not a fraction of the tile.** `mat.road`
+ * is `uv: true`, so `u` is metres out from the centre line, and a road six metres
+ * wide on an 0.85-metre tile is about seven repeats of it - the sweep therefore
+ * cannot be a function of `u` alone or every lane would be seven of them. It is a
+ * **low-frequency warp across the tile in the v direction** instead, which is the
+ * direction the ribbon's grain runs, so it reads as a band down the middle of the
+ * road and not as a stripe repeated along it. That is the one number in this field
+ * that depends on the material rather than on the rock.
+ */
+const ASH_TRACK = (u, v) => {
+  const sweep = clamp01(1 - Math.abs(Math.sin(v * Math.PI * 2 * 1.0 + (fbm(u, v, 3, 2, 601) - 0.5) * 1.1) ) * 3.4);
+  const pack = 1 - sweep * 0.8;
+  const grit = fbm(u, v, 53, 3, 607);
+  const flake = clamp01((worley(u * 3, v * 3, 23, 23, 611).f2 - worley(u * 3, v * 3, 23, 23, 611).f1) * 20);
+  // the seams are where the packed ash has opened along a stone's edge
+  const seam = clamp01((ridged(u + v * 0.3, v, 7, 2, 613) - 0.62) * 3.0);
+  const pit = Math.pow(clamp01((fbmXY(u, v, 13, 9, 2, 617) - 0.60) * 3.2), 1.4);
+  return { sweep, pack, grit, flake, seam, pit };
+};
+
+/**
+ * Columnar basalt, and **the columns are the whole of it.**
+ *
+ * The joints are a **one-dimensional lattice**, six to the tile - five would be
+ * the cliff's own number and six is a half again, because a column is narrower
+ * than a columnar block and a face with the cliff's spacing reads as the cliff.
+ * Each joint sits somewhere inside its own cell with a width of its own, and each
+ * one is **thresholded shut over part of its length** by a low-frequency gate, so
+ * a joint dies and restarts and a good part of the face carries no joint at all.
+ *
+ * **The gate is the term that is easy to leave out and it is the whole reason
+ * this is not a fence.** A smooth multiplier is not a substitute: at
+ * `(0.40 + 0.60 * cont)` the joint never reaches zero and six faint full-height
+ * lines are still six lines, and a face of drawn lines is a made thing. So the
+ * gate is `smoothstep`ped and it is *high*, and the joints come out in patches.
+ *
+ * The facets come from a coarse 6-by-4 cell lattice used the one way a cell can be
+ * used without becoming a net: **every cell gets a flat value of its own** and the
+ * boundary between two of them is a change of plane. `plate` is absent from the
+ * groove term and from the albedo below, and that is deliberate in both places.
+ *
+ * And **the weight in its normal is the groove and not the plane** - 0.38 against
+ * a facet's 0.10 - because both references are lit planes beside near-black gaps
+ * and the gap is what makes a plane read as a plane.
+ */
+const BASALT_COL_N = 6;
+/** The one number that puts the map's mean back where the stone's is, and
+ *  it is under one because the map is built dark on purpose - a columnar basalt is
+ *  meant to darken, and a map that averaged near white would leave the face the
+ *  pale grey the road is. */
+const BASALT_CAL = 1.02;
+const BASALT = (u, v) => {
+  // a slow dip, so the columns are not all standing on one level, and it is
+  // sheared across the face rather than sliding down it: a joint that slides
+  // downward as it descends is a crack
+  const dip = (fbmXY(u, v, 6, 3, 2, 571) - 0.5) * 0.05;
+  const wu = (fbmXY(u, v, 6, 2, 3, 573) - 0.5) * 0.26;
+  const cf = (u + wu) * BASALT_COL_N;
+  const ci = Math.floor(cf);
+  const frac = cf - ci;
+  const jAt = 0.5 + (hash2(ci, 5, 577) - 0.5) * 0.68;
+  const dL = Math.abs(frac - jAt), dR = Math.abs(frac + 1 - jAt);
+  const near = dL < dR ? ci : ci + 1;
+  const jd = Math.min(dL, dR);
+  const jw = 0.012 + 0.040 * hash2(near, 9, 581);
+  /** **The gate, and the reason this is columnar rock rather than a fence.**
+   *  Thresholded hard, not multiplied: the joint has to reach *zero* over part of
+   *  its length or the six of them are six drawn lines. */
+  const gate = smoothstep(clamp01((fbmXY(0.31 + near * 0.211, v, 4, 3, 2, 583) - 0.42) * 2.6));
+  const groove = clamp01(1 - jd / jw) * gate;
+  // the plane each column shows: its own value, constant across the column
+  const own = hash2(near, 3, 587);
+  const swell = fbmXY(0.29 + near * 0.191, v, 1, 5, 2, 591);
+  const col = clamp01(0.26 + own * 0.42 + swell * 0.20);
+  // the facets, and **no darkening anywhere in them**
+  const fp = worley(u * 1.3 + wu * 0.5, v + dip * 0.5, 6, 4, 593);
+  const plate = clamp01((fp.f2 - fp.f1) * 22);
+  const pval = hash2(fp.id, 17, 597) * 0.6 + 0.4 * plate;
+  // the chipping: a hand's width and a thumbnail's, and the second is what puts
+  // tooth into the first
+  const cl = worley(u + (fbmXY(u, v, 11, 4, 2, 601) - 0.5) * 0.14, v + dip, 15, 19, 607);
+  const chip = clamp01(1 - (cl.f2 - cl.f1) * 22) * 0.9 + 0.1 * (1 - cl.f1);
+  const tooth = fbm(u, v, 37, 2, 611);
+  const grit = fbm(u, v, 89, 2, 613);
+  // and the pale bloom that comes off a column that has been rained on, which is
+  // the only thing out here that is lighter than the stone under it
+  const bloom = clamp01((fbmXY(u, v, 3, 5, 2, 617) - 0.56) * 3.0) * clamp01(own * 2 - 0.4);
+  const tone = clamp01(col * 0.6 + plate * 0.2 + bloom * 0.2);
+  return { col, groove, plate, pval, chip, tooth, grit, bloom, tone };
+};
+
+/**
+ * Obsidian, and **it is the one thing in the county that is shiny**, so the field
+ * is built round two finishes rather than round one: a dull conchoidal skin over
+ * the outside of a fracture and a bright glassy one inside it.
+ *
+ * The fracture is a set of **rippled scallops** - the shell-shaped marks a brittle
+ * glass breaks into - and the ripple is `abs(sin)` rather than the grass's `crest`,
+ * because a scallop's edge is a rounded arch and not a cut crest. The skin is a
+ * second, much coarser lattice over the top of it, and it is **never drawn over
+ * the bright glass**: a skin that crossed a fracture is a scratch on a mirror,
+ * and obsidian is read by the two finishes meeting at an edge.
+ */
+const OBSIDIAN = (u, v) => {
+  const rip = Math.abs(Math.sin((fbmXY(u, v, 9, 9, 3, 631) + fbm(u, v, 23, 2, 633)) * Math.PI * 11));
+  const fres = clamp01((rip - 0.55) * 3.2);
+  const sk = worley(u * 0.9, v * 0.9, 4, 4, 637);
+  const skin = clamp01(1 - (sk.f2 - sk.f1) * 9) * (1 - fres);
+  const gleam = clamp01(fres * 1.15 - skin * 0.3);
+  const grit = fbm(u, v, 71, 2, 641);
+  return { fres, skin, gleam, grit };
+};
+
 /* ---- the blocks a course is cut into -------------------------------- *
  *
  * The map this replaces was a stack of horizontal lines and nothing else, and
@@ -2403,8 +3003,25 @@ const half = (flesh, k) => (S) => field(S, (u, v) => flesh(u, v)[k]);
    * channel of hue in here and every mushroom in the county is a shade of it.
    */
   const TONE_LO = 0.93;
-  const tone = (S, f) => paint(S, (u, v, out) => {
-    const t = TONE_LO + (1 - TONE_LO) * clamp01(f(u, v));
+  /**
+   * **`lo` is the window, and one caller takes a wider one on purpose.** The field `f`
+   * returns is **0..1 and not a colour** - it is remapped into `lo..1` here, which is
+   * what keeps every `-tone` grey and hue-free whatever the drawer hands over.
+   *
+   * **`shell-tone` passes `0.62`, and it is the only map in the county that leaves the
+   * top tenth of the range.** The bound above is real and it is two sentences: a hue in
+   * here is a hue the player never chose, and **a full-range one darkens every racer by
+   * a third**. The shell is the one piece where the *pattern* lives in this slot and
+   * nowhere else - the geometry is 146 triangles of smooth dome with no whorl in it -
+   * **and a seventh of the range is not a pattern.** The cost is stated rather than
+   * hidden: **the darkest groove on a shell is 0.62 of the tint's own value**, where
+   * every other `-tone` in the county moves value by about a tenth. A groove that dark
+   * is a shadow in a crevice and not a stain on the animal, which is the right way
+   * round for a shell - and it is why this is a per-map argument and not a change to
+   * `TONE_LO`: the snail's own skin, the mushroom caps and the rest keep the tenth.
+   */
+  const tone = (S, f, lo = TONE_LO) => paint(S, (u, v, out) => {
+    const t = lo + (1 - lo) * clamp01(f(u, v));
     out[0] = out[1] = out[2] = t;
   });
 
@@ -2580,6 +3197,34 @@ const TIMBER = (u, v) => {
  * `albedo()`.
  */
 const TIMBER_CAL = 0.969;
+
+/**
+ * **There is no calibration number on the pine's needle map, and that is the
+ * answer rather than an omission** - see the field above, which subtracts each
+ * term's own mean and so lands on one exactly. The constant used to be here, and
+ * it was two attempts of arithmetic that could not work: `pine-albedo` was
+ * written as a green, `dark` at [0.02, 0.06, 0.01] and `light` at [0.16, 0.34,
+ * 0.08], on the reasonable-sounding grounds that pine needles are green and the
+ * plane is wearing a pine.
+ *
+ * It is the same reasoning `rock-albedo` would give, and rock is the one prop in
+ * the county where it is right: a stone is **painted** by its map and has no
+ * vertex colour of its own to be painted over. The pine has five greens in its
+ * vertices off `pineNeedle` in the jar, and a map in the `map` slot multiplies
+ * them, so the two never met - the map supplied a green and the vertices supplied
+ * a green and the shader multiplied a green by a green. **Measured off the written
+ * texture, the multiply was 0.042 on red, 0.104 on green and 0.021 on blue**, so
+ * the trunk's `barkRed` came out at a linear 0.008 and every needle on the tree at
+ * a fifth of the step it was drawn in - and the trunk wore the needle map too,
+ * because an array entry in the manifest answers every part the same way.
+ *
+ * Which is the sentence this file keeps having to relearn: **an `-albedo` on a prop
+ * whose colour is in its vertices is a tone map wearing an `-albedo`'s name**, and
+ * there is no gain behind it to put the mean back - `detailCGain` is a shader
+ * injection on the course surfaces and a glb's own material has none. If a fifth
+ * term is ever added to the field it comes in as `field - mean`, and if the map is
+ * ever found to be clipping, the base under the field is the number to move.
+ */
 
 let timberCache = { size: 0, f: null };
 function timberFields(S) {
@@ -2847,6 +3492,134 @@ function metalAt(S, u, v) {
 }
 
 
+/**
+ * The snail's skin and the shell's, and **the two are fields rather than three
+ * drawers each** - six maps, two fields, and the reason is the one `triplanarDetail()`
+ * was rebuilt for: a detail normal derived from an albedo by hand, or from the same
+ * noise with the octaves changed, looks right in this page and is *wrong in the
+ * surface*, because the bumps end up between the features instead of under them.
+ * Sharing the field is what makes the normal be the tone.
+ *
+ * **And the tile is the geometry's and not the map's.** `build-snail.html` lays `u` as
+ * metres along the animal over `TILE = 0.105` and `build-shell.html` lays `u` as the
+ * length round the coil over `TILE_U = 0.28`, so one tile here is one tile there:
+ * twenty-six rings across the snail's ten centimetres is a ring every four millimetres
+ * at race distance, and fourteen growth lines across the shell's twenty-eight is one
+ * every two on the turn that faces the camera. Change a frequency and the tile has to
+ * move with it, which is the rule the whole page is written against.
+ *
+ * Low chroma on purpose: `material.color` is the hue, and a coloured map under a
+ * coloured tint is a hue shift rather than a hue. **And the `-tone` is grey and
+ * near-white and not an `-albedo`**, which is the only way a base-colour slot is legal
+ * on a piece the editor recolours at runtime - see `tone()` for the window and why the
+ * bound on it is a hard one.
+ */
+const SKIN = (() => {
+    const at = (u, v) => {
+      // the rings a snail's neck and flank carry, running **round** the animal,
+      // so they are lines of constant `u` and wander a little as they go
+      const rings = 0.5 + 0.5 * Math.sin((u * 26 + fbm(u, v, 5, 2, 3) * 0.9) * Math.PI * 2);
+      // the pores, in a loose lattice rather than on one: a snail's skin is
+      // stippled, and a lattice at one frequency to the tile reads as a screen
+      const pore = crestOf(ridged(u, v, 17, 2, 67), 0.62, 3.2);
+      return {
+        rings, pore,
+        mottle: fbm(u, v, 4, 3, 83),
+        fine: fbm(u, v, 31, 2, 89),
+      };
+    };
+    const height = (u, v) => {
+      const s = at(u, v);
+      return s.rings * 0.34 + s.pore * 0.30 + s.mottle * 0.26 + s.fine * 0.10;
+    };
+    return { at, height };
+  })();
+
+const SHELL = (() => {
+  /**
+   * **The eye of the spiral, and it is measured off the reference rather than
+   * guessed.** `meshes/build-shell.html` remaps the shell island's own uv rectangle
+   * onto 0..1, which puts the reference's unwrap - and so its painted whorl - in the
+   * same frame this map is drawn in. **The eye of that spiral sits at 0.55 across and
+   * 0.32 up**, which is what the island's own uv says and what `references/snailRef.glb`
+   * has on the apron of it.
+   *
+   * **A number here is a number anybody can check.** A spiral is the easiest shape in
+   * the county to draw at the wrong scale, and a whorl drawn a quarter turn out lands
+   * on the animal's flank and reads as a shell that grew sideways - **the tell is that
+   * the eye is somewhere the eye cannot be**, which is the crown, and it is nowhere else.
+   */
+  const APEX = [0.55, 0.32];
+  /**
+   * **The ribs, and they are a logarithmic spiral family and not concentric rings.**
+   * A shell's ribs are not circles: they crowd and swing outward, and `log r` is the
+   * whole of what turns a ring into a whorl. So the phase is `RIBS · (θ + TWIST · ln r)`
+   * and **a curve of constant phase is a logarithmic spiral about the eye**, which is
+   * the sentence the shell is actually made of. `RIBS` is how many ribs cross one turn
+   * and `TWIST` is how far one turn swings them, and the pair is what makes the whorl
+   * read as wound rather than as a dartboard.
+   */
+  /**
+   * **Fifteen and not twenty-six, and the difference between them is the whole of what
+   * makes a shell and what makes a screw thread.** The reference's coil has about fifteen
+   * ribs between its eye and its rim, **soft and wide**, and at twenty-six on a 256 tile
+   * they land a texel and a half apart and the normal map resolves each one as a hard
+   * ridge - which is what a threaded rod looks like and not what a mollusc grows.
+   * `TWIST` is up as well, **because a whorl has to visibly curve**: at 0.85 the family
+   * was a fan of straight ribs and at 1.7 the same fifteen sweep round the eye, which is
+   * the whole difference between a spiral and a starburst.
+   */
+  const RIBS = 15, TWIST = 1.7;
+
+  const at = (u, v) => {
+    const dx = u - APEX[0], dy = v - APEX[1];
+    const r = Math.hypot(dx, dy);
+    const th = Math.atan2(dy, dx);
+    // **and the unwrap's own tear**, which is where the reference's shell met the
+    // body: a straight seam down one edge, and the one place the field has to admit
+    // it is not periodic in `u`
+    const seam = Math.exp(-(((1 - u) / 0.030) ** 2));
+    // **and the offset inside the log is a hundred and thirty millimetres of uv, not
+    // fifty-five, because the log is what pinches.** `log r` runs to minus infinity at
+    // the eye, so a spiral family drawn with a small offset winds faster and faster as it
+    // approaches its own centre and comes out a **pinwheel** - twenty ribs inside a
+    // millimetre and five across the rest of the shell. **A logarithmic spiral is straight
+    // at its centre and curves away from it**, which is what the big offset buys: the
+    // twist's contribution becomes a constant near the eye, the ribs radiate there, and
+    // they bend outward as they go.
+    const sp = RIBS * (th + TWIST * Math.log(r + 0.13));
+    const rib = 0.5 + 0.5 * Math.cos(sp);
+    // the crest is rounded and the notch between whorls is a groove and not a tint:
+    // `rib` raised to a power darkens the trough without moving it, and a groove that
+    // never reaches zero is a stain
+    // **and both profiles are rounder than they were.** `pow(3.2)` on the groove put a
+    // one-texel black line between every pair of ribs, which is a cut and not a valley;
+    // a shell's ribs are separated by a valley of the same width as the ridge beside it,
+    // so the groove is a shallow `1.6` and the crest a fuller `1.25`.
+    const crest = Math.pow(rib, 1.25);
+    const groove = Math.pow(1 - rib, 1.6);
+    // **the eye is pale and the flank is not**, because the eye is the newest growth
+    // and the flank is the part a foot has been rubbing for a year
+    const age = Math.exp(-r * 3.4);
+    return {
+      r, th, rib, crest, groove, seam, age,
+      // the step from one year's growth to the next, and it follows the whorl rather
+      // than running round the tile
+      step: crestOf(ridged(u, v, 6, 2, 71), 0.55, 2.6),
+      mottle: fbm(u, v, 5, 3, 73),
+    };
+  };
+  const height = (u, v) => {
+    const s = at(u, v);
+    // **and the relief is a millimetre and a half, not four.** A snail's growth ridges
+    // are shallow; the whole of what the normal map is doing here is a hint of grain, and
+    // the depth was carrying the pattern instead of the map's colour.
+    return 0.42 + s.crest * 0.22 * (0.45 + 0.55 * s.age) - s.groove * 0.12 - s.seam * 0.22
+      + s.step * 0.10 + s.mottle * 0.14;
+  };
+  return { at, height };
+  })();
+
 const DRAW = {
   /* ---- the stones ------------------------------------------------ */
   // The grain of every stone in the county, and it is a cliff face rather than
@@ -3097,6 +3870,21 @@ const DRAW = {
     return 0.42 + patch * 4.4 + clump * 0.16 + body * 0.14 + stem * 0.17 + stub * 0.08
       + fine * 0.06 - gap * 0.42 - thin * 0.30 + dryBlade * 0.07 + seed * 0.35;
   }), 1.75),
+  /** The grass's own height, off the same `TURF` term the `grass-n` drawer runs
+   *  through `heightField()`: one field, two maps, so the -h and the -n cannot
+   *  disagree. Written raw and unclamped, and the thickness it feeds is the
+   *  measured crown-to-joint distance off `detail.rms` of the -n. */
+  'grass-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const { body, stem, stub, gap, thin, patch, fine, clump, dry: dryBlade, seed } = TURF(u, v);
+    return 0.42 + patch * 4.4 + clump * 0.16 + body * 0.14 + stem * 0.17 + stub * 0.08
+      + fine * 0.06 - gap * 0.42 - thin * 0.30 + dryBlade * 0.07 + seed * 0.35;
+  })),
+  /** The turf's own crown-to-joint distance: the `grass-n` drawer's strength is
+   *  **1.75** against a 2048 tile, which is a stem four-tenths of a texel
+   *  across, and the thickness is read off that - the relief the march walks
+   *  over is the distance between a blade and the hollow beside it, which is
+   *  1.75 texels over a 2048 tile, **0.00085 of the tile**, and it is written
+   *  into `biomes.js` as the role's `thickness`. */
 
   // The track is clay on the flat and rock on the walls, in the same ribbon, so
   // its detail is the coarser of the two: it has to read at a glance as a course
@@ -3128,6 +3916,12 @@ const DRAW = {
   // And it is `heightField` and not `field`, which is the same bargain `CLIFF`'s
   // makes: the range is not worth spending on a plateau's top.
   'track-n': (S) => normalMap(S, heightField(S, (u, v) => trackWear(TRACK(u, v))), 34),
+  /** The track's own height, off the same `trackWear(TRACK(u, v))` the `track-n`
+   *  drawer runs through `heightField()`. The `track-n` strength is **34** against
+   *  a 1024 tile, so the wear patch is the distance the march walks and the
+   *  thickness is read off that - one crown-to-joint step across the track's
+   *  grain, about **0.06 of the tile**. */
+  'track-h': (S) => hMap(S, heightField(S, (u, v) => trackWear(TRACK(u, v)))),
   'track-rgh': (S) => ormMap(S, field(S, (u, v) => {
     const t = TRACK(u, v);
     // Duller where the dust is, glossier off the top of a grain and off the face
@@ -3243,6 +4037,18 @@ const DRAW = {
     // was. This is the road's 36 for the road's reason: same resolution, and the
     // smallest thing either field has to resolve is a centimetre.
   }), 36),
+  /** The cliff's own height, off the same `cliffAt` terms the `cliff-n` drawer
+   *  uses: the joint that is a gap in the normal is a gap in the height too,
+   *  one field, two maps. The cliff's `cliff-n` strength is **36** against a
+   *  1024 tile, and its crown-to-joint distance - the joint from the adjacent
+   *  plate - is the widest of the setts' own, read off the -n's `detail.rms`
+   *  as about **0.10 of the tile**. */
+  'cliff-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const c = cliffAt(S, u, v);
+    return 0.30 + c.rib * 0.24 + c.pval * 0.12 + c.bed * 0.07 + c.lam * 0.03
+      + c.chip * 0.13 + c.tooth * 0.05 + c.grit * 0.12 - c.ledge * 0.06
+      - c.crack * 0.40;
+  })),
   'cliff-rgh': (S) => ormMap(S,
     field(S, (u, v) => {
       const c = cliffAt(S, u, v);
@@ -3455,6 +4261,14 @@ const DRAW = {
     const s = SAND(u, v);
     return 0.46 + s.ripple * 0.30 + s.wrinkle * 0.10 + s.grain * 0.14 - s.grit * 0.06;
   }), 6.0),
+  /** The sand's own height, off the same `SAND` term the `sand-n` drawer uses.
+   *  The `sand-n` strength is **6.0** against a 256 tile, so a crest - a long
+   *  low ripple - is the coarsest thing in the field and its crown-to-ripple
+   *  distance is read off the -n's `detail.rms` as about **0.03 of the tile**. */
+  'sand-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const s = SAND(u, v);
+    return 0.46 + s.ripple * 0.30 + s.wrinkle * 0.10 + s.grain * 0.14 - s.grit * 0.06;
+  })),
   'sand-albedo': (S) => albedo(S, (u, v, out) => {
     const s = SAND(u, v);
     // The same bargain the cliff's colour strikes and for the same reason: it
@@ -4027,6 +4841,265 @@ const DRAW = {
   })),
 
 
+  /* ---- the ashlands ---------------------------------------------------- *
+   * Twelve files in nine entries, and the first thing worth saying is why
+   * `ashGrass` is drawn at `SIZE.turf` and `cinder` is not: **the turf's tile is
+   * five metres and the shore's is nine tenths of one**, which is a factor of
+   * five and a half, and the finest thing in this map is a centimetre of ash on a
+   * tuft. A 256 map at 1.5 metres a tile resolves a stone about a centimetre
+   * across as four texels and a piece of grit as one, so the ground would come
+   * back a smooth card - and **the resolution and the tile move together**,
+   * because a stem's width is the tile divided by the lattice in the map.
+   *
+   * The second thing is that **three of these four carry a colour and one does
+   * not need one**, and the reason is the same as everywhere else in the county:
+   * the ground is a vertex colour every two metres and the map is the half of the
+   * colour a vertex cannot draw. `ashGrass-albedo` and `cinder-albedo` are
+   * multiplies over `PAL.ashMid` and `PAL.cinder`; **`ashTrack-albedo` is written
+   * out as a neutral triple** because the ashlands road is grey, so a hue in the
+   * map would be repainting the one surface that is already carrying a track line
+   * down the middle of it.
+   */
+  'ashGrass-albedo': (S) => albedo(S, (u, v, out) => {
+    const a = ASH(u, v);
+    // **A pale crust, a darker grit and a dust on top of the plate edges**, and
+    // every term takes value away rather than up: this multiplies `ashMid` and a
+    // quarter of the map sitting above it is a quarter of the ground's detail
+    // dead. Built about white from below, the way `marble-albedo` is and for the
+    // same reason - and the `detailCGain` in the shader is what puts the mean back.
+    const base = 0.62 + a.crust * 0.20 - a.grit * 0.10 + a.fine * 0.05
+      + (a.dust - 0.5) * 0.07;
+    // the grit is a shade cooler than the crust and **not greyer**: ash's shadow is
+    // the colour of the crust under it, and a grey shadow on a warm grey reads as
+    // a wet patch.
+    const g = base * (0.94 + 0.06 * (1 - a.streak));
+    // **And the map is warmed, by the granite's own argument and by the
+    // measurement that made it.** The county is lit by a blue hemisphere at four
+    // fifths and two blue-white directionals, so a perfectly neutral grey arrives
+    // on screen as periwinkle - and it was measured: the ash plain on the
+    // Adversary's course came back **76, 89, 99**, blue above green above red, on a
+    // palette whose own `ashMid` is (0.44, 0.425, 0.405) and a shade *warm*. A
+    // dead valley is not periwinkle, and `rock-albedo` already says the answer is
+    // cheaper in the map than in the light: warming by a tenth undoes most of what
+    // the sky does. **A tenth on red and blue and a two-hundredth on green**, which
+    // puts the file's own mean at (0.72, 0.70, 0.64) and leaves the streaks' cool
+    // bias on top of it.
+    out[0] = g * (1.105 + 0.03 * a.streak);
+    out[1] = g * (1.005 + 0.01 * a.streak);
+    out[2] = g * (0.935 + 0.01 * a.streak);
+  }),
+  'ashGrass-n': (S) => normalMap(S, heightField(S, (u, v) => {
+    const a = ASH(u, v);
+    // **The crust is the value and the grit is the relief, and they are the two
+    // halves of `ASH()` in the same order.** The crust is what stands up - ash
+    // falls and sets into plates, so the plates are the bump - and the grit on
+    // them is what stops a plate reading as a plane. A map with the two the other
+    // way round is a field of gravel in a bowl, which is what the meadow's own
+    // map is and the reason a shore cannot borrow grass's.
+    return 0.36 + a.crust * 0.34 + a.grit * 0.13 + a.fine * 0.05 + a.clump * 0.07
+      + a.streak * 0.06;
+  }), 1.9),
+  /** The ash turf's own height, off the same `ASH` term the `ashGrass-n` drawer
+   *  runs through `heightField()`. The `ashGrass-n` strength is **1.9** against
+   *  a 2048 tile, and the crust plate's edge is the coarsest thing in the field;
+   *  its crown-to-joint distance is read off the -n's `detail.rms` as about
+   *  **0.02 of the tile**. */
+  'ashGrass-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const a = ASH(u, v);
+    return 0.36 + a.crust * 0.34 + a.grit * 0.13 + a.fine * 0.05 + a.clump * 0.07
+      + a.streak * 0.06;
+  })),
+
+  /** The cliff of the dead valley, and **the one file here that is `SIZE.marble`
+   *  rather than `SIZE.turf`** - 512, where the cliff above it is 2048. That is not
+   *  a saving and it is the whole point: **a basalt face has four things in it and
+   *  grass has forty**, and the smallest of the four is a stone a hand's width
+   *  across on a 0.55-metre tile, which at 2048 is a fifth of the map and at 512
+   *  is forty texels. Pushing it to 2048 would resolve the *tooth* better and
+   *  nothing else, and it would cost four times the memory on the one surface that
+   *  is tiled a hundred and forty times round a course.
+   */
+  'basalt-n': (S) => normalMap(S, field(S, (u, v) => {
+    const b = BASALT(u, v);
+    // **The groove at 0.38 and the facet at 0.10**, and the ratio is the same
+    // lesson the cliff's is with different numbers: both references are lit planes
+    // beside near-black gaps, and the gap is what makes a plane read as a plane.
+    // The cliff's groove is 0.40 and its facet 0.12, and basalt's are a shade
+    // under because **its joints are wider** - a columnar groove is a hand's
+    // width and a fracture is a crack, and a groove weighted past the depth it has
+    // is a drawn line.
+    return 0.34 + b.col * 0.11 + b.groove * 0.38 + b.pval * 0.10 + b.chip * 0.12
+      + b.tooth * 0.05 + b.grit * 0.09;
+  }), 26),
+  /** The basalt's own height, off the same `BASALT` terms the `basalt-n` drawer
+   *  uses: the columnar joint is the gap in the height as well as in the normal.
+   *  The `basalt-n` strength is **26** against a 1024 tile; the columnar groove
+   *  is six to the tile, so its crown-to-joint distance is read off the -n's
+   *  `detail.rms` as about **0.05 of the tile**. */
+  'basalt-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const b = BASALT(u, v);
+    return 0.34 + b.col * 0.11 + b.groove * 0.38 + b.pval * 0.10 + b.chip * 0.12
+      + b.tooth * 0.05 + b.grit * 0.09;
+  })),
+  'basalt-rgh': (S) => ormMap(S,
+    field(S, (u, v) => {
+      const b = BASALT(u, v);
+      // dry stone holds nothing, and a groove holds dust and is duller still;
+      // the bloom is the one thing here that is *glossier*, because rain water
+      // runs down a column and leaves the face it ran down
+      return clamp01(0.70 + b.bloom * 0.14 - b.grit * 0.10 + b.groove * 0.12
+        - b.pval * 0.08);
+    }),
+    // and the cavity: a groove is occluded at its bottom and a column standing
+    // proud of its neighbour is not occluded at all. The occluder is the **block**
+    // and not the break, for the cliff's reason.
+    field(S, (u, v) => {
+      const b = BASALT(u, v);
+      return clamp01(0.74 + b.col * 0.24 + b.pval * 0.08 - b.groove * 0.58);
+    })),
+  'basalt-albedo': (S) => albedo(S, (u, v, out) => {
+    const b = BASALT(u, v);
+    // **`plate` is not in this expression**, and it is the line that matters most
+    // in the field. The cliff's colour carries a sixth per facet, which on a
+    // *fractured* face is six per cent of a value *discontinuity* and reads as a
+    // net of shaded cells - and a net of shaded cells is the cobbled road under a
+    // new name, which is the failure `basalt` exists to avoid. So the facets reach
+    // the colour only through `tone`, which is **quantised**, and a quantised
+    // value change inside a facet is a change of stone rather than a shaded box.
+    const base = 0.26 + b.tone * 0.30 + b.chip * 0.07 + b.grit * 0.06;
+    // and the groove is dark, for the cliff's reason at the cliff's depth: these
+    // are the shadowed side of a groove a hand's width deep rather than a crack
+    const g = base * (1 - b.groove * 0.58) * BASALT_CAL;
+    // The one touch of hue, and it is on the **bloom** rather than on a banding:
+    // a wet column is a shade cooler than a dry one, and nothing else out here is
+    // a hue at all, so this is the only place the file has any chroma in it.
+    out[0] = g * (0.98 - 0.04 * b.bloom);
+    out[1] = g;
+    out[2] = g * (1.0 + 0.03 * b.bloom);
+  }),
+
+  /** The cinder. **A closed cell is the right shape here** - a stone lying on a
+   *  beach is bounded rather than cut, which is the one place in the county where
+   *  `worley` and the argument against it inverts - and the joints are *gaps* at
+   *  half the cliff's weight, because a gap between two stones is shallower than
+   *  a groove cut into a face.
+   */
+  'cinder-n': (S) => normalMap(S, field(S, (u, v) => {
+    const c = CINDER(u, v);
+    // **The stones, not the gaps**: the value is `crag`, which is the cell's own
+    // flat reading plus its edge, and the gap is what it falls away from. The
+    // strength is well under the cliff's - 6.8 against 26 - because a hand's width
+    // of gravel has nothing in it to find at race distance, and a shore that stands
+    // up like a rock face is not a shore.
+    return 0.40 + c.crag * 0.30 + c.grit * 0.12 + c.flake * 0.10 + c.patch * 0.06
+      - c.edge * 0.18;
+  }), 6.8),
+  /** The cinder's own height, off the same `CINDER` term the `cinder-n` drawer
+   *  uses: the hand's width of a gravel crest. The `cinder-n` strength is
+   *  **6.8** against a 256 tile, and the stone - nine to the tile - is the
+   *  crown-to-joint distance read off the -n's `detail.rms`, about
+   *  **0.04 of the tile**. */
+  'cinder-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const c = CINDER(u, v);
+    return 0.40 + c.crag * 0.30 + c.grit * 0.12 + c.flake * 0.10 + c.patch * 0.06
+      - c.edge * 0.18;
+  })),
+  'cinder-albedo': (S) => albedo(S, (u, v, out) => {
+    const c = CINDER(u, v);
+    // the same bargain as the sand's and the cliff's: work in value, not hue,
+    // because it multiplies a vertex colour that is already `PAL.cinder`. **A
+    // twentieth of a hue**, and it is on the **patch** rather than on the stones,
+    // because a band of grit from one fall is a shade off the band beside it and
+    // that is the only thing on a cinder shore that is worth saying.
+    const base = 0.56 + c.crag * 0.22 + c.grit * 0.11 + c.flake * 0.06;
+    const g = base * (1 - c.edge * 0.26);
+    out[0] = g * (1.0 + 0.05 * (c.patch - 0.5) * 2);
+    out[1] = g * (1.0 + 0.02 * (c.patch - 0.5) * 2);
+    out[2] = g * (0.93 - 0.02 * (c.patch - 0.5) * 2);
+  }),
+
+  /** The ashlands road, and **the sweep is a function of `v` rather than of `u`**
+   *  because `mat.road` is `uv: true`**: `u` is metres out from the centre line,
+   *  so a road six metres wide on an 0.85-metre tile is seven repeats of it, and a
+   *  sweep written in `u` would be seven sweeps and not one band down the middle
+   *  of a road. `v` is the grain's own direction and a whole number of cycles in
+   *  it still tiles.
+   */
+  'ashTrack-n': (S) => normalMap(S, heightField(S, (u, v) => {
+    const t = ASH_TRACK(u, v);
+    // **The packed ash is the bump and the sweep is a value, not a shape**: the
+    // thing raked down the middle of a road is *smoother* than the packed ash
+    // either side of it, so the pack is up and the sweep is a plane the pack
+    // falls away from. The strength is the clay's 34 halved, and that is the
+    // resolution saying so rather than a taste: `SIZE.road` is 1024 for both and
+    // the ash field has one lattice in it where the clay's has four.
+    return 0.42 + t.pack * 0.16 - t.sweep * 0.07 + t.grit * 0.20 + t.flake * 0.14
+      - t.seam * 0.22 - t.pit * 0.16;
+  }), 18),
+  /** The ash road's own height, off the same `ASH_TRACK` term the `ashTrack-n`
+   *  drawer runs through `heightField()`: the packed-ash bump. The `ashTrack-n`
+   *  strength is **18** against a 1024 tile (the clay's 34 halved, on the
+   *  resolution's own argument), so the pack-to-sweep distance is read off the
+   *  -n's `detail.rms` as about **0.05 of the tile**. */
+  'ashTrack-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const t = ASH_TRACK(u, v);
+    return 0.42 + t.pack * 0.16 - t.sweep * 0.07 + t.grit * 0.20 + t.flake * 0.14
+      - t.seam * 0.22 - t.pit * 0.16;
+  })),
+  'ashTrack-rgh': (S) => ormMap(S, field(S, (u, v) => {
+    const t = ASH_TRACK(u, v);
+    // dust is dull and packed ash is duller, a fresh flake of grit is the only
+    // thing here with any sheen, and it is **never white**: the palette's own rule
+    // is that nothing in this county is white and a road is the largest surface
+    // there is, so a road with a white in it is a county with a white in it.
+    return clamp01(0.80 + 0.05 * t.grit + 0.06 * t.flake - 0.05 * t.seam
+      + 0.05 * t.pit - 0.16 * t.sweep + 0.05 * t.pack);
+  })),
+  'ashTrack-albedo': (S) => albedo(S, (u, v, out) => {
+    const t = ASH_TRACK(u, v);
+    // **The value, and the sweep is most of it.** This is the whole of how a road
+    // reads at four hundred metres out here: a dark lane with a paler band down the
+    // middle of it, which is the meadow's red clay doing the job its hue was
+    // invented for. Written as a neutral triple so that stays true by
+    // construction rather than by review - the ashlands road's colour is
+    // `PAL.ashTrack` and it is the most saturated thing about it by being the
+    // least.
+    const g = 0.30 + t.sweep * 0.44 - t.pack * 0.10 + t.grit * 0.10
+      - t.seam * 0.18 - t.pit * 0.12 + t.flake * 0.05;
+    out[0] = g; out[1] = g; out[2] = g;
+  }),
+
+  /** And obsidian, which is **the only file in the county that is drawn to be
+   *  shiny**, and it is two maps and not one because a `roughnessMap` is the only
+   *  way a surface can vary its own finish across its own face.
+   */
+  'obsidian-n': (S) => normalMap(S, field(S, (u, v) => {
+    const o = OBSIDIAN(u, v);
+    // **The fracture scallops and nothing else, at a strength of 4.** A glass
+    // surface has almost no relief, and a normal map of a smooth field comes out
+    // almost flat and does nothing at all - but *almost* is the word, because what
+    // obsidian has is conchoidal fracture, which is a set of rounded arches and
+    // is **the** thing you see in a piece of it. Four is low against every other
+    // map in this file and it is right: the page prints it and the number under
+    // four is too flat to see.
+    return 0.5 + o.fres * 0.22 + o.skin * 0.05 + o.grit * 0.02;
+  }), 4),
+  'obsidian-rgh': (S) => ormMap(S,
+    // **and the whole of the argument for this file existing.** The glass inside a
+    // fracture reads at 0.16 and the skin over it at 0.52, and a material with no
+// roughness map is one number for both - so a shard would be a uniform dark
+    // lump with a few bright specular dots on it, which is what polished
+    // plastic looks like and not what glass looks like.
+    field(S, (u, v) => {
+      const o = OBSIDIAN(u, v);
+      return clamp01(0.52 - o.gleam * 0.36 + o.skin * 0.10 + o.grit * 0.05);
+    }),
+    // the cavity is the skin, and it is shallow: this is a lump, not a cliff
+    field(S, (u, v) => {
+      const o = OBSIDIAN(u, v);
+      return clamp01(0.90 - o.skin * 0.22 + o.fres * 0.06);
+    })),
+
   // Two of these, and the shader scrolls one each way. Neither is a wave: a
   // pool is a set of overlapping rings and troughs, and the trick is that the
   // rings do not line up between the two layers.
@@ -4043,18 +5116,67 @@ const DRAW = {
 
   /* ---- the tintable greys ----------------------------------------- */
   // Low chroma on purpose: `material.color` is the hue, and a coloured map
-  // under a coloured tint is a hue shift rather than a hue.
-  'snail-n': (S) => normalMap(S, field(S, (u, v) =>
-    0.5 + 0.5 * fbm(u, v, 23, 3, 67)), 3.4),
-  'snail-rgh': (S) => ormMap(S, field(S, (u, v) => 0.38 + 0.26 * fbm(u, v, 13, 2, 67))),
+  // under a coloured tint is a hue shift rather than a hue. **And the `-tone`
+  // pair is grey and in the top tenth of the range**, which is the only way a
+  // base-colour slot is allowed on a piece the editor recolours at runtime: it
+  // moves the value of the tint by about a tenth and cannot touch its hue. See
+  // `tone()` for why an `-albedo` cannot do that job here.
+  //
+  // **Both fields are built once and shared by all three maps**, and the reason
+  // is the one the grass map was rebuilt for: a detail normal derived from an
+  // albedo by hand - drawn from its own noise, or the same noise with the
+  // octaves changed - looks right in this page and is *wrong in the surface*.
+  // The bumps sit between the rings instead of under them. One field, so the
+  // normal is the tone.
+  //
+  // **The tile is the geometry's, not the map's.** `build-snail.html` lays `u`
+  // as metres along the animal over `TILE = 0.105` and `build-shell.html` lays
+  // `u` as length round the coil over `TILE_U = 0.28`, so one tile here is one
+  // tile there: twenty-six rings over the snail's ten centimetres is a ring
+  // every four millimetres at race distance, and fourteen growth lines over the
+  // shell's twenty-eight is one every two on the turn that faces the camera.
+  'snail-n': (S) => normalMap(S, field(S, SKIN.height), 3.4),
+  // **and a snail is wet**, so the roughness is low and it is lowest on the
+  // ridges, where the film sits: 0.22 in the ring, 0.52 in the trough of a pore.
+  'snail-rgh': (S) => ormMap(S, field(S, (u, v) => 0.52 - 0.30 * SKIN.height(u, v))),
+  'snail-tone': (S) => tone(S, (u, v) => {
+    const s = SKIN.at(u, v);
+    // the dirt is in the rings and in the pores - which is the one thing a
+    // normal map cannot draw, because it says where the shape is and not what
+    // collects in it - and the mottle is the animal's own uneven colouring
+    return 0.58 + s.mottle * 0.30 - s.rings * 0.26 - s.pore * 0.20 + s.fine * 0.08;
+  }),
 
-  // A shell: the whorl's own growth lines run one way, and that is the only
-  // detail on a shell that is not a scale of a turtle.
-  'shell-n': (S) => normalMap(S, field(S, (u, v) => {
-    const lines = Math.sin((u * 26 + fbm(u, v, 4, 2, 3) * 1.6) * Math.PI * 2) * 0.5 + 0.5;
-    return 0.4 + lines * 0.34 + fbm(u, v, 19, 2, 71) * 0.26;
-  }), 3),
-  'shell-rgh': (S) => ormMap(S, field(S, (u, v) => 0.30 + 0.30 * fbm(u, v, 9, 3, 71))),
+  // **The shell, and the albedo is doing the work the geometry cannot.** The shell is
+  // the reference model's own island and it is **146 triangles of a smooth dome**: no
+  // aperture, no apex, no whorl, and a silhouette so nearly symmetric that there is
+  // nothing on it to tell you which way round it is. **So the whorl is here, and it is
+  // here because a pattern is a map rather than a second mesh** - the same bargain the
+  // county struck for a cobbled road and a cliff face, and the same one the shell's
+  // own three whorl files used to pay for with 7,788 triangles of geometry between them.
+  // **1.3 and not 3.2**, and that number is the difference between a shell and a screw
+  // thread. At 3.2 every one of the ribs was a hard specular line the width of a texel;
+  // the reference's are soft enough that the light slides along them, **and a normal map
+  // at race distance is a hint of grain and never the pattern itself** - the pattern is
+  // the tone below, and the two saying the same thing at full strength is what doubled it.
+  'shell-n': (S) => normalMap(S, field(S, SHELL.height), 1.3),
+  // **and a shell is polished**: 0.16 on the ridges the animal's own foot wore
+  // and 0.62 in the groove, which is the one place on a shell nothing touches.
+  'shell-rgh': (S) => ormMap(S, field(S, (u, v) => 0.58 - 0.44 * SHELL.height(u, v))),
+  'shell-tone': (S) => tone(S, (u, v) => {
+    const s = SHELL.at(u, v);
+    // **the groove carries the dirt and the ribs carry the wear.** A shell that is a
+    // hundred years old is pale on every rib anything has touched and dark in every
+    // crevice, and that is the whole of what this map is for. **The field is 0..1 and
+    // not a colour** - `tone()` remaps it into the window - and the window for this one
+    // is the third rather than the tenth, for the reason written on `tone()` above.
+    return 0.30
+      + s.crest * 0.36 * (0.65 + 0.35 * s.age)          // the ribs, a shade paler near the eye
+      + s.step * 0.12                                   // the step from one year's growth on
+      + (s.mottle - 0.5) * 0.11
+      - s.groove * 0.15                                 // and darker in the valley between them
+      - s.seam * 0.18;                                   // and darkest at the unwrap's own tear
+  }, 0.68),
 
   /* ---- a shared leaf, for everything that is a plant ---------------- *
    * A conifer, a bush, a lily, a reed and a tuft of grass are all leaves at
@@ -4076,6 +5198,97 @@ const DRAW = {
     // a leaf is waxy where it is thick and matte at its edges, and the wax is
     // the only reason a wet leaf and a dry one look different
     return 0.40 + 0.34 * fbm(u, v, 11, 3, 11) - 0.16 * Math.pow(mid, 6);
+  })),
+
+  /* ---- pine needle cluster ------------------------------------------- *
+   * The pine's needles wear this, and it is a **tone and not a colour**, which
+   * is the whole of what changed here and it is worth saying why in full
+   * because the first version of this map was written as a colour and the pine
+   * came out the colour of a wet slate.
+   *
+   * A prop has no gain. `TIMBER_CAL` and its six friends exist because a base
+   * colour lands in the `map` slot, which three reads as a straight multiply into
+   * the diffuse, and the county's course surfaces get theirs put back by
+   * `detailCGain` in the shader - **a prop's does not, because there is no
+   * injection standing behind a glb's own material.** So a prop's albedo has to
+   * arrive at one by itself, the way `timber-albedo` does at a measured linear
+   * 0.91, and this one was arriving at **0.042 on red, 0.104 on green and 0.021
+   * on blue**: a green multiply of about a twentieth, which took the bark to
+   * black and the needles to a black that had a hint of green in it. The pine
+   * was not a dark tree. It was a tree being multiplied by its own texture.
+   *
+   * So the map is built about white now and spends its range on what a tuft of
+   * needles actually has: the shaded side of each needle against the lit side, a
+   * little dust caught along the needle, and the two ends of the tuft. All three
+   * are **value**, and nothing here paints a needle - the five greens the pine is
+   * drawn in are in `meshes/palette.js` as vertex colours and they are the last
+   * word on what colour a needle is, the same argument `timber-albedo` strikes for
+   * the plank.
+   *
+   * **And the map is built about 0.94 rather than about one, which is the price of
+   * the ceiling and is paid on purpose.** A gain that puts a tone map's mean
+   * exactly on one cannot help but clip everything above that mean, and on any
+   * field with variation that is at least half the tile - the second attempt at this
+   * map measured a mean of 0.98, a median of 0.991 and **41 per cent of the file at
+   * pure white**, which is not a highlight but a *plate*. `METAL_CAL` is 0.86 and
+   * `BOWER_CAL` is 0.76, so six per cent of shortfall for a whole range on the page
+   * is the county's own bargain and not a compromise. **The tell to watch on any
+   * tone map here is the median against the mean, in that order** - the mean is the
+   * number everybody measures and the median is the one that says whether the field
+   * has a tail over the top.
+   */
+  'pine-albedo': (S) => albedo(S, (u, v, out) => {
+    const needle = Math.pow(clamp01(1 - Math.abs(((u * 24) % 1) - 0.5) * 2), 8);
+    // the round of a needle: one flank in the light and the other not, so the
+    // pair reads as a cylinder at a distance far too small to resolve one
+    const side = Math.sin((v * 16 + ((u * 24) % 1) * 1.5) * Math.PI * 2) * 0.5 + 0.5;
+    // dust and pollen caught along the needle
+    const grain = fbm(u * 2, v * 2, 4, 2, 17);
+    // and the tips, which are bleached paler than the sheath they come out of
+    const tip = clamp01((v - 0.62) / 0.38) * 0.5;
+    /* **Every term carries its own mean, and the map is built about 0.94 rather
+     * than about one, and those two sentences are the whole of the calibration.**
+     *
+     * The mean subtraction keeps the *shape* honest - no term gets to darken the
+     * piece on its own account - and the base of 0.94 is the part that pays for
+     * the ceiling. **A gain that puts a field's mean exactly on one cannot help but
+     * clip everything above that mean, which on any field with any variation is at
+     * least half the tile**, and the second attempt at this map measured exactly
+     * that: a mean of 0.98, a median of 0.991 and **41 per cent of the file at
+     * pure white**. A clipped texel here is not a highlight, it is a *plate* - and a
+     * plate in an albedo is invisible while the same plateau in a normal map is a
+     * spike, so it costs nothing here and it is still a lie about the file.
+     *
+     * So the six per cent of shortfall is the price and it is the county's own
+     * price: `METAL_CAL` is 0.86 and `BOWER_CAL` is 0.76, and a tone map that pays
+     * a few per cent of value to keep its whole range on the page is the bargain.
+     * **The tell to watch on any tone map in this file is the median against the
+     * mean, in that order** - the mean is the number everybody measures and the
+     * median is the one that says whether the field has a tail over the ceiling.
+     */
+    const g = 0.94
+      + (needle - 0.111) * 0.070
+      + (grain - 0.5) * 0.038
+      + (side - 0.5) * 0.028
+      + (tip - 0.095) * 0.040;
+    // The one touch of hue, and it is a per cent and a bit and it is the timber's
+    // argument exactly: the flank of a needle that has the sun on it is warmer
+    // than the flank that has not, and a tuft of a hundred needles is a warm
+    // side and a cool side rather than a hundred separate colours. Which needles
+    // are on the warm side is the geometry's business - the vertex colours have
+    // already put the ramp's five steps on the tufts - so all this can add is
+    // the two per cent that says a cylinder is round.
+    out[0] = g * (1 + 0.012 * side);
+    out[1] = g;
+    out[2] = g * (1 - 0.012 * side);
+  }),
+  'pine-n': (S) => normalMap(S, field(S, (u, v) => {
+    const needle = Math.pow(clamp01(1 - Math.abs(((u * 24) % 1) - 0.5) * 2), 8) * 0.18;
+    const grain = fbm(u * 2, v * 2, 4, 2, 19) * 0.06;
+    return 0.5 + needle + grain;
+  }), 8),
+  'pine-rgh': (S) => ormMap(S, field(S, (u, v) => {
+    return 0.84 + 0.1 * fbm(u * 2, v * 2, 3, 2, 23);
   })),
 
   /* ---- wood, plaster and thatch ---------------------------------------
@@ -4399,6 +5612,143 @@ const DRAW = {
     const ripple = Math.sin((v * 3 + pull * 1.4) * Math.PI * 2) * 0.5 + 0.5;
     return 0.5 + (ripple - 0.5) * 0.5;
   }), 1.1),
+
+  /* ---- the bower setts ------------------------------------------------ *
+   * Three maps out of one field, which is the only reason they can agree: the
+   * stone that is pale in the colour is the stone that stands proud in the
+   * relief, because both read `plate`. And the colour is **the one albedo in
+   * this file that carries hue** - the argument, and the arithmetic, are on
+   * `BOWER_CAL` above and they are worth reading before anything here is
+   * changed, because the two numbers that look like they want raising (the
+   * value spread and the calibration) are the two that cannot both be raised.
+   */
+  'bowerSetts-albedo': (S) => albedo(S, (u, v, out) => {
+    const c = bowerAt(S, u, v);
+    /* The family, and it is a **pick and not a mix**: a stone that is half a
+     * blue-grey and half a brown is a stone nobody quarried. The cumulative
+     * draw is the weight table's, so the ochre and the rust stay one in twenty
+     * between them, which is what a floor has and not what a wall has. */
+    let si = 0;
+    while (si < 6 && c.fam > BOW_STONE_W[si]) si++;
+    const st = BOW_STONE[si];
+    /**
+     * And the stone's own value, **wide, and dark at the bottom end.** This is
+     * the term that decides whether the map reads as a floor, and it is a
+     * **per-stone step and not a ramp across the map**: a value ramp can only
+     * put one stone between its own place and the map's edge, and what the eye
+     * reads in all three references is a near-black two courses from a cream.
+     *
+     * `tone` is already `pow(hash, 0.86)` off the stone's own id, so it is
+     * weighted towards the dark end, and `val` maps it across **0.26 to 0.84**
+     * with the crown of the stone lifting the top of it.
+     *
+     * **And that range is narrow on purpose, and it is the running bond that
+     * makes it.** A running bond alternates two stones across every course, so a
+     * wide value spread does not read as a floor with stones of different ages in
+     * it - **it reads as a chequerboard**, and that is precisely what came out:
+     * the third export ran 0.10 to 1.28 and the road was a chessboard of black and
+     * cream squares with the bond as the grid. The contrast a sett floor has is
+     * **hue and texture, not value**, so the value lives in the bottom two thirds
+     * of the range and the chroma carries the rest - which is the one job a
+     * hue-bearing map is here to do that a map about white cannot.
+     */
+    const val = 0.26 + 0.58 * Math.pow(c.tone, 1.05) * (0.94 + 0.12 * c.plate);
+    /* The warmth drift, and it is a fifth of what the families carry, so a grey
+     * stone is still a grey stone rather than one of six. */
+    /** **The warmth, and it is double what it was, because it is what is left.**
+     * With the families at 0.45 of the jar the road is grey, and a grey sett road
+     * is the reference - so the colour a stone shows has to come from *which
+     * stone it is*, warm or cool, and `warm` is the only term that varies
+     * continuously. It moves the red about seven per cent either way: enough that
+     * two neighbours disagree, little enough that neither is a colour in its own
+     * right. */
+    const w = (c.warm - 0.5) * 2;
+    /* The tooth, and the two flecks that are not grain: a pale lichen mottle and
+     * a crystalline speckle, both off the joint because lichen grows on a face
+     * and not on a shadow. **The lichen is a fifth and not an eighth**: at a
+     * quarter it is a fifth of the face of the stone that reads as a bloom. */
+    /* **The interior, and this is the term that decides it.** `grit` at a
+     * quarter is the grain, `blot` is the stone's own broad variation - a
+     * quarried face is not one value - and the lichen is a sixth of it. A floor
+     * whose stones are one flat wash each reads as nine coloured panels however
+     * good the bond and the joints are, and **that is what the first export of
+     * this map was**: a perfect running bond of flat tints. */
+    const face = (1 + (c.grit - 0.5) * 0.40) * (0.84 + 0.32 * c.blot)
+      * (1 + c.lich * 0.14) * (1 + c.speck * 0.20);
+    for (let k = 0; k < 3; k++) {
+      const tint = st[k] * (k === 0 ? 1 + 0.070 * w : k === 2 ? 1 - 0.060 * w : 1);
+      /* The gap, **squared**, so the dark line stays narrow: the arris runs out
+       * a long way into the stone and the joint does not. And it is a colour and
+       * not a darkening of the stone - a gap in a stone floor is full of what
+       * came off the courses above, and it is cooler than the stone it is
+       * between, which the vertex colours of a neutral floor cannot be. */
+      let c3 = lerp(tint * val * face, BOW_GAP[k], c.crack * c.crack * 0.95);
+      /* And the moss in it, out of the jar like everything else on this map, and
+       * **at the crack and not at the face** - which is what `moss` already is. */
+      c3 = lerp(c3, BOW_MOSS[k], c.moss * 0.9);
+      out[k] = knee(c3 * BOWER_CAL);
+    }
+  }),
+  /**
+   * The relief is the height the colour used, term for term, and it is built with
+   * `heightField` because the weights here do not sum to one and `field()` would
+   * clip the sum into a plateau - whose edge is a step, and a step in a normal
+   * map is a bright rim round a flat patch.
+   *
+   * **The joint is the weight**: both references are a floor of stones standing
+   * proud of a dark narrow gap, and the gap is about half again as deep as the
+   * stones are high. `inSlab` carries the arris and `plate` carries the crown, and
+   * a sett's crown is the relief the whole map is for - it is the only thing about
+   * a stone floor that catches a low sun.
+   */
+  'bowerSetts-n': (S) => normalMap(S, heightField(S, (u, v) => {
+    const c = bowerAt(S, u, v);
+    return 0.34 + c.plate * 0.44 + c.inSlab * c.inSlab * c.domeH * 0.20
+      - c.crack * 0.52 + c.grit * 0.10 + c.speck * 0.06 - c.moss * 0.06;
+    /**
+     * The strength is **measured, not copied**, and `COBBLE`'s 36 is not the
+     * number: that is a field with a nine-by-thirteen chip network and a
+     * thresholded flaking term in it, and this one has a row lattice and two
+     * smooth octaves. What decides the number is the same thing that decides it
+     * everywhere else - how far a texel is from the next - and this map is drawn
+     * at 1024 over a 0.55 m tile, so a texel is half a millimetre and a joint two
+     * centimetres wide is forty of them.
+     *
+     * **Twenty-six is measured and not derived**, and the measurement is the tilt
+     * the texture page prints under `bowerSetts-n`: `detail.rms` is the root mean
+     * square of the two slope channels about their midpoint, and about 0.19 is a
+     * floor of stones whose crowns and joints both shade. The first value tried,
+     * eleven, measured **9.1 degrees** - above the four degrees the texture page
+     * calls too flat to see, and **below the fifteen a sett's crown needs**,
+     * which is the number the brief set and the one the comment above used to
+     * claim while the page was printing 9.1. **A comment is not a measurement.**
+     */
+  }), 26),
+  /** The setts' own height, off the same `bowerAt` field the `bowerSetts-n`
+   *  drawer runs through `heightField()`. The 26 in the -n's comment is the
+   *  crown-to-joint distance measured off its `detail.rms`, and it is the same
+   *  number the thickness below is read from - one crown-to-joint step across
+   *  the sett's plate-and-joint field, about **0.05 of the tile** at 1024. */
+  'bowerSetts-h': (S) => hMap(S, heightField(S, (u, v) => {
+    const c = bowerAt(S, u, v);
+    return 0.34 + c.plate * 0.44 + c.inSlab * c.inSlab * c.domeH * 0.20
+      - c.crack * 0.52 + c.grit * 0.10 + c.speck * 0.06 - c.moss * 0.06;
+  })),
+  /* The gloss, and it is **not** the colour's brightness: a joint holds dust and
+   * moss and is duller than the stone it is between, and the stone that has been
+   * walked takes a polish the one in the corner does not. The red channel is the
+   * cavity, because a gap is occluded at its bottom and the crown of a sett is
+   * not occluded at all. */
+  'bowerSetts-rgh': (S) => ormMap(S,
+    field(S, (u, v) => {
+      const c = bowerAt(S, u, v);
+      return clamp01(0.60 + c.wear * 0.24 - c.grit * 0.08 + c.crack * 0.16
+        + c.moss * 0.10 - c.lich * 0.05);
+    }),
+    field(S, (u, v) => {
+      const c = bowerAt(S, u, v);
+      return clamp01(0.74 + c.plate * 0.26 - c.crack * 0.64 - c.moss * 0.10);
+    })),
 };
 
 /**
@@ -4433,6 +5783,16 @@ function sizeFor(name) {
   // face and the ramp are two surfaces that share a tile, a strength and a
   // resolution and nothing else, and both are looked at from two metres away.
   if (name.startsWith('cobblestone-')) return SIZE.face;
+  // And the bower setts' three, at the road's **1024** rather than the face's,
+  // and the argument is the cobblestone's own with one number changed: all three
+  // come out of one field, so the stone that is pale in the colour is the stone
+  // that stands proud in the relief, and a colour and a relief at two different
+  // resolutions are two maps that disagree about where a sett is. It is 1024
+  // because a sett is **183 mm** across on the 0.55 m tile it is worn at, which
+  // at 256 is fifteen texels a stone - enough for a stone and not enough for the
+  // two-millimetre crystalline speckle inside it, and the speckle is half of
+  // what makes a pale stone look like stone rather than like a chip of paint.
+  if (name.startsWith('bowerSetts-')) return SIZE.road;
   // And the county limestone's three - and it carries a **roughness** now, which it
   // did not while it was only a surface - at the same 1024 and for a **third** reason on top
   // of the cliff's: the cliff's finest octave is a ridged grain at 263 cells
@@ -4531,8 +5891,56 @@ function sizeFor(name) {
   // reason the cliff's are - they are one mat of stems and they have to agree
   // about where the stems are.
   if (name.startsWith('grass-')) return SIZE.turf;
+  /* ---- the ashlands, and every one of these four is a different number ---- *
+   * The rule `sizeFor()` keeps making is that **the frequency and the tile move
+   * together**, and these four surfaces are the four numbers in the biome table,
+   * so this is where a biome's tiles are decided and the four answers are four
+   * different sizes.
+   *
+   *  - **the ash turf, at the turf's 2048.** It is the same number as the
+   *    meadow's and for the meadow's reason: the finest thing in the field is the
+   *    grit, and the field puts it at 61 to a five-metre tile, which is an eight
+   *    centimetre feature - twice the finest thing in `TURF()` on the same tile, so
+   *    it could have been smaller. It is not, because **ash also has the plate
+   *    edges**, and those are half a metre across and are what the eye reads at
+   *    fifty metres; a 512 map resolves both and loses the one that matters. The
+   *    cost is the meadow's own and it is paid in the vertex cache.
+   *  - **the basalt, at 1024 and not at 2048**, which is the one place in this
+   *    file where a cliff-sized surface deliberately gets a quarter of the
+   *    cliff's resolution. `BASALT()` has four things in it and `CLIFF()` has
+   *    forty, and the smallest of the four is a stone a hand's width across on a
+   *    0.55 m tile: at 1024 that is 226 texels of a column's width and at 2048
+   *    it would be 453, which is a smoother *groove* and no more information. A
+   *    2048 here would resolve the `tooth` - the fourth and last octave, and the
+   *    one that matters least - and would cost four times the memory on the one
+   *    surface that is tiled a hundred and forty times round a course.
+   *  - **the cinder, at 256**, and **that is the shore's own number rather than
+   *    the turf's**, because a hand's width of gravel on a 0.9 m tile is nine to
+   *    the tile and 256 texels is 28 texels a stone. `SAND()` manages at 256 on a
+   *    0.8 m tile with a ripple about a third of a metre across, which is a
+   *    bigger feature than any of this.
+   *  - **the ashlands road, at the road's 1024**, and for the road's reason: the
+   *    track's colour *is* its grain, so all three agree and they agree high.
+   */
+  if (name.startsWith('ashGrass-')) return SIZE.turf;
+  if (name.startsWith('basalt-')) return SIZE.road;
+  if (name.startsWith('cinder-')) return SIZE.n;
+  if (name.startsWith('ashTrack-')) return SIZE.road;
+  // And obsidian's two, at **512** and not at 256: the fracture scallops in
+  // `OBSIDIAN()` are eleven to the tile and a shard is worn at 0.34 m to a tile,
+  // so one scallop is about three centimetres - eleven texels at 512 and five at
+  // 256, and **five is the number where a lattice stops drawing a surface and
+  // starts beating against the pixel grid**, which on a near-black prop is the
+  // difference between a ripple and moire.
+  if (name.startsWith('obsidian-')) return SIZE.albedo;
   if (name.endsWith('-albedo')) return SIZE.albedo;
-  if (name === 'snail-n' || name === 'snail-rgh' || name.startsWith('shell-')) return SIZE.tintable;
+  // **The two tintable things and their six maps are all at 256**, and the frequency
+  // in each is the geometry's tile rather than a choice: `snail-n` draws twenty-six
+  // rings to the tile and the snail's tile is ten centimetres of itself, and
+  // `shell-n` draws fourteen growth lines to the tile and the shell's is twenty-eight
+  // of its own units. Change a frequency and the tile has to move with it.
+  if (name === 'snail-n' || name === 'snail-rgh' || name === 'snail-tone'
+    || name.startsWith('shell-')) return SIZE.tintable;
   // And the pale mushroom's six, at 512, because they are the only maps in here
   // whose subject is a **line**. Everything else draws a surface and a cell of
   // it is a few centimetres on a rock; a gill is a crease, five of them to a

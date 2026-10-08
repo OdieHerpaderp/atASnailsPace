@@ -38,12 +38,8 @@
       <input type="color" id="bodyColor" value="#e0b183" />
       <label class="cap" style="margin-left:6px">shell</label>
       <input type="color" id="shellColor" value="#c8a05a" />
-      <div class="styles" id="styles">
-        <button data-s="bands" title="banded"><i class="s-bands"></i></button>
-        <button data-s="swirl" title="swirled"><i class="s-swirl"></i></button>
-        <button data-s="spots" title="spotted"><i class="s-spots"></i></button>
-      </div>
     </div>
+    <button class="quiet" id="openWardrobe" title="faces and hats — spend gold on them">wardrobe</button>
     <div id="stats"></div>
     <p class="note">A fruit costs <b>10g</b> and lifts one trait by 1, up to 24. Stamina sets how long the bar lasts. Gold is what you finish on: every race pays the points you scored in it.</p>
     <button class="big danger" id="wipeSave" title="throw the saved game away and start a new snail">Delete save</button>
@@ -59,6 +55,12 @@
     <div id="field"></div>
     <button class="quiet" id="pickSeason">choose season</button>
     <button class="quiet" id="openLadder" title="every snail in the county, and where you stand among them">the ladder</button>
+    <!-- The Adversary. **Their own button and their own sentence, on the field card and
+         not on the season card**: a duel is one course and two snails and it does not
+         move the season on, so it does not belong among four courses. What it belongs
+         to is the ladder, and it sits under it. -->
+    <button class="quiet danger" id="openAdversary" title="one course, two snails, and they do not move">the Adversary</button>
+    <p class="note" id="adversaryNote">—</p>
     <p class="note" id="fieldNote">Seven rivals, shown before you race a yard of it.</p>
   </div>
 
@@ -189,6 +191,24 @@
       <tbody id="sumBody"></tbody>
     </table>
     <button class="big" id="sumNew">Run a new season</button>
+  </div>
+</div>
+
+<!-- ============ THE WARDROBE ============
+     Ten faces and six hats, and **a shop and not a settings panel**: the buttons
+     carry a price and the ones you cannot afford are dim, so the panel and the
+     gold counter have to be read together or neither means anything. `openWardrobe`
+     lives on the snail card because a costume is the snail's, and the two colour
+     inputs next to it are the same idea three doors along - the shell has one
+     model now, so there is no style row beside them any more. -->
+<div class="modal" id="wardrobe">
+  <div class="card-modal">
+    <h2>The wardrobe</h2>
+    <div class="sub"><span class="coin"></span> <b id="wdGold">50</b> gold · a face or a hat you have not bought is dim</div>
+    <div class="wdrow"><h3>Faces</h3><div class="swatches" id="wdFaces"></div></div>
+    <div class="wdrow"><h3>Hats</h3><div class="swatches" id="wdHats"></div></div>
+    <p class="note" id="wdNote">—</p>
+    <div class="btns"><button class="big" id="wdClose">Back to the stable</button></div>
   </div>
 </div>
 

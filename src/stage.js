@@ -37,6 +37,7 @@ import {
   THREE, TAU, clamp, lerp, bake, M, colored, fbm, vnoise, makeRng,
 } from './core.js';
 import { world, makeEnv, gfxPropDensity, gfxGrassDensity, WHITE } from './graphics.js';
+import { hex, lin } from '../meshes/palette.js';
 import {
   props,
   mat,
@@ -47,7 +48,9 @@ import {
   mapTex,
   triplanarDetail,
   windMark,
+  reflectMark,
   PAL,
+  useBiome,
 } from './materials.js';
 import {
   addGlows, applyShadows, forgetCastApplied, clearStageDirty, syncProbes, dropProbe,
@@ -59,7 +62,13 @@ import { makeSnail, state, env, SNAIL_SCALE } from './race.js';
  * The lobby: a lawn, a stone rim, a plinth with a snail on it, a pool with a
  * fountain in it, grass, stones, a grove, palms and a fence
  * ================================================================== */
-const stageEnv = makeEnv(34, 150);
+// **and `false` for the third argument, which is the whole of what that argument
+// is.** The stable has no lamp for a light to stand on - `lampPosts` is the
+// course's register and there is no course here - so its sixteen lamp slots are
+// dark from the moment they are made and **never enter the scene's light list**,
+// which is what keeps the stable out of the recompile the binding causes on a
+// course. A scene that will never bind a light pays for none.
+const stageEnv = makeEnv(34, 150, false);
 const stageScene = stageEnv.scene;
 world.stageEnv = stageEnv;
 world.stageScene = stageScene;
@@ -207,6 +216,62 @@ function stagePool() {
     new THREE.Vector3(0, POOL.water, 0), 0.09, 3.1);
   return { group, jets, water };
 }
+/**
+ * The mirror, and **it is a test object and not county content**: a nine-hundred-
+ * millimetre polished cube standing on the lawn where the orbit camera walks past
+ * it, put there so the reflection march can be seen doing its job without walking
+ * a course to a pool and crouching at the bank to find a grazing angle.
+ *
+ * **Why a cube.** A traced reflection is at its most legible on a flat surface,
+ * because a flat surface shows one flat answer - the world mirrored, sharply - and
+ * a curve shows a smeared version of the same thing that a reader has to know is
+ * the same thing. And a cube has six planes, so there is a face square to the eye
+ * and a face edge-on within the same second of orbit.
+ *
+ * **Why it is a metal, which is not a style.** The mark the reflection pass reads
+ * is the surface's reflectance looking straight into it - F0 - because a dielectric
+ * reflects two to four per cent head-on and no amount of shader makes that visible.
+ * A surface with a high F0 *is* a metal, and a metal's albedo is that same number,
+ * so the cube is polished metal, its colour is `PAL.mirrorFace` and its mark is the
+ * same value written twice. **A cube with a mark of 0.92 and a colour of a tenth
+ * would be a reflection the frame does not believe** - the pass would replace the
+ * frame with the world and the material would still be a dark grey bracket.
+ *
+ * **It is in the G-buffer, which is the other half of what makes it work.** It is
+ * an ordinary opaque `MeshStandardMaterial`, so `hideFromGBuffer()` leaves it alone,
+ * and the pass reads its own face normal out of the occlusion pass rather than the
+ * world's up the way the water has to. That is the `m > 0` half of the mark's sign,
+ * and it is the branch a shell would take - so this object is also the thing that
+ * shows that branch working.
+ *
+ * **Where it stands is the orbit's, and it is two metres off the plinth** so the
+ * camera at 3.9 m radius and 1.55 m up has it crossing the frame twice a turn, and
+ * far enough out that the reflected world behind the camera is lawn, rim and trees
+ * rather than the snail's own plinth filling the whole face.
+ */
+function mirrorCube() {
+  const side = 0.9;
+  // **The one number, read once and written twice** - into the mark the reflection
+  // pass reads and into nothing else, because the material's albedo is
+  // `mirrorFace` through `hex()` and that is the same triple the jar holds.
+  const MIRROR_F0 = lin('mirrorFace')[0];
+  const g = new THREE.BoxGeometry(side, side, side);
+  // **And `BoxGeometry` is the right primitive for a mirror**, which is not obvious:
+  // it is non-indexed with four vertices and one normal per face, so the corners
+  // stay hard however the county shades things. Smooth shading a cube averages the
+  // six normals into the corner vertices and a mirror does that read - it goes
+  // rounded, which is the one thing a mirror must not do.
+  reflectMark(g, MIRROR_F0, 'cube');
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    color: hex('mirrorFace'), metalness: 1.0, roughness: 0.09,
+  }));
+  // stood on the grass rather than floating: the bottom face is half a millimetre
+  // off it so it does not z-fight the lawn disc it is standing on
+  m.position.set(1.62, side / 2 + 0.002, 1.34);
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+
 /** Whether a spot on the lawn is where the pool is, and so is spoken for. */
 const onThePool = (x, z, pad = 0) => {
   const dx = x - POOL.x, dz = z - POOL.z;
@@ -329,6 +394,17 @@ function stageOf() {
  *  reassign. The order matters: `world.stage` before the group goes on the scene,
  *  because a frame that lands in between draws the county instead of the hub. */
 function buildStable() {
+  // **The stable is always temperate, and it says so out loud.** It is the one
+  // call site that is not a course, and skipping the line is what a stale biome
+  // looks like: the lawn and the plinth are built on fresh materials with `PAL`
+  // read at build time, so a stable rebuilt while an ashlands course is standing
+  // comes up with ash in its own vertex colours and none of the maps that go with
+  // them - and `restage()` rebuilds the stable on a density change, so the two are
+  // not "a race and then never again". **Vertex colours are baked**, so a stable
+  // already standing is untouched by a later `useBiome()` elsewhere, which is the
+  // one thing that makes this safe and also the thing that hides the bug until
+  // somebody presses the density row. `tools/e2e/biome.spec.js` presses one.
+  useBiome('temperate');
   stage = buildStage();
   world.stage = stage;
   stageScene.add(stage.group);
@@ -432,6 +508,9 @@ function buildStage() {
   );
   plinth.castShadow = true; plinth.receiveShadow = true;
   s.add(plinth);
+  // and the mirror, beside it rather than on it: one line, one function, and it is
+  // the only thing on this lawn that exists to be looked at
+  s.add(mirrorCube());
   // The key light's shadow is a twenty-six metre box round the plinth, which is
   // the right box for a snail on a stone and much too small for a lawn with a
   // pool and a grove on it: at that width nothing past the plinth had a shadow
@@ -580,10 +659,10 @@ function buildStage() {
       scale: 0.85 + lr() * 0.85, rot: lr() * TAU, tilt: 0.05, tint: 0.8 + lr() * 0.34,
     };
   };
-  s.add(planted('conifer', mat.foliage, 11, inGrove(15)));
+  s.add(planted('pine', mat.foliage, 10, inGrove(15)));
   s.add(planted('evergreen', mat.foliage, 8, inGrove(14)));
   s.add(planted('broadleaf', mat.foliage, 7, inGrove(13.5)));
-  s.add(planted('conifer', mat.foliage, 5, onLawn(19, 29, 0.7)));
+  s.add(planted('pine', mat.foliage, 4, onLawn(19, 29, 0.7)));
   s.add(planted('evergreen', mat.foliage, 4, onLawn(17, 27, 0.7)));
   s.add(planted('broadleaf', mat.foliage, 4, onLawn(17, 28, 0.7)));
   /**
@@ -618,7 +697,16 @@ function buildStage() {
       scale: 0.7 + lr() * 0.6, rot: lr() * TAU, tint: 0.9 + lr() * 0.25,
     };
   }, { shadow: false }));
-  const snail = makeSnail({ body: state.body, shell: state.shell, style: state.style });
+  /**
+ * **The plinth snail is built wearing what you are wearing.** `applyLook()` reaches
+ * it on every wardrobe change, but a snail built without a face comes up in the
+ * shipped one for a frame and then gets corrected - and a player's first sight of
+ * the stable would be a snail that is not theirs until the next call. So the four
+ * appearance fields are all here, which is also the reason this object and the one
+ * `startRace()` builds for the player have the same keys: `makeSnail()` cannot tell
+ * them apart and neither should a reader.
+ */
+const snail = makeSnail({ body: state.body, shell: state.shell, face: state.face, hat: state.hat });
   snail.group.scale.setScalar(SNAIL_SCALE * 1.6);   // on the plinth, it is the only thing on show
   snail.group.position.y = 0.44;
   s.add(snail.group);

@@ -32,20 +32,24 @@
  * this file's sequence is.
  * ================================================================== */
 import {
-  THREE, TAU, clamp, lerp, smoothstep, STEP, START_S, makeRng, rand, vnoise,
-  bake, M, trackSeed,
+  THREE, TAU, clamp, lerp, smoothstep, STEP, START_S, makeRng, rand, vnoise, fbm,
+  bake, M, trackSeed, BOWER,
 } from './core.js';
 import {
   world, gfxPropDensity, grassCount, triesBoost, LAMP_SPACING, LAMP_COLOUR, WHITE,
 } from './graphics.js';
 import { COUNTY as C } from '../meshes/palette.js';
-import { props, propMat, propMatFor, matFor, partMat, mat, colour, FLOWER_COLORS, windMark } from './materials.js';
+import {
+  props, propMat, propMatFor, matFor, partMat, mat, colour, FLOWER_COLORS, windMark,
+  biomeNow,
+} from './materials.js';
 import { trackAt, newFrame, bankRadius, groundYAt } from './course.js';
 import {
   laneVertex,
   groundHalfAt,
   groundDrawnAt,
   midwayOf,
+  bowerRanges,
   MID_CLEAR,
   TOWER_FOOT,
 } from './surfaces.js';/* ------------------------------------------------------------------ *
@@ -345,7 +349,8 @@ function placeMidway(tr, grp) {
  * lanterns here and there between them. They are placed on a walk of their own
  * rather than through the scenery scatter, because the post and its glass have
  * to be in exactly the same spot and the scatter cannot promise that, and
- * because the four lamps that cast real light are chosen from where these are.
+ * because the sixteen lamps that cast real light are bound to from where these
+ * are, and a lamp no record in this register stands for is not a lamp.
  */
 const lampPosts = [];
 /**
@@ -399,6 +404,35 @@ function lampHeadOf(meshes, parts, matrix) {
 // where along the course the walk of lamps stands, so the lanterns scattered
 // elsewhere on the course can be kept from landing on top of it
 const lampWalk = [];
+/**
+ * The colours a candle lantern is painted, and it is **a different table from
+ * the paper lanterns' and the difference is the point of having one**. A paper
+ * lantern is a warm cream most of the time because warm cream is what paper is,
+ * and the two exceptions on it are read as exceptions. A candle lantern is four
+ * panes of clear glass with a flame in the middle: there is no colour in the
+ * object at all until somebody chooses one, so a walk of them in five creams is
+ * a walk of street lamps in five shirts, and the whole reason to put glass on a
+ * stake beside a course is that the verge goes **red, cyan, magenta, green,
+ * orange** every twenty metres and the snail is running down the middle of it.
+ *
+ * They are **sRGB hexes and not names out of the jar**, for the reason the
+ * flowers' are: a colour here arrives as an `instanceColor` tint, which
+ * multiplies the vertex colours of the glass and the wax underneath it, so it
+ * wants the number the lantern is painted in rather than a linear triple that
+ * wants converting twice. `LAMP_COLOUR` is the same argument and the same
+ * exception - it is a hex for the same reason and it is the colour every
+ * *street* lamp is, which is the whole of how the two sorts are told apart at
+ * forty metres: one of them is cream and does not change.
+ *
+ * **And the two creams are not white**, on the county's standing rule: a candle
+ * lantern is a hand's width across at race distance and a white one reads as a
+ * stone on a stick. They are also two of the seven entries rather than one of
+ * five, because a walk of seven different colours is a **fairground** and a walk
+ * of five with two ordinary ones in it is a lane somebody lights.
+ */
+const CANDLE_COLOURS = [
+  0xff3a24, 0x2fe0ff, 0xff3fb0, 0x4ce08c, 0xffa32e, 0xfff0c4, 0xfff0c4,
+];
 function placeLamps(tr, group) {
   const postGeo = props['lamp-post'], glassGeo = props['lamp-glass'];
   const lpostGeo = props['lantern-post'], lglassGeo = props['lantern-glass'];
@@ -408,26 +442,99 @@ function placeLamps(tr, group) {
   const glass = new THREE.InstancedMesh(glassGeo, matFor('lamp-glass', mat.lampGlass), count);
   const lposts = new THREE.InstancedMesh(lpostGeo, matFor('lantern-post', mat.rock), count * 2);
   const lglass = new THREE.InstancedMesh(lglassGeo, matFor('lantern-glass', mat.lampGlass), count * 2);
-  for (const m of [posts, glass, lposts, lglass]) {
+  /* ---- the candle lanterns, and they are four meshes and not one ------ *
+   * **Four, because the piece is four surfaces and only the first of them is
+   * metal.** The frame is converted and wears `metal-albedo`/`metal-n`/
+   * `metal-rgh` out of its own file, so it wants `matFor()` - the converted path,
+   * which hands back the material the file declared, metalness of one and all.
+   * The wax and the flame are `mat.paper` and the panes are `mat.lanternPane`,
+   * and all three are named here because the game owns them: the hour drives
+   * `mat.paper`'s emissive **by name**, so a wax drawn in the material out of
+   * its own file is a grey cylinder that never lights, and a pane is drawn in the
+   * game's because glass with nothing of its own to give out is not a material,
+   * it is an absence.
+   *
+   * **Which is also why the light in this one is read off a part that is not the
+   * first tinted one**, and it is the only lamp in the county for which that is
+   * true. `lampHeadOf()` - the rule for a scattered piece - takes the *first*
+   * part that takes the tint, and for this piece that would be the wax: a box
+   * from the foot of the candle to the tip of the flame whose middle is forty per
+   * cent of the way up fifteen centimetres of wax, so the light lands **inside
+   * the candle**. A point light inside a closed lathe gives it nothing at all,
+   * because every one of its faces has its normal turned away from it, and the
+   * wax is then lit by the moon alone - a red lantern's candle comes out grey.
+   * So the light is read off the **flame**, whose own box *is* the flame, and
+   * the wax is lit from above by it: the top of the candle hot, the sides
+   * barely, the foot dark, which is what a photograph of a lit candle is.
+   * `glassMid(cand.flame)` is the local convention the two lines above it
+   * already follow, and the four numbers say which part it chose - the flame's
+   * box is **1.072 to 1.130 and the wax's is 0.896 to 1.070**, so the light sits
+   * fifty-five millimetres above the top of the wax rather than inside it. */
+  const cand = props['candle-lantern.parts'];
+  const flameHead = glassMid(cand.flame);
+  const cframe = new THREE.InstancedMesh(cand.frame, matFor('candle-lantern', mat.metal), count);
+  const cwax = new THREE.InstancedMesh(cand.candle, mat.candleWax, count);
+  const cpane = new THREE.InstancedMesh(cand.pane, mat.lanternPane, count);
+  const cflame = new THREE.InstancedMesh(cand.flame, mat.paper, count);
+  for (const m of [posts, glass, lposts, lglass, cframe]) {
     m.castShadow = true; m.frustumCulled = true;
+    group.add(m);
+  }
+  /* **And the other three cast nothing, and each for its own reason.** The wax
+   * is a lit object and a shadow off a five-centimetre candle forty metres away
+   * is worth nothing while the draw is not; the flame is three centimetres of
+   * emissive with no business casting anything at all. The panes are the one
+   * that would actually be seen wrong, because a glass box with `castShadow` on
+   * it puts **a hard black box the width of the lantern on the verge** - the
+   * same class of failure as the chequered band the start line used to be, a
+   * rectangle that is a rectangle in *screen* space and is only there because
+   * something opaque was drawn where nothing opaque is. The four metres of wire
+   * that are genuinely opaque are the frame's, and it casts. */
+  for (const m of [cwax, cpane, cflame]) {
+    m.castShadow = false; m.frustumCulled = true;
     group.add(m);
   }
   const o = new THREE.Object3D();
   const r = makeRng(trackSeed(tr.catId, world.seasonOf()) ^ 0x5eed);
-  let n = 0, nl = 0;
+  const white = new THREE.Color(1, 1, 1);
+  const candleCol = new THREE.Color();
+  let n = 0, nl = 0, nc = 0;
+  /* ---- a lamp stands on the ground and not on the lane's own level ------ *
+   * Every lamp here used to be put down at `sm.y`, which is the height of the
+   * **centre of the lane** and not the height of the verge two metres out from
+   * it, and the two are the same number only where the ground is flat. They are
+   * not: measured round the four courses at the offsets the walk actually uses,
+   * the difference has a **median of 30 to 60 millimetres and a worst of 630**,
+   * and on Lily Deep the 95th percentile is the whole of it - the pools' berms
+   * put the verge half a metre above the water while the lane runs along the
+   * bottom of it. A lamp post with its foot 63 cm in the air is a lamp post
+   * hovering over a pond, and a paper lantern on a pole with 63 cm of its pole
+   * underground is a lantern growing out of a bank.
+   *
+   * `groundYAt(fr, d)` is the number that says where the ground is, and it is
+   * the same function the surfaces are built off, so a lamp now stands on the
+   * ground that is drawn there rather than on a number that happens to be near
+   * it. **It is asked per lamp and not once per station**, because the three kinds
+   * in the walk stand at three different offsets - `w + 0.9` and `+ 1.9` for a
+   * post, `w + 0.7` and `+ 1.6` for the two lanterns - and on a berm the answer
+   * changes by 20 centimetres across that half metre. */
+  const standY = (fr, d) => groundYAt(fr, d);
+  // one frame for the whole walk, because `groundYAt()` is a function of the
+  // frame it is handed and the walk asks it four times a station
+  const lampFrame = newFrame();
   // the walk alternates from one side of the lane to the other, so two posts
   // are never standing side by side on the same verge
   let lastSide = r() < 0.5 ? -1 : 1;
   for (let i = 0; i < count; i++) {
     const s = START_S + 6 + (i + r() * 0.5) * LAMP_SPACING;
     if (s > tr.finish - 4) break;
-    const sm = tr.sm[clamp(Math.round(s / STEP), 0, tr.n)];
+    const sm = trackAt(tr, s, lampFrame);
     const side = lastSide;
     lastSide = -side;
     // a post wants its feet on the ground: out past the wet sand, or not at all
     const d = side * Math.max(sm.w + 0.9, bankRadius(sm) + 1.9);
     if (Math.abs(d) > 26) continue;
-    o.position.set(sm.p.x + sm.right.x * d, sm.y, sm.p.z + sm.right.z * d);
+    o.position.set(sm.p.x + sm.right.x * d, standY(sm, d), sm.p.z + sm.right.z * d);
     o.rotation.set(0, Math.atan2(sm.right.x * side, sm.right.z * side), 0);
     o.scale.setScalar(0.92 + r() * 0.2);
     o.updateMatrix();
@@ -441,11 +548,11 @@ function placeLamps(tr, group) {
     // a verge with three lanterns in twenty metres is a fence of them
     if (r() < 0.62) {
       const s2 = Math.min(tr.finish - 4, s + 8 + r() * 13);
-      const sm2 = tr.sm[clamp(Math.round(s2 / STEP), 0, tr.n)];
+      const sm2 = trackAt(tr, s2, lampFrame);
       const side2 = lastSide;
       lastSide = -side2;
       const d2 = side2 * Math.max(sm2.w + 0.7, bankRadius(sm2) + 1.6);
-      o.position.set(sm2.p.x + sm2.right.x * d2, sm2.y, sm2.p.z + sm2.right.z * d2);
+      o.position.set(sm2.p.x + sm2.right.x * d2, standY(sm2, d2), sm2.p.z + sm2.right.z * d2);
       o.rotation.set(0, Math.atan2(sm2.right.x * side2, sm2.right.z * side2) + (side2 < 0 ? Math.PI : 0), 0);
       o.scale.setScalar(0.9 + r() * 0.25);
       o.updateMatrix();
@@ -455,16 +562,94 @@ function placeLamps(tr, group) {
       lampWalk.push(s2);
       nl++;
     }
+    /* ---- and a candle lantern, further along still ------------------------ *
+     * A third of the way along the walk from the paper lantern and **on the
+     * other side again**, which is the alternation the walk has run on since the
+     * first post: over thirty metres a verge gets one of each and no two of the
+     * same. The distance is **13 to 23 metres and not the paper lantern's 8 to
+     * 21**, and that is arithmetic rather than taste. The paper lantern stands 8
+     * to 21 metres past its post and this one 13 to 23 past *that*, so the two
+     * can be as little as 21 metres apart and as much as 44 - and at the 8 the
+     * pair came out four metres from the next station's post, which is not three
+     * lanterns on a verge, it is one thicket with a gap in it.
+     *
+     * It goes in at **0.62, the paper lantern's own number and not a higher
+     * one**, for the reason 0.62 is there: a verge with three lanterns in twenty
+     * metres is a fence of them, and the number that buys three in twenty is not
+     * much above 0.6. What puts more lamps on the course than before is not this
+     * number - it is that there are now *two* kinds drawing on one slot and only
+     * one of them can win it. So a candle lantern stands beside every paper
+     * lantern the walk already had, and the density it lands on is **2.24 lamps
+     * a station** against the 1.62 it was. */
+    if (r() < 0.62) {
+      const s3 = Math.min(tr.finish - 4, s + 13 + r() * 10);
+      const sm3 = trackAt(tr, s3, lampFrame);
+      const side3 = lastSide;
+      lastSide = -side3;
+      const d3 = side3 * Math.max(sm3.w + 0.7, bankRadius(sm3) + 1.6);
+      o.position.set(sm3.p.x + sm3.right.x * d3, standY(sm3, d3), sm3.p.z + sm3.right.z * d3);
+      // **and it is turned with its face to the lane**, which nothing else in the
+      // walk asks for. This lantern is four panes of glass in a square frame and
+      // there is nothing to read it from behind, so the half turn that puts its
+      // open side towards the lane is the difference between a lantern lighting
+      // the verge and a lantern lighting the field.
+      o.rotation.set(0, Math.atan2(sm3.right.x * side3, sm3.right.z * side3) + (side3 < 0 ? Math.PI : 0), 0);
+      o.scale.setScalar(0.94 + r() * 0.22);
+      o.updateMatrix();
+      cframe.setMatrixAt(nc, o.matrix);
+      cwax.setMatrixAt(nc, o.matrix);
+      cpane.setMatrixAt(nc, o.matrix);
+      cflame.setMatrixAt(nc, o.matrix);
+      // The frame keeps its own colour and the other three take the tint, which
+      // is the split `lanternParts()` makes for a paper lantern and for the same
+      // reason: a red lantern would otherwise come with a red stake.
+      const hex = CANDLE_COLOURS[(r() * CANDLE_COLOURS.length) | 0];
+      cframe.setColorAt(nc, white);
+      candleCol.setHex(hex);
+      cwax.setColorAt(nc, candleCol);
+      cpane.setColorAt(nc, candleCol);
+      cflame.setColorAt(nc, candleCol);
+      lampPosts.push({
+        p: flameHead.clone().applyMatrix4(o.matrix), post: false,
+        // **and 3, where the two kinds of lamp in the walk are on 9 and 7.** A
+        // point light on a wick is **six centimetres** from the top of the wax
+        // and **a metre and a tenth** from the grass it lights, and `decay` of
+        // 1.6 puts those **ninety times** apart - so the number is not a
+        // brightness, it is a choice about which of the two the lantern is for.
+        // At 6 the wax came out five stops over white and the meadow within four
+        // metres went the colour of the lamp: a cyan lantern standing in a cyan
+        // field, which is the reference's *photograph* and not its object. At 3
+        // the glass is still a lit box with the frame showing through it - which
+        // is the thing the piece has to be - and the pool on the grass is a pool
+        // rather than a flood. The glow sprite carries the halo, as it does for
+        // every lamp in the county.
+        colour: hex, power: 3, reach: 11,
+      });
+      lampWalk.push(s3);
+      nc++;
+    }
   }
-  for (const [m, used] of [[posts, n], [glass, n], [lposts, nl], [lglass, nl]]) {
+  for (const [m, used] of [[posts, n], [glass, n], [lposts, nl], [lglass, nl],
+    [cframe, nc], [cwax, nc], [cpane, nc], [cflame, nc]]) {
     o.scale.setScalar(0);
     o.updateMatrix();
     for (let i = used; i < m.count; i++) m.setMatrixAt(i, o.matrix);
     m.instanceMatrix.needsUpdate = true;
     m.computeBoundingSphere();
   }
-  o.position.set(0, -999, 0); o.updateMatrix();
-  lampPosts.push({ p: o.position, post: true, colour: LAMP_COLOUR, power: 9, reach: 15 });  // one always-dark spare
+  // **And no always-dark spare at the bottom of the list**, which used to be one
+  // more record at `(0, -999, 0)` so the nearest-sixteen sort could never come up
+  // short. It was ranked by horizontal distance like every other lamp and the
+  // ranking does not know about the nine hundred and ninety-nine metres, so a
+  // course that came near the world origin gave a real light slot to a lamp
+  // parked a kilometre under the county - measured at intensity 1.67 on Hedgerow
+  // Dash, ranked third nearest from a camera twenty metres from the start. With
+  // the binding held rather than ranked it is worse than useless: a slot that has
+  // taken it *keeps* it, so it would hold one for as long as you stood near the
+  // origin and no lamp there would ever get a light. It also pushed `o.position`
+  // itself rather than a copy of it, so the record's place was the scatter's own
+  // scratch vector. A course with three lamps has three lamps, and `litLamps()`
+  // asks for a count rather than assuming one.
 }
 
 /** Scatter instances along the lane, skipping the water and the running surface. */
@@ -474,7 +659,10 @@ function placeLamps(tr, group) {
  * then every part is drawn as its own instanced mesh, sharing one set of
  * transforms, so a piece is still placed once and costs one matrix to place.
  * `opts.lamps` is handed back every piece that carries a light, so the few
- * real lights in the world can find the nearest of them as the race goes.
+ * real lights in the world can be bound to, and the binding is held rather than
+ * ranked - so a piece placed here has to be told the colour, the power and the
+ * reach it wants lit, because those three are read off the record when the light
+ * is given and never looked up again.
  *
  * A part is drawn in the material its own file declared once it has been
  * converted - that is the whole reason `propMatFor` exists - and otherwise in
@@ -506,9 +694,48 @@ let STANDING = [];
  *  assigned because **a module's live bindings are read-only from outside**.
  *  `buildCourse()` opens with it, which is where the two assignments were, and
  *  the order is the whole of it: the register is emptied *before* the tower
- *  claims its clearing, so the first tree placed finds a clearing already spoken
- *  for. A third of these in this split, after `skyGeo` and `gfxStageDirty`. */
-const clearRegister = () => { STANDING = []; RESERVED = []; };
+ * claims its clearing, so the first tree placed finds a clearing already spoken
+ * for. **Four** of these in this split, after `skyGeo`, `gfxStageDirty` and
+ * `BOWERS`. */
+const clearRegister = () => { STANDING = []; RESERVED = []; DECLINED = 0; BOWERS = null; };
+/**
+ * What the green bower put on this course, and **why it is here when
+ * `standingReport()` is the thing that counts standing pieces.**
+ *
+ * A bower is a **section** - thirty metres of lane the planner laid down - so it
+ * takes no part in the register and moves nothing in the arrangement report.
+ * Which means that without this the feature has **no observable at all**, and a
+ * gate is an observable: `tools/e2e/biome.spec.js` asks for a bower on `dash` and
+ * `marathon`, for `null` on the other three temperate courses and for `null` on
+ * all five ashlands - and the last of those is the negative worth having most,
+ * because it is the assertion that says the biome is doing the work.
+ *
+ * `null` is the answer when the biome declined the props or the plan dealt no
+ * bower, and **both of those are the same answer to a test**: a course with no
+ * bower in it is correct, not broken.
+ *
+ * A module `let` for the same reason `DECLINED` is one: written by `standBower()`
+ * and read by `bowerReport()`, both inside this file, emptied by
+ * `clearRegister()`. **Never assigned from outside** - that throws, and quietly.
+ */
+let BOWERS = null;
+/**
+ * How many pieces of the arrangement the standing biome **declined** to place.
+ *
+ * It is a count and not an absence, and that is the whole of it: `populate()`
+ * walks a table of every prop the county knows how to scatter and skips the ones
+ * this biome has not named, and a skip that is silent is a biome that has quietly
+ * stopped declining anything - or one that has started declining everything, which
+ * is the failure a user actually sees and which reads as an empty course rather
+ * than as a bug. `standingReport()` hands it out beside `pieces`, and
+ * `tools/plan-test.mjs --biomes` prints the same two numbers per course so the
+ * gate says it rather than a screen nobody opens.
+ *
+ * It is a module `let` for the same reason `STANDING` is: it is written from
+ * `populate()` and read from `standingReport()`, both inside this file, and
+ * emptying it is `clearRegister()`'s third job.
+ */
+let DECLINED = 0;
 /** Ground that is spoken for without anything standing on it: a farm's yard. */
 let RESERVED = [];
 /**
@@ -807,142 +1034,48 @@ function partList(name, material) {
   return parts ? Object.values(parts).map((geo) => ({ geo, material })) : null;
 }
 
+/**
+ * A lantern's two surfaces, and **it is a function and not a value** because the
+ * parts are per course and the table that places them is built per course: the
+ * paper is `mat.paper` and the frame is the material out of the lantern's own
+ * file. See the entry in `PLACE` for why the frame is not `mat.vcol` like the
+ * piece itself.
+ */
+function lanternParts(name) {
+  const p = props[name + '.parts'];
+  return p
+    ? [{ geo: p.paper, material: mat.paper, tint: true },
+      { geo: p.frame, material: propMat[name] || mat.vcol, tint: false }]
+    : [{ geo: props[name], material: mat.vcol, tint: true }];
+}
+
 function populate(tr, group) {
   // The register was emptied by `buildCourse()`, before the tower went down,
   // and the order of the rest of this function *is* the order of the arrangement:
   // whatever goes down first is what everything after it has to arrange itself
   // around. The farms therefore go first - a farmstead is a place the country
   // was cleared for and it is not something you drop a giant mushroom into
-  // afterwards.
-  populateFarms(tr, group);
+  // afterwards - and a biome says whether there is one.
+  const biome = biomeNow();
+  if (biome.farms) populateFarms(tr, group);
   // a chasm is not meadow: nothing roots in the bottom of one
   const offRock = { skip: (sm) => sm.rock };
-  // And the ones the whole valley is named for: giant mushrooms, and they go
-  // down **first** of anything that grows, because they are the biggest things
-  // in the country by a long way and this function is an order of precedence.
-  // Placed among the trees they were being crowded out of their own meadow -
-  // twenty-three asked for and five fit - because a conifer a metre across was
-  // claiming its metre before a mushroom six metres across had said anything.
-  // They are kept well back out of the lane and clear of each other and of
-  // everything else big, which is not a figure in these calls but the register
-  // in `STANDING`, read off each cap's own geometry; a mushroom that cannot
-  // find room is left out rather than put on top of something. Three kinds of
-  // them: the broad brown one, the pale one of the wet ground with its strands
-  // hanging off the rim, and the rooted one with the crown of knobs under its
-  // cap. They are the skyline.
+  /** The band the three giant mushrooms stand in, kept well back out of the lane
+   *  and clear of each other and of everything else big - which is not a figure
+   *  in these entries but the register in `STANDING`, read off each cap's own
+   *  geometry; a mushroom that cannot find room is left out rather than put on
+   *  top of something. */
   const mushroomAt = (r) => 26 + r() * 30;
-  // All three mushrooms are three surfaces - the stalk, the outside of the cap
-  // and the inside of it - so three meshes, each of which is worn by the maps
-  // out of its own file's material, because the manifest can only hand a map to
-  // a material. `scatter()` hands back **an array** for a prop that has been
-  // given parts, one `InstancedMesh` per part, all of them through the same
-  // instance matrix, and `Group.add()` takes an object - so the array has to be
-  // spread. Handed over whole it throws a warning and adds nothing at all, and a
-  // mushroom that is nowhere in the country is a hard thing to see from the
-  // finish line.
-  const mush = (name, want, scale, tint) => {
-    const got = scatter(tr, props[name], mat.foliage, want, {
-      at: (sm, r) => mushroomAt(r), scale, tilt: 0.05, tint, skip: (sm) => sm.rock,
-      parts: partList(name, mat.foliage),
-    });
-    for (const im of [].concat(got)) group.add(im);
-  };
-  mush('mushroom-giant', 16, (r) => 0.8 + r() * 0.8, (r) => 0.84 + r() * 0.3);
-  mush('mushroom-pale', 9, (r) => 0.85 + r() * 0.75, (r) => 0.86 + r() * 0.26);
-  mush('mushroom-rooted', 9, (r) => 0.8 + r() * 0.8, (r) => 0.86 + r() * 0.26);
-  group.add(scatter(tr, props.conifer, mat.foliage, 46, Object.assign({
-    at: (sm, r) => 13 + r() * 30, scale: (r) => 0.8 + r() * 0.8, tint: (r) => 0.82 + r() * 0.34,
-  }, offRock)));
-  group.add(scatter(tr, props.evergreen, mat.foliage, 32, Object.assign({
-    at: (sm, r) => 12 + r() * 28, scale: (r) => 0.75 + r() * 0.7, tint: (r) => 0.84 + r() * 0.32,
-  }, offRock)));
-  group.add(scatter(tr, props.broadleaf, mat.foliage, 38, Object.assign({
-    at: (sm, r) => 14 + r() * 26, scale: (r) => 0.75 + r() * 0.7, tint: (r) => 0.85 + r() * 0.3,
-  }, offRock)));
-  group.add(scatter(tr, props.bush, mat.foliage, 70, Object.assign({
-    at: (sm, r) => 3.2 + r() * 22, scale: (r) => 0.55 + r() * 0.55, tint: (r) => 0.85 + r() * 0.3,
-  }, offRock)));
-  group.add(scatter(tr, props.rock, mat.rock, 64, Object.assign({
-    at: (sm, r) => (r() < 0.3 ? sm.w + 0.5 + r() * 1.2 : 3.5 + r() * 24),
-    scale: (r) => ROCK_SCALE + r() * 0.34, tint: (r) => 0.85 + r() * 0.3,
-  }, offRock)));
-  // and the mossy ones, which are stones of the wet ground: they stand in the
-  // band the pools reach, out in the shallows and on the wet sand, and they
-  // are not put in the meadow at all, because a dry mossy stone is a green one.
-  // A mossy stone is two pieces of geometry and two materials, so it goes out
-  // as both: the frame and the moss share one set of transforms, so it is
-  // placed once and costs one matrix to place, and each is drawn in the
-  // material its own part of the file declared.
-  group.add(...scatter(tr, props['mossy-rock'], mat.rock, 30, Object.assign({
-    parts: partList('mossy-rock', mat.rock),
-    at: (sm, r) => bankRadius(sm) * (0.88 + r() * 0.28),
-    scale: (r) => ROCK_SCALE * 1.15 + r() * 0.3, tint: (r) => 0.88 + r() * 0.28,
-    shore: true, inWater: true, offLane: 1.0, lift: () => 0.01,
-    skip: (sm) => sm.basin <= 0.05, tries: 30,
-  }, offRock)));
-  // and the bottom of one is where the loose stone collects: broken rock
-  // strewn about the floor, including out in the middle of it
-  group.add(scatter(tr, props.rock, mat.rock, 40, {
-    at: (sm, r) => 0.3 + r() * (sm.w + 2.4), scale: (r) => ROCK_SCALE * 0.8 + r() * 0.34, tilt: 0.6,
-    keep: (sm) => sm.rock, tint: (r) => 0.80 + r() * 0.34,
-  }));
-  // and the grass is thick: it is the ground the whole country is made of
-  group.add(scatter(tr, props.tuft, mat.grass, grassCount(), Object.assign({
-    at: (sm, r) => sm.w + 0.25 + r() * 13, scale: (r) => 0.5 + r() * 0.8, shadow: false, tilt: 0.14,
-  }, offRock)));
-  group.add(scatter(tr, new THREE.IcosahedronGeometry(0.075, 0), mat.flower, 120, Object.assign({
-    at: (sm, r) => sm.w + 0.5 + r() * 11, scale: (r) => 0.7 + r() * 0.8, shadow: false,
-    tint: (r) => FLOWER_COLORS[(r() * FLOWER_COLORS.length) | 0],
-  }, offRock)));
-  // Mushrooms, in the grass at the side of the lane: the red ones in a clump
-  // where they turn up, the brown ones scattered through, which is how both of
-  // them actually grow.
-  group.add(scatter(tr, props['mushroom-red'], mat.foliage, MUSHROOM_COUNT, Object.assign({
-    at: (sm, r) => sm.w + 0.5 + r() * 5.5, scale: (r) => 0.7 + r() * 0.6, shadow: false, tilt: 0.18,
-    tint: (r) => 0.88 + r() * 0.22,
-  }, offRock)));
-  group.add(scatter(tr, props['mushroom-brown'], mat.foliage, MUSHROOM_COUNT, Object.assign({
-    at: (sm, r) => sm.w + 0.4 + r() * 7, scale: (r) => 0.75 + r() * 0.7, shadow: false, tilt: 0.14,
-    tint: (r) => 0.86 + r() * 0.26,
-  }, offRock)));
-  group.add(scatter(tr, props.marker, mat.rock, 34, {
-    at: (sm, r) => sm.w + 0.95 + r() * 0.5, scale: (r) => 0.62 + r() * 0.26, tilt: 0.1,
-  }));
-  // Paper lanterns, hung on poles beside the lane and on a few arches thrown
-  // over it. They are dark by day and burn from within once the hour asks for
-  // them, each in the colour it is painted - the warm cream of most, a red one
-  // or two, and now and then a pink or a green. The few of them near the snail
-  // are the ones that cast real light, so the verge goes the colour of whatever
-  // lantern is closest to it.
-  // The paper of a lantern is `mat.paper` and always will be: the hour drives
-  // that material's emissive by name, and a paper drawn in the material out of
-  // its own file has no emissive for the hour to touch, so it is a paper
-  // lantern that is dark at midnight. The frame is a different matter - nothing
-  // lights it by name - so the frame is drawn in the material out of its own
-  // file and wears its own grain.
-  //
-  // The order is the file's: paper first, and the first part is the one the
-  // loader names `props[name]`, which is what a prop of one part falls back to.
-  const lanternParts = (name) => {
-    const p = props[name + '.parts'];
-    return p
-      ? [{ geo: p.paper, material: mat.paper, tint: true },
-        { geo: p.frame, material: propMat[name] || mat.vcol, tint: false }]
-      : [{ geo: props[name], material: mat.vcol, tint: true }];
-  };
   const LANTERN_COLOURS = [0xffe6bd, 0xffe6bd, 0xffe6bd, 0xf7d7a4, 0xffb9a0, 0xe89ec0, 0xa8e0cf];
   const lanternTint = (r) => LANTERN_COLOURS[(r() * LANTERN_COLOURS.length) | 0];
-  // a piece can come back as one mesh or as its parts, so everything placed
-  // goes through here and lands the same way
-  const place = (geo, material, count, opts) => {
-    for (const im of [].concat(scatter(tr, geo, material, count, opts))) group.add(im);
-  };
-  // The arches are found first, as points on the course rather than as
-  // anything standing on it, because the poles hung with lanterns have to be
-  // kept clear of them as well as of the lamp walk: an arch is a landmark, and
-  // a pole standing in front of one hides the thing it is standing in front of.
-  const archParts = lanternParts('lantern-arch');
-  const archS = (() => {
+  /**
+   * The arches are found first, as points on the course rather than as anything
+   * standing on it, because the poles hung with lanterns have to be kept clear of
+   * them as well as of the lamp walk: an arch is a landmark, and a pole standing in
+   * front of one hides the thing it is standing in front of.
+   */
+  let archS = null;
+  const archSpots = () => {
     const want = Math.max(2, Math.round(tr.length / 62));
     const arches = [];
     for (let i = 0; i < want * 20 && arches.length < want; i++) {
@@ -953,29 +1086,11 @@ function populate(tr, group) {
       arches.push(s);
     }
     return arches;
-  })();
-  place(props['lantern-pole'], mat.vcol, 26, {
-    parts: lanternParts('lantern-pole'), at: (sm, r) => sm.w + 0.7 + r() * 3.4,
-    scale: (r) => 0.85 + r() * 0.5, tilt: 0.03, tint: lanternTint,
-    lamps: lampPosts, lampPower: 7, lampReach: 12,
-    // a pole wants ground to stand on: no rock face, and no standing in a pool
-    skip: (sm) => sm.rock || sm.basin > 0.05,
-    // and a pole wants room: a lantern is a landmark, and two of them within
-    // sight of each other stop being landmarks and start being a row. The
-    // walk of lamps is only held at arm's length rather than kept well clear,
-    // or a course that is mostly water has nowhere left to put a pole at all.
-    minGap: 13, avoidGap: 5, avoid: lampWalk.concat(archS), tries: 160,
-    // and the arrangement is told a pole's real size, which is the thickness of
-    // a post. Left to its own geometry it is measured by the reach of its lantern
-    // arm - two and a half metres - and a pole is two and a half metres of air
-    // with a post in the middle of it. Its spacing is the `minGap` above, which
-    // is the number that matters: thirteen metres, because a lantern is a
-    // landmark and two of them in sight of each other are a row.
-    r: 0.8,
-  });
-  // and the arches themselves, which go across the lane square to it, and that
-  // you race under
-  {
+  };
+  /** The arches themselves, which go across the lane square to it, and that you
+   *  race under. */
+  const standArches = () => {
+    const archParts = lanternParts('lantern-arch');
     const arches = archS;
     const archColours = arches.map(() => lanternTint(rand));
     for (let k = 0; k < archParts.length; k++) {
@@ -1008,38 +1123,1089 @@ function populate(tr, group) {
       im.computeBoundingSphere();
       group.add(im);
     }
+  };
+
+  /**
+   * The bower's five numbers, and **the arch's own span is one of them** rather
+   * than something read off the model: the placement has to know where the feet
+   * are to ask the ground under them, and a number read out of a `.glb` at
+   * placement time would be a number the model could change under.
+   *
+   * `BOWER_PITCH` is metres of arc between hoops, which is the scale the density
+   * field below is band-limited to. `BOWER_SKIRT` is where the curtain stops over
+   * the middle of the road, and §`standBower` says why it has to.
+   */
+  const BOWER_PITCH = 2.05;    // metres of arc between hoops
+  /** **And the span is 5.9 and not the lane's own 5.6**, which is the whole of the
+   *  third change: the hoop's feet stand at ±2.95 and the ribbon's edge is at
+   *  `sm.w` = 2.8, so **the feet are a hand's width outside the cobbles and not
+   *  on them.** They used to stand at ±2.3, which is half a metre *inside* the
+   *  road's own edge, and the first picture of that was a green tunnel whose iron
+   *  came up through the setts. */
+  const BOWER_SPAN = 5.9;      // the hoop's own span; the feet sit at ±2.95
+  const BOWER_H = 4.3;         // the crown, and never lower
+  /* **And the two counts came down while the leaf got its shape back**, which is
+   *  the whole of how this piece was bought. The canopy's leaf was cut from six
+   *  outline points to four, and **1.6 M triangles a frame off the course bought
+   *  1.0 fps** - a triangle count predicts work and not time, and the bower's
+   *  remaining cost is fill. So the outline went back to **five points, which is
+   *  the original's own table with one row deleted and nothing moved**, and **the
+   *  clusters came down to pay for it**: fewer, fuller leaves spread over both
+   *  flanks rather than more of a thinner one crowded onto one.
+   *
+   *  **Twenty and seven, and the arithmetic that picked them.** At five points the
+   *  `mass` is 1620 triangles against the four-point leaf's 1344, so twenty clusters
+   *  a rib is `526 * 1620` against `628 * 1344` on `dash` at High - **852 k unique
+   *  triangles against 844 k**, level with the four-point build and **28% under the
+   *  original's 1.34 M**. Measured: 67.2 fps with the six-point leaf and 628
+   *  clusters, 68.2 with the four-point leaf, **68.6 with this** - so the whole of
+   *  the decimation is worth about a frame and a half and the canopy is worth
+   *  about sixteen times that. */
+  const BOWER_MASS = 20;       // leaf clusters per rib, before the density field
+  const BOWER_SPRAY = 7;       // hanging sprays per rib, before the density field
+  const BOWER_SKIRT = 2.30;    // the curtain stops here, over the middle of the lane
+  /** And how wide the clear corridor over the lane is, in metres from the centre
+   *  line. **It is 1.85 and not the arch's own half-span, and that was the bug that
+   *  kept the whole canopy off the ground.** The guard used to be `|x| < 2.6`,
+   *  which is wider than the arch's own 2.3 - so *every* cluster on the bower was
+   *  pushed up to the skirt height and **not one leaf came below two and a third
+   *  metres anywhere**, which is a pergola. 1.85 is the lane's own 1.4 plus a
+   *  snail's height, and the growth comes down outside it to the ground. */
+  const BOWER_CLEAR = 1.85;
+
+  /**
+   * How thick the canopy is on rib `i`, and **this is a field along the run and
+   * not a number**, because the whole of the reference is that its leaves are
+   * thick in some places and open in others and the sun comes down through the
+   * open places. **Uniform density is a green pipe**: a canopy with no thin place
+   * in it blocks everything, and a bower that blocks everything is a tunnel and
+   * not a setpiece.
+   *
+   * Three properties, and each of them is the point:
+   *
+   * - **A floor of 50% and a ceiling of 125%, and the floor is the number this
+   *   got wrong twice.** It was 12% - a number chosen to be safely thick, on the
+   *   argument that the opposite failure was a green pipe - and **the opposite
+   *   failure is not a green pipe, it is a bald patch**: at 12% a rib carried two
+   *   clusters and its neighbour carried twenty, and the canopy came out in
+   *   stripes of growth and gaps with bare frame showing through between them.
+   *   From above, which is where the eye reads a bower's evenness, it was a bed of
+   *   green with holes cut in it.
+   *
+   *   **The reference is an even cover with places it is thinner, not places it is
+   *   absent**, and that is a different shape for the same number: a hundred per
+   *   cent of the ribs are roofed and a few of them are thin. **So the field's job
+   *   is modulation and not presence**, and the floor is half and the band is a
+   *   sixth of a rib rather than a quarter - so neighbouring ribs agree and the
+   *   variation shows at the scale of four or five hoops, which is what a mile of
+   *   hedge actually looks like. **If a course ever does come out with a gap wider
+   *   than about three ribs, raise the floor again rather than reaching for the
+   *   mouth taper.**
+   * - **On the rib index, and not on `s`.** Two bowers on one course get two
+   *   *different* fields rather than one field sampled twice, and two sections of
+   *   different lengths do not get the same tunnel twice.
+   * - **Three octaves at a sixth of a rib**, so a set is every four or five hoops
+   *   rather than a per-rib coin toss and rather than a stripe every second rib.
+   *
+   * `fbm` is already imported and already used by the country's own ground, so
+   * this is four lines and no new edge.
+   */
+  const bowerDens = (i) => clamp(0.55 + 0.62 * fbm(i * 0.16, 0.5, 3), 0.50, 1.25);
+
+  /**
+   * `bowerRanges()` is **`surfaces.js`'s**, and this used to be a second copy of
+   * it - forty lines that hunted `tr.sm` for the stretch of plain lane and scored
+   * the candidates, which was the right answer by heuristic and the wrong answer
+   * by construction: **the planner already guarantees the stretch.** It is twenty-six
+   * to thirty-two metres of `BOWER` at the course's own level and width, laid there
+   * deliberately, with a footpath either side of it and no hole in it.
+   *
+   * Two properties come free from the condition list and are worth naming rather
+   * than discovering: **the tower and the half-way line already refuse a bower**,
+   * because `midwayOf()`'s clear test asks `cond === RUN`; and **a crate cannot be
+   * inside one**, because `lay()` separates features with a footpath and the
+   * crate's own approach is `PUSH`.
+   *
+   * **One definition and not three**, and the place it lives is the graph's
+   * answer rather than a preference: `buildRoad()` wants it for the setts'
+   * weight and `settsShareOf()` is right beside it, and `scenery.js` already
+   * imports `surfaces.js`, so a copy here would have been a third list of the same
+   * fact - and the kind that falls out of step silently, because a bower standing
+   * on a road with no setts under it is a picture nobody can call wrong.
+   */
+  const ranges = bowerRanges(tr);
+  /**
+   * The tunnel itself: **one `InstancedMesh` set per range**, because a course may
+   * deal two and one mesh spanning both would draw its foliage through the
+   * footpath between them.
+   *
+   * Everything here is modelled line for line on `standArches()` above, and the
+   * three lines worth naming are:
+   *
+   * - **`groundDrawnAt` and not `groundYAt`**, on the lamp paragraph's grounds:
+   *   the surface is a polyline and the two agree to a millimetre on the meadow
+   *   and not at all out on a berm - and a hoop's feet are four and a half metres
+   *   apart, which is exactly the distance a berm is measured over.
+   * - **The two feet are asked separately and the instance takes the lower**, so
+   *   the high foot's leg sinks into the ground rather than the whole arch lifting
+   *   off the ground it is drawn on. The two differ by up to 630 mm.
+   * - **The rib count does not scale with the props row and the leaf counts do.**
+   *   A bower of eight ribs is not a bower; a bower of eight ribs and four leaves
+   *   a rib is the same bower in a thinner hedge. Leaving the multiply off the ribs
+   *   would make the props row a lie on every course with a bower in it.
+   */
+  const standBower = (ranges) => {
+    if (!ranges.length) return;
+    const archGeo = props['bower-arch'];
+    const leafParts = props['bower-foliage.parts'];
+    if (!archGeo || !leafParts || !leafParts.mass || !leafParts.spray) return;
+    BOWERS = { ranges: ranges.length, ribs: 0, mass: 0, spray: 0, litter: 0, drifts: 0, s: [] };
+    const o = new THREE.Object3D();
+    const zero = new THREE.Object3D();
+    const local = new THREE.Object3D();
+    /* **And the five scratch vectors the orientation below needs**, which are
+     * module-call scratches rather than per-cluster allocations because a bower
+     * places five hundred of them and the frame loop is the one place in the
+     * county where an allocation per instance shows up in the average. */
+    const UP = new THREE.Vector3(0, 1, 0);
+    const radial = new THREE.Vector3();
+    const tangentV = new THREE.Vector3();
+    const inward = new THREE.Vector3();
+    const arcPt = (a, out) => out.set(
+      -Math.cos(a) * (BOWER_SPAN / 2),
+      BOWER_H * Math.pow(Math.max(0, Math.sin(a)), 0.82),
+      0);
+    const pA = new THREE.Vector3(), pB = new THREE.Vector3(), pC = new THREE.Vector3();
+    const away = new THREE.Vector3(), n1 = new THREE.Vector3(), n2 = new THREE.Vector3();
+    const drape = new THREE.Vector3();
+    const spin = new THREE.Quaternion(), tilt = new THREE.Quaternion();
+    const basis = new THREE.Matrix4();
+    const xAxis = new THREE.Vector3(), yAxis = new THREE.Vector3(), zAxis = new THREE.Vector3();
+    const AXIS_X = new THREE.Vector3(1, 0, 0);
+    /** The arch's outward normal at angle `a`, taken **numerically** off the curve
+     *  the hoop was built from and with its **sign chosen by the point** rather
+     *  than by the cross product's order - a curve that turns one way at the
+     *  crown and the other at the springing gives a cross product of the wrong
+     *  sign on one of them, and half the canopy ends up growing into the road. */
+    const outwardAt = (a) => {
+      arcPt(a - 0.02, pA); arcPt(a, pB); arcPt(a + 0.02, pC);
+      tangentV.subVectors(pC, pA).normalize();
+      // both perpendiculars, and the one that points away from the arch's middle
+      away.set(pB.x, pB.y - BOWER_H * 0.30, 0);
+      n1.set(tangentV.y, -tangentV.x, 0);
+      n2.set(-tangentV.y, tangentV.x, 0);
+      radial.copy(n1.dot(away) >= n2.dot(away) ? n1 : n2).normalize();
+      return radial;
+    };
+    const ribM = new THREE.Matrix4();
+    const leafM = new THREE.Matrix4();
+    const c = new THREE.Color();
+    for (const range of ranges) {
+      const s0 = range.s0 + 1.2;
+      const ribs = Math.max(3, Math.round(Math.max(0, range.s1 - s0) / BOWER_PITCH) + 1);
+      const arch = new THREE.InstancedMesh(archGeo, propMat['bower-arch'] || mat.rock, ribs);
+      arch.castShadow = true; arch.frustumCulled = true;
+      // one mesh per density, so the mass is the canopy and the spray is the fringe
+      const mass = windMark(new THREE.InstancedMesh(leafParts.mass, mat.foliage, ribs * BOWER_MASS + 4));
+      const spray = windMark(new THREE.InstancedMesh(leafParts.spray, mat.foliage, ribs * BOWER_SPRAY + 4));
+      mass.castShadow = true; mass.frustumCulled = true;
+      /* **And the spray does not cast, which is the one asymmetry in this block
+       * and it is the whole of what the two meshes are for.** The mass is the body
+       * of the growth: it lies against the arch and against the road, and its
+       * shadow is two of the readable things about a bower - the hoop's own shadow
+       * across the setts and the shaded underside that says the tunnel goes over
+       * you rather than in front of you. The spray is **the long danglers hanging
+       * free of the frame**, three clusters to a rib, out in the air a metre or
+       * more off anything: **what they lit was nothing**. A three-centimetre leaf
+       * 30 m from the nearest surface it can shadow, in a 3072-wide map covering
+       * the whole draw distance, is a sub-texel dither on the road - and the pass
+       * that draws it is a fourth full rasterisation of the canopy.
+       *
+       *  **So the spray leaves the shadow map and the mass stays in it**, which is
+       *  the half of this worth being careful about: dropping both would take the
+       *  tunnel's own shading with it and leave a green pipe lit from every side.
+       *
+       *  (The litter below is off for the same reason and a different one: it is
+       *  lying *on* the ground, so its shadow is inside its own footprint.) */
+      spray.castShadow = false; spray.frustumCulled = true;
+      let massN = 0, sprayN = 0;
+      for (let i = 0; i < ribs; i++) {
+        const s = s0 + i * BOWER_PITCH;
+        const sm = tr.sm[clamp(Math.round(s / STEP), 0, tr.n)];
+        // **the density is a field along the run and not a number** - see below
+        const dens = bowerDens(i);
+        // **and the mouths taper**, so the canopy thins and drops away over the
+        // last three ribs instead of stopping on a hard edge
+        const mouth = i >= ribs - 3 ? 1 - (i - (ribs - 3)) / 3 : 1;
+        laneVertex(sm, 0, o.position);
+        // the lower of the two feet, so the high one sinks rather than the arch lifting
+        o.position.y = Math.min(groundDrawnAt(sm, -BOWER_SPAN / 2), groundDrawnAt(sm, BOWER_SPAN / 2)) - 0.15;
+        // square to the lane, so the hoop stands across the road
+        o.rotation.set(0, Math.atan2(sm.fwd.x, sm.fwd.z), 0);
+        // **and the crown's undulation follows the density**, because a thin place
+        // is a taller hoop: the plant has grown over it rather than under it. A
+        // canopy whose high points are its gaps is the shape in all three of the
+        // references.
+        o.scale.set(1, (0.90 + rand() * 0.24) * (0.94 + 0.14 * dens) * (0.62 + 0.38 * mouth), 1);
+        o.updateMatrix();
+        ribM.copy(o.matrix);
+        arch.setMatrixAt(i, o.matrix);
+        /* **And the floors are three and one, which are `Math.max` over a field
+         *  whose own floor is half** - so on the thinnest rib and at the props row
+         *  at its lowest there are still three clusters and a dangler, and **a rib
+         *  is never bare.** The first cut's floors of two and one sat under a
+         *  density floor of 12% and put a hoop with four leaves on it every fourth
+         *  hoop. */
+        const nMass = Math.max(3, Math.round(BOWER_MASS * dens * mouth * gfxPropDensity()));
+        const nSpray = Math.max(1, Math.round(BOWER_SPRAY * dens * mouth * gfxPropDensity()));
+        /* **The rib's own frame, and the cluster is built in it rather than in the
+         * world**, which is the whole of §7.8's third change and the reason the
+         * growth follows the tunnel instead of hanging off it.
+         *
+         * `bower-foliage`'s strands run along its own **local -Y**, and the first
+         * cut rotated nothing: every cluster on every hoop hung straight down out
+         * of the world's sky, so the crown's growth pointed at the ground and the
+         * flanks' pointed sideways into the road. `references/tunnel4.jpeg` has
+         * runners running **along the surface of the frame** and off it, and a
+         * bower whose strands all point at the earth is a weeping willow hung
+         * upside down over a road.
+         *
+         * **So each cluster is placed at its own angle on the arch with its local
+         * up turned to the arch's inward normal**, which makes its strands run out
+         * of the surface at whatever angle the surface is at: up over the crown,
+         * sideways down the flanks, and out and a little down where the arch
+         * meets the ground. The tangent is taken **numerically off the same
+         * `sin^0.82` curve the hoop was built from**, because a normal from the
+         * curve's formula and a normal from the built tube differ by the
+         * flattening and the difference is visible at the crown. */
+        for (let k = 0; k < nMass + nSpray; k++) {
+          const fringe = k >= nMass;
+          /* **The crown and both flanks, and the flanks are most of it.** The
+           * three references are not a canopy with an arch under it - they are a
+           * **tube of green with a frame inside it**, and in `tunnel.jpg` the growth
+           * comes down the outside of the tunnel to the edge of the road and the
+           * road is a channel cut through it. A bower whose foliage is only on the
+           * crown is a pergola, which is the other thing entirely: the first cut
+           * reached no lower than a metre and a half, and twenty-six frames stood
+           * over an open road like a cattle grid.
+           *
+* **The angle's exponent and the height's exponent are the whole of it,
+           * and they pull in opposite directions.** The angle crowds the roots
+           * towards the springing, where the flanks are; the height's `sin^0.62`
+           * lifts them as they come, so a flank cluster sits lower on the arch than
+           * a crown one at the same angle. Get either of them the wrong way and the
+           * growth is all in one place.
+           *
+           * **Over one crowds the leaves towards the springing**, which is where the
+           * flanks are and where `tunnel.jpg` has them: the growth comes down the
+           * outside of the tunnel to the edge of the road and the road is a channel
+           * cut through it. */
+          /* **And "towards the springing" means both of them, which is the one thing
+           * a single `pow` on one uniform draw cannot say.** `pow(rand(), 1.7)` puts
+           * the mass at small `th`, and `th` is measured from **one** foot, so it
+* dealt the crowding to the near flank and spent nothing on the far one:
+           *  the tunnel came out **thick on one shoulder and thin on the other**,
+           *  and there was an earlier version of the same complaint in this file's
+           *  own history - one flank reading as thinner "because the camera was
+           *  looking down the inside of the near one", which was the camera being
+           *  blamed for the deal.
+           *
+           *  **So the draw is mirrored before it is bent.** `2u - 1` is uniform over
+           *  `-1..1` and `sign(t) * |t|^0.75` pushes it away from the crown towards
+           *  *both* ends at once; the exponent is under one, which is the same
+           *  direction `1.7` was and the same argument for it.
+           *
+           *  **And this one is argued from the code and not from a measurement,
+           *  because the measurement could not be built.** A plan-view and an
+           *  elevation contrast profile of the canopy read 1.13 : 1 and 1.02 : 1
+           *  left against right, which put about 5% between the two flanks - and
+           *  re-running it with the mirroring reverted gave **the same two numbers
+           *  to a tenth**, which is what a metric measuring the scene's own
+           *  contrast does when the scene under it barely moves. Luminance
+           *  variance down a column of a frame that is mostly road, sky and
+           *  meadow is not a measurement of a canopy, and there is no scene handle
+           *  on the debug hook to take the canopy's own difference image. **So this
+           *  stands on the deal: the old draw put its crowding on one flank and
+           *  spent nothing on the other, which is visible in the picture and
+           *  arithmetically certain.** */
+          const tu = rand() * 2 - 1;
+          const th = Math.PI * (0.5 + 0.5 * Math.sign(tu) * Math.pow(Math.abs(tu), 0.75));
+          const lx = -Math.cos(th) * (BOWER_SPAN / 2) * (1 - 0.18 * Math.sin(th)) * (0.94 + rand() * 0.18);
+          let ly = BOWER_H * 0.96 * Math.pow(Math.sin(th), 0.62) + (rand() - 0.5) * 0.42;
+          // **The curtain stops at `BOWER_SKIRT` inside `|x| < 2.6`.** The racing
+          // camera's eye is about `g.y + 2.4` and its lateral offset is two to
+          // four and a half metres through the middle of a race, so the camera is
+          // outside the bower and never inside it - and a canopy that comes down to
+          // lane height across the middle of the road is a green tube with a snail
+          // inside it and no way to see the tunnel. The gap is the shape.
+          // **and the corridor is `BOWER_CLEAR` and not the arch's half-span**, which
+          // is the difference between a bower and a pergola - see its note. The
+          // skirt also **fades** rather than steps, because a hard line at two
+          // metres is a cut edge across the middle of the tunnel and the growth's
+          // whole point is that it has no edges.
+          if (Math.abs(lx) < BOWER_CLEAR && ly < BOWER_SKIRT) {
+            const inRoad = clamp((BOWER_CLEAR - Math.abs(lx)) / BOWER_CLEAR, 0, 1);
+            ly = lerp(ly, BOWER_SKIRT, inRoad);
+          }
+          local.position.set(
+            lx,
+            ly,
+            // **uniform over the whole depth of the run, not a jitter about zero**:
+            // a cluster in the plane of its own hoop makes the hoops read as
+            // discrete rings marching down the road, and the whole thing reads as
+            // arches with leaves on them
+            (rand() - 0.5) * 1.9,
+          );
+          /* **and the cluster is turned so its own up is the arch's inward
+           * normal**, which is the number that makes the strands run out of the
+           * surface instead of out of the sky. Its strands run along local `-Y`
+           * and its root sits at local `+0.46`, so aligning `+Y` with the *inward*
+           * normal puts the root just under the surface and the strands out of it
+           * - up over the crown, sideways down the flanks, out and a little down
+           * where the arch meets the ground.
+           *
+           * **Then a spin about the normal**, which is what stops a canopy reading
+           * as a comb: two clusters on the same hoop at the same angle differ only
+           * by which way round they face. And **then a small tilt about the
+           * tangent**, because a growth that leaves a frame at a perfect right
+           * angle every time is a machine. */
+          outwardAt(th);
+          /** **The direction a strand leaves this part of the frame, and it is a
+           *  blend of the surface's own normal and straight down.**
+           *
+           *  **Neither half is right on its own, and both cuts were one of them.**
+           *  Straight down gave a canopy that is a fringe hanging off the top of
+           *  the arch with nothing on its flanks - a pergola, and the first thing
+           *  anybody looks at. Straight out along the normal gave the opposite: the
+           *  crown's growth shot up into the sky and the flanks' went sideways out
+           *  into the meadow, and the whole of it piled into a blob beside the road
+           *  with the tunnel open under it.
+           *
+           *  **The reference drapes.** A runner that grows out of a frame does not
+           *  stand out of it: it goes up and over and then falls back, so its
+           *  direction is the normal bent towards the ground by gravity and the
+           *  bend is bigger the further out it has already got. `w` is that bend -
+           *  **and it is scaled by `sin(th)`, which is the whole of it**: a third
+           *  of the normal over the crown and none of it down the flanks, so the
+           *  crown's growth lifts and then falls in over the road and the flanks'
+           *  simply hangs down the outside of the tunnel to the verge.
+           */
+          drape.set(0, -1, 0).lerp(radial, 0.62 * Math.pow(Math.sin(th), 1.3)).normalize();
+          /** **And the basis is built by hand**, because the cluster's local `-Y`
+           *  is its strands' direction and `setFromUnitVectors` on an antiparallel
+           *  pair picks an arbitrary axis - which is where the first version's
+           *  ninety-degree twist came from, three resolves `UP` onto `-UP` by
+           *  picking whichever perpendicular it likes and every cluster on every
+           *  hoop got a different one. A basis cannot be ambiguous.
+           *
+           *  `+X` is completed off the tangent, so a strand's own fanning is about
+           *  the tunnel's axis and the spin is about local Y after that, which is
+           *  the tunnel's axis of symmetry. */
+          yAxis.copy(drape).negate();
+          xAxis.crossVectors(tangentV, yAxis);
+          if (xAxis.lengthSq() < 1e-8) xAxis.crossVectors(radial, yAxis);
+          if (xAxis.lengthSq() < 1e-8) xAxis.set(1, 0, 0);
+          xAxis.normalize();
+          zAxis.crossVectors(xAxis, yAxis).normalize();
+          const bend = (rand() - 0.5) * 0.8;
+          local.quaternion.setFromRotationMatrix(basis.makeBasis(xAxis, yAxis, zAxis))
+            .multiply(tilt.setFromAxisAngle(AXIS_X, bend))
+            .multiply(spin.setFromAxisAngle(UP, rand() * TAU));
+          local.scale.setScalar((0.85 + rand() * 0.5) * (fringe ? 0.8 : 1));
+          local.updateMatrix();
+          leafM.multiplyMatrices(ribM, local.matrix);
+          const im = fringe ? spray : mass;
+          const at = fringe ? sprayN : massN;
+          im.setMatrixAt(at, leafM);
+          const t = 0.82 + rand() * 0.34;
+          c.setRGB(t, t, t);
+          im.setColorAt(at, c);
+          if (fringe) sprayN++; else massN++;
+        }
+      }
+      for (const im of [arch, mass, spray]) {
+        const used = im === arch ? ribs : im === mass ? massN : sprayN;
+        for (let i = used; i < im.count; i++) { zero.scale.setScalar(0); zero.updateMatrix(); im.setMatrixAt(i, zero.matrix); }
+        im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        im.computeBoundingSphere();
+        group.add(im);
+      }
+      /* **And the drift**, and it is the floor of the tunnel.
+       *
+       * `references/tunnel.jpg` has a thick band of brown leaves along both
+       * verges and almost none in the middle of the road, and **a bower with green
+       * hanging over it and bare ground under it is a pergola over a path.** The
+       * drift is also the one thing in the picture that says the growth is old.
+       *
+       * **It goes on the ground and not on the road**, because a snail runs on the
+       * road and a lane half covered in a texture has a condition's worth of speed
+       * that the picture does not account for. So every clump is placed outside
+       * the lane's own half-width, at `groundDrawnAt()`'s answer for the offset it
+       * is actually at - **a berm puts one verge half a metre above the other and
+       * the two are asked separately.**
+       *
+       * **And it is not in `WIND_MATS` and so takes no `windMark()`**, which is the
+       * whole of why it is a file of its own rather than a third mesh of the
+       * foliage: a dead leaf on the ground that sways is a leaf in the air.
+       */
+      const litterGeo = props['bower-litter'];
+      let litterCount = 0;
+      if (litterGeo) {
+        const LIT = Math.max(3, Math.round((ribs * 2 * 1.6) * gfxPropDensity()));
+        const litter = new THREE.InstancedMesh(litterGeo, mat.vcol, LIT);
+        litter.castShadow = false; litter.frustumCulled = true;
+        let ln = 0;
+        for (let k = 0; k < LIT; k++) {
+          // **both sides, and not by a coin toss per clump** - a drift on one side
+          // of a lane and bare ground on the other is wind, and this is not wind
+          const side = k % 2 ? 1 : -1;
+          const s = s0 + rand() * Math.max(1, range.s1 - s0);
+          const sm2 = tr.sm[clamp(Math.round(s / STEP), 0, tr.n)];
+          // **out past the lane's own edge and by a share of nothing at all**, and
+          // the share grows with the density field so a thin part of the bower has
+          // a thin drift under it
+          // **the same density field, read at the rib the clump lands on** - so a
+          // thin place in the bower has a thin drift under it and the two halves of
+          // the picture agree about where the growth is
+          const rib = Math.round((s - s0) / BOWER_PITCH);
+          /* **And it laps onto the road, which is the reference.** The drift starts
+           * a third of a metre *inside* the ribbon's own edge and runs out to a
+           * metre beyond it, so the leaves are on the cobbles' shoulder and on the
+           * verge and never in the middle - and `references/tunnel.jpg`'s drift
+           * does exactly that, its inner edge cutting across the setts.
+           *
+           * The snail still runs on bare stone in the middle, which is the point:
+           * the litter is a picture and the speed comes off `COND[6]`, and a lane
+           * whose whole width is covered in a texture has a handicap the picture
+           * cannot account for. */
+          const off = sm2.w - 0.34 + rand() * (0.5 + 1.0 * bowerDens(rib));
+          const j = new THREE.Object3D();
+          laneVertex(sm2, side * off, j.position);
+          j.position.y = groundDrawnAt(sm2, side * off) + 0.02;
+          j.rotation.set((rand() - 0.5) * 0.2, rand() * TAU, (rand() - 0.5) * 0.2);
+          j.scale.setScalar(0.75 + rand() * 0.6);
+          j.updateMatrix();
+          litter.setMatrixAt(ln++, j.matrix);
+        }
+        for (let i = ln; i < LIT; i++) {
+          j.scale.setScalar(0); j.updateMatrix(); litter.setMatrixAt(i, j.matrix);
+        }
+        litter.instanceMatrix.needsUpdate = true;
+        litter.computeBoundingSphere();
+        group.add(litter);
+        litterCount = LIT;
+      }
+      BOWERS.ribs += ribs;
+      BOWERS.mass += massN;
+      BOWERS.spray += sprayN;
+      BOWERS.litter += range.s1 - range.s0;
+      if (litterCount) BOWERS.drifts += litterCount;
+      // **`.push` and not `+=`.** `arr += [a, b]` on an array coerces it to a
+      // string and *appends* it, so two bower sections came back as
+      // `"69,94.597.5,123"` — one field, six numbers in it, and the join so
+      // accidental that the two spans read as four. `e2e/biome.spec.js` asks for
+      // two of them and got one.
+      for (const v of [range.s0, range.s1]) BOWERS.s.push(Number(v.toFixed(1)));
+    }
+  };
+
+  /**
+   * The arrangement, as a table, and **the order of the keys is the order of the
+   * arrangement and it does not move.** Whatever goes down first is what
+   * everything after it has to arrange itself around: the three giant mushrooms
+   * go before the trees because a conifer a metre across was claiming its metre
+   * before a mushroom six metres across had said anything - twenty-three asked
+   * for and five fit is what that cost. `Object.keys()` on string keys is
+   * insertion order, so a temperate course's standing is the standing
+   * `golden.spec.js` compares against a file captured off the pre-split game.
+   *
+   * **Twenty-two straight-line `scatter()` calls with no table is what a biome
+   * has nothing to hook into**, and this table is the one refactor in that job
+   * which is load-bearing for the feature rather than tidied up beside it. A
+   * biome wants to say *these props and not those*; with the calls written out,
+   * the only way to say that is twenty-two `if`s in one function, which is a list
+   * of things not to do wearing the shape of a rule and cannot be checked against
+   * a list because there is no list.
+   *
+   * Five fields an entry carries, and **only five**: `prop` is the name the biome
+   * names, `count` is what `scatter()` is asked for, `mat` is the material it is
+   * drawn in, `opts` is everything else, and `geo` replaces `prop` for the one
+   * piece that is not out of a file. `parts` is derived from `prop` rather than
+   * written, because a prop of several surfaces has to be handed over as all of
+   * them and `partList()` is the one place that knows how - **and it is a mistake
+   * worth naming**: `scatter()` hands back **an array** for a prop that has been
+   * given parts, one `InstancedMesh` per part, all of them through the same
+   * instance matrix, and `Group.add()` takes an object - so the array has to be
+   * spread. Handed over whole it throws a warning and adds nothing at all, and a
+   * mushroom that is nowhere in the country is a hard thing to see from the
+   * finish line.
+   *
+   * **Three entries are not scatters, and two of them are one feature split in
+   * half.** `arch-plan` and `arch` are the lantern arches, and they are two
+   * because the arches' *positions* have to be drawn from the rng **before** the
+   * lantern poles are placed - the poles keep clear of them - and the arches
+   * themselves are placed after the poles. One table cannot express "in the
+   * middle of that", so it says `arch-plan` here and `arch` there, and `archS` is
+   * the number in between. **`bower` is the third and needs no such split**: it
+   * draws no `rand()` to plan with - the planner laid the section down and
+   * `bowerRanges()` reads it back off the samples - so one slot is the whole of
+   * it, and it goes last.
+   */
+  const PLACE = {
+    // And the ones the whole valley is named for: giant mushrooms, and they go
+    // down **first** of anything that grows, because they are the biggest things
+    // in the country by a long way. Three kinds of them: the broad brown one, the
+    // pale one of the wet ground with its strands hanging off the rim, and the
+    // rooted one with the crown of knobs under its cap. They are the skyline.
+    //
+    // All three are three surfaces - the stalk, the outside of the cap and the
+    // inside of it - so three meshes, each of which is worn by the maps out of its
+    // own file's material, because the manifest can only hand a map to a material.
+    'mushroom-giant': {
+      prop: 'mushroom-giant', mat: 'foliage', count: 16,
+      opts: { at: (sm, r) => mushroomAt(r), scale: (r) => 0.8 + r() * 0.8, tilt: 0.05, tint: (r) => 0.84 + r() * 0.3, skip: offRock.skip },
+    },
+    'mushroom-pale': {
+      prop: 'mushroom-pale', mat: 'foliage', count: 9,
+      opts: { at: (sm, r) => mushroomAt(r), scale: (r) => 0.85 + r() * 0.75, tilt: 0.05, tint: (r) => 0.86 + r() * 0.26, skip: offRock.skip },
+    },
+    'mushroom-rooted': {
+      prop: 'mushroom-rooted', mat: 'foliage', count: 9,
+      opts: { at: (sm, r) => mushroomAt(r), scale: (r) => 0.8 + r() * 0.8, tilt: 0.05, tint: (r) => 0.86 + r() * 0.26, skip: offRock.skip },
+    },
+    conifer: {
+      prop: 'conifer', mat: 'foliage', count: 46,
+      opts: Object.assign({ at: (sm, r) => 13 + r() * 30, scale: (r) => 0.8 + r() * 0.8, tint: (r) => 0.82 + r() * 0.34 }, offRock),
+    },
+    evergreen: {
+      prop: 'evergreen', mat: 'foliage', count: 32,
+      opts: Object.assign({ at: (sm, r) => 12 + r() * 28, scale: (r) => 0.75 + r() * 0.7, tint: (r) => 0.84 + r() * 0.32 }, offRock),
+    },
+    broadleaf: {
+      prop: 'broadleaf', mat: 'foliage', count: 38,
+      opts: Object.assign({ at: (sm, r) => 14 + r() * 26, scale: (r) => 0.75 + r() * 0.7, tint: (r) => 0.85 + r() * 0.3 }, offRock),
+    },
+    pine: {
+      prop: 'pine', mat: 'foliage', count: 40,
+      opts: Object.assign({ at: (sm, r) => 12 + r() * 28, scale: (r) => 0.8 + r() * 0.8, tint: (r) => 0.82 + r() * 0.34 }, offRock),
+    },
+    bush: {
+      prop: 'bush', mat: 'foliage', count: 70,
+      opts: Object.assign({ at: (sm, r) => 3.2 + r() * 22, scale: (r) => 0.55 + r() * 0.55, tint: (r) => 0.85 + r() * 0.3 }, offRock),
+    },
+    cactus: {
+      prop: 'cactus', mat: 'vcol', count: 18,
+      // cacti on the sand shore - they grow where the water meets the land
+      opts: Object.assign({
+        at: (sm, r) => bankRadius(sm) * (0.9 + r() * 0.6),
+        scale: (r) => 0.7 + r() * 0.6, tint: (r) => 0.8 + r() * 0.3,
+        shore: true, offLane: 0.5, lift: () => 0.01,
+        skip: (sm) => sm.basin <= 0.05, tries: 40,
+      }, offRock),
+    },
+    'cactus-barrel': {
+      prop: 'cactus-barrel', mat: 'vcol', count: 12,
+      // barrel cacti on the sand shore - round ones that stand in the sand
+      opts: Object.assign({
+        at: (sm, r) => bankRadius(sm) * (0.9 + r() * 0.6),
+        scale: (r) => 0.7 + r() * 0.5, tint: (r) => 0.8 + r() * 0.3,
+        shore: true, offLane: 0.5, lift: () => 0.01,
+        skip: (sm) => sm.basin <= 0.05, tries: 40,
+      }, offRock),
+    },
+    rock: {
+      prop: 'rock', mat: 'rock', count: 64,
+      // three draws in ten land against the verge rather than out in the country,
+      // which is what a loose stone at the edge of a road actually does
+      opts: Object.assign({
+        at: (sm, r) => (r() < 0.3 ? sm.w + 0.5 + r() * 1.2 : 3.5 + r() * 24),
+        scale: (r) => ROCK_SCALE + r() * 0.34, tint: (r) => 0.85 + r() * 0.3,
+      }, offRock),
+    },
+    // and the mossy ones, which are stones of the wet ground: they stand in the
+    // band the pools reach, out in the shallows and on the wet sand, and they are
+    // not put in the meadow at all, because a dry mossy stone is a green one. A
+    // mossy stone is two pieces of geometry and two materials, so it goes out as
+    // both: the frame and the moss share one set of transforms, so it is placed
+    // once and costs one matrix to place.
+    'mossy-rock': {
+      prop: 'mossy-rock', mat: 'rock', count: 30,
+      opts: Object.assign({
+        at: (sm, r) => bankRadius(sm) * (0.88 + r() * 0.28),
+        scale: (r) => ROCK_SCALE * 1.15 + r() * 0.3, tint: (r) => 0.88 + r() * 0.28,
+        shore: true, inWater: true, offLane: 1.0, lift: () => 0.01,
+        skip: (sm) => sm.basin <= 0.05, tries: 30,
+      }, offRock),
+    },
+    // and the bottom of one is where the loose stone collects: broken rock strewn
+    // about the floor, including out in the middle of it. **It is the one entry
+    // that keys off something other than its own prop**, because it is a second
+    // band of the same stone in the same biome and the biome says "rock", not
+    // "rock, twice".
+    'rock-chasm': {
+      prop: 'rock', mat: 'rock', count: 40,
+      opts: {
+        at: (sm, r) => 0.3 + r() * (sm.w + 2.4), scale: (r) => ROCK_SCALE * 0.8 + r() * 0.34, tilt: 0.6,
+        keep: (sm) => sm.rock, tint: (r) => 0.80 + r() * 0.34,
+      },
+    },
+    // and the grass is thick: it is the ground the whole country is made of
+    tuft: {
+      prop: 'tuft', mat: 'grass', count: grassCount(),
+      opts: Object.assign({
+        at: (sm, r) => sm.w + 0.25 + r() * 13, scale: (r) => 0.5 + r() * 0.8, shadow: false, tilt: 0.14,
+      }, offRock),
+    },
+    // **The one entry with no `prop`**, and it is a `geo` thunk rather than a
+    // shared geometry on purpose: `dropCourse()` disposes the geometry of every
+    // mesh it tears down that is not marked shared, so a module-level icosahedron
+    // would be a disposed buffer the second course tried to draw with. Every
+    // `props.*` geometry is marked shared by the loader; this one is made here and
+    // so it belongs here.
+    flower: {
+      geo: () => new THREE.IcosahedronGeometry(0.075, 0), mat: 'flower', count: 120, prop: 'flower',
+      opts: Object.assign({
+        at: (sm, r) => sm.w + 0.5 + r() * 11, scale: (r) => 0.7 + r() * 0.8, shadow: false,
+        tint: (r) => FLOWER_COLORS[(r() * FLOWER_COLORS.length) | 0],
+      }, offRock),
+    },
+    // Mushrooms, in the grass at the side of the lane: the red ones in a clump
+    // where they turn up, the brown ones scattered through, which is how both of
+    // them actually grow.
+    'mushroom-red': {
+      prop: 'mushroom-red', mat: 'foliage', count: MUSHROOM_COUNT,
+      opts: Object.assign({
+        at: (sm, r) => sm.w + 0.5 + r() * 5.5, scale: (r) => 0.7 + r() * 0.6, shadow: false, tilt: 0.18,
+        tint: (r) => 0.88 + r() * 0.22,
+      }, offRock),
+    },
+    'mushroom-brown': {
+      prop: 'mushroom-brown', mat: 'foliage', count: MUSHROOM_COUNT,
+      opts: Object.assign({
+        at: (sm, r) => sm.w + 0.4 + r() * 7, scale: (r) => 0.75 + r() * 0.7, shadow: false, tilt: 0.14,
+        tint: (r) => 0.86 + r() * 0.26,
+      }, offRock),
+    },
+    marker: {
+      prop: 'marker', mat: 'rock', count: 34,
+      opts: { at: (sm, r) => sm.w + 0.95 + r() * 0.5, scale: (r) => 0.62 + r() * 0.26, tilt: 0.1 },
+    },
+
+    // Paper lanterns, hung on poles beside the lane and on a few arches thrown
+    // over it. They are dark by day and burn from within once the hour asks for
+    // them, each in the colour it is painted - the warm cream of most, a red one
+    // or two, and now and then a pink or a green. The few of them near the snail
+    // are the ones that cast real light, so the verge goes the colour of whatever
+    // lantern is closest to it.
+    //
+    // The paper of a lantern is `mat.paper` and always will be: the hour drives
+    // that material's emissive by name, and a paper drawn in the material out of
+    // its own file has no emissive for the hour to touch, so it is a paper lantern
+    // that is dark at midnight. The frame is a different matter - nothing lights
+    // it by name - so the frame is drawn in the material out of its own file and
+    // wears its own grain.
+    //
+    // The order of the two arches is the file's: paper first, and the first part
+    // is the one the loader names `props[name]`, which is what a prop of one part
+    // falls back to. And `lanternParts()` is a function rather than a value
+    // because the table is built once per course and the parts are per course -
+    // they are the same, but building them here says so.
+    'arch-plan': { prop: 'lantern-arch', kind: 'arch-plan' },
+    'lantern-pole': {
+      prop: 'lantern-pole', mat: 'vcol', count: 26,
+      parts: () => lanternParts('lantern-pole'),
+      /**
+       * **`opts` is a thunk here and a value in every other entry, and that is the
+       * one place the table cannot hold its own answer.**
+       *
+       * The poles keep clear of the arches, and the arches' places are drawn from
+       * the rng by the `arch-plan` entry *above* - so an options object written out
+       * as a value here would be built when the table is built, before that entry
+       * has run, and `avoid: lampWalk.concat(archS)` would concatenate **`null`**
+       * instead of the arches: a pole list one entry longer, none of it an arch.
+       * **And that is a number of poles and not a wrong picture**, which is the
+       * whole of the hazard - three of the five baseline courses came back with
+       * fewer lantern poles than the pre-split capture had, the two without water
+       * did not, and there was no error anywhere in the county. `golden.spec.js`
+       * found it and nothing else could have.
+       *
+       * So the walker resolves a thunk at the point it places, and by then the
+       * arches are known. The general form is **one table cannot express "in the
+       * middle of that"**, and the two half-entries either side of this are what it
+       * costs.
+       */
+      opts: () => ({
+        at: (sm, r) => sm.w + 0.7 + r() * 3.4,
+        scale: (r) => 0.85 + r() * 0.5, tilt: 0.03, tint: lanternTint,
+        lamps: lampPosts, lampPower: 7, lampReach: 12,
+        // a pole wants ground to stand on: no rock face, and no standing in a pool
+        skip: (sm) => sm.rock || sm.basin > 0.05,
+        // and a pole wants room: a lantern is a landmark, and two of them within
+        // sight of each other stop being landmarks and start being a row. The walk
+        // of lamps is only held at arm's length rather than kept well clear, or a
+        // course that is mostly water has nowhere left to put a pole at all.
+        minGap: 13, avoidGap: 5, avoid: lampWalk.concat(archS), tries: 160,
+        // and the arrangement is told a pole's real size, which is the thickness
+        // of a post. Left to its own geometry it is measured by the reach of its
+        // lantern arm - two and a half metres - and a pole is two and a half metres
+        // of air with a post in the middle of it. Its spacing is the `minGap`
+        // above, which is the number that matters: thirteen metres, because a
+        // lantern is a landmark and two of them in sight of each other are a row.
+        r: 0.8,
+      }),
+    },
+    'arch': { prop: 'lantern-arch', kind: 'arch' },
+
+    // and the flowers themselves, standing out of the same water on their own
+    // short stems. A plant that grows in a pool is given `inWater`, like the pads:
+    // without it the `clear` rule asks for a berth out past the waterline, and a
+    // range offered inside the pool is thrown away every time.
+    lily: {
+      prop: 'lily', mat: 'foliage', count: 56,
+      opts: {
+        at: (sm, r) => sm.w + 0.6 + r() * Math.max(0.2, sm.basin - sm.w - 1.2), scale: (r) => 0.7 + r() * 0.9,
+        shadow: false, onWater: true, inWater: true, offLane: 0.6, shore: true, tint: (r) => 0.9 + r() * 0.2,
+        tries: 40,
+      },
+    },
+    // and the pads floating on the same water: a flower's own leaf, with the
+    // notch in it and another flower open on it, lying flat on the surface. They
+    // sit a little proud of it, or the water draws over them, and they are given
+    // right out into the open water, so a pool reads as planted rather than bare.
+    'lily-pad': {
+      prop: 'lily-pad', mat: 'foliage', count: 76,
+      opts: {
+        at: (sm, r) => sm.w + 0.9 + r() * Math.max(0.2, sm.basin - sm.w - 1.6), scale: (r) => 0.7 + r() * 0.9,
+        shadow: false, onWater: true, inWater: true, offLane: 0.9, shore: true, lift: () => 0.022,
+        tint: (r) => 0.88 + r() * 0.24, tries: 40,
+      },
+    },
+    // The wet band is its own small world: sugar cane in the shallows and on the
+    // wet sand, and shells left on the sand. Both only ever appear where there is
+    // water, and nothing else does.
+    reeds: {
+      prop: 'reeds', mat: 'foliage', count: 54,
+      opts: {
+        at: (sm, r) => bankRadius(sm) * (0.74 + r() * 0.34), scale: (r) => 0.9 + r() * 0.8,
+        tilt: 0.05, shadow: false, shore: true, inWater: true, offLane: 0.8,
+        lift: () => 0.03, skip: (sm) => sm.basin <= 0.05, tint: (r) => 0.88 + r() * 0.26, tries: 40,
+      },
+    },
+    seashell: {
+      prop: 'seashell', mat: 'vcol', count: 34,
+      opts: {
+        at: (sm, r) => bankRadius(sm) * (0.9 + r() * 0.5), scale: (r) => 1.1 + r() * 0.9,
+        tilt: 0.5, shadow: false, shore: true, inWater: true, offLane: 0.8,
+        lift: () => 0.02, skip: (sm) => sm.basin <= 0.05, tint: (r) => 0.9 + r() * 0.2,
+      },
+    },
+
+    /* ---- the ashlands, and the same table walked by a second biome ------- *
+     * A biome says *these props and not those*, so the entries below only have to
+     * say what a piece is and where it stands. **They do not say what a biome they
+     * belong to**: a prop is in the ashlands because `meshes/biomes.js` names it,
+     * which is what makes `plan-test.mjs --biomes` able to fail on a name that
+     * resolves to nothing instead of twenty-two `if`s nobody can walk.
+     *
+     * The five big ones come first for the same reason the mushrooms do in the
+     * meadow: whatever goes down first is what everything after has to arrange
+     * itself around. An `ash-tree` is four to seven metres, a `snag` is five, a
+     * `basalt-column` is up to five and an `ash-fallen` is four lying down, and a
+     * tuft that lays down first in the metre a column wants is a tuft that had
+     * nowhere to go.
+     *
+     * **And there is no `rock` entry here, and there was one, and it was the worst
+     * mistake in this table.** A second band of the county's own stone, drawn at
+     * the ashlands' count and out of the same place as the first, reads in a
+     * biome's `props` list as though it were a *different* prop - and it is not:
+     * `rock` is one name and a biome that names it gets **every slot that prop
+     * fills**. So the second band ran on the meadow as well, drew sixty times
+     * further down the shared rng than it should have, and the next thing to read
+     * that rng - the lantern poles' keep-clear list - came out two poles short on
+     * the three courses with water in them and exactly right on the two without.
+     * `golden.spec.js` found it; nothing in the county would have, because a few
+     * lamp posts is not a visible difference.
+     *
+     * **A barren place is not a bare one, and scree collects at the foot of
+     * anything that stands up - but the scree is the `rock` the meadow already
+     * has.** The same prop, the same count, the same reason, from the shared slot.
+     *
+     * `vent` is a fumarole - a cracked cone with a dark throat - and it is the one
+     * piece in the biome that is not grey, which is why it is placed where it is:
+     * out on its own in the country with room round it, where the one hue in the
+     * ashlands is something to walk towards. **It is not placed on the lane's own
+     * shoulder**, because a place that smells of sulphur at two metres reads as a
+     * hazard the player is being asked to race past.
+     *
+     * `obsidian-shard` is the reason a barren biome is worth standing in: it is
+     * the one shiny thing in the county, and it is placed low and against the
+     * bigger rock so the shards cluster at the foot of something rather than
+     * standing about on their own like ornaments.
+     *
+     * **And the three that came after them are what a `declined` looks like when
+     * nobody counts it.** `bush` was declined here with nothing standing in its
+     * place, and the tell is not a picture: `PLACE`'s shape is the same and the
+     * biome's is the same, and what an ashlands course was short of was a whole
+     * band of country between the tufts and the trees. **A prop a biome declines
+     * and a band nothing else fills are the same gap**, and only one of them says
+     * so out loud - which is why the declined count is a number on a screen and
+     * not a thing somebody is supposed to notice.
+     */
+    'ash-tree': {
+      prop: 'ash-tree', mat: 'foliage', count: 22,
+      opts: Object.assign({
+        at: (sm, r) => 16 + r() * 32, scale: (r) => 0.7 + r() * 0.7, tilt: 0.09,
+        tint: (r) => 0.86 + r() * 0.26,
+      }, offRock),
+    },
+    /** `snag` goes **second, and before the columns, and for the only reason the
+     *  order of this table is an argument at all**: it is five metres of mast and
+     *  it is the biggest thing in the country that a snail can see the whole of, so
+     *  it claims its ground before a column lays down the one it wants. It is
+     *  placed at the `ash-tree`'s own distance and radius because it is the same
+     *  tree - **and it is placed at a smaller `r` than its height would suggest,
+     *  because `r` is the radius of a clearing and a snag is thirty centimetres
+     *  across**: a mast that reserves five metres of ground for itself is a mast
+     *  in a wood of its own, and the whole of what the piece is for is that the
+     *  ash-trees and the snags stand close enough to read as one burnt wood. */
+    snag: {
+      prop: 'snag', mat: 'foliage', count: 14,
+      opts: Object.assign({
+        at: (sm, r) => 13 + r() * 30, scale: (r) => 0.75 + r() * 0.65, tilt: 0.07,
+        tint: (r) => 0.84 + r() * 0.28, r: 0.55, tries: 40,
+      }, offRock),
+    },
+    'basalt-column': {
+      prop: 'basalt-column', mat: 'rock', count: 34,
+      // **A column is a thing you can walk round, and it wants more room than its
+      // own footprint asks for**: `r` is the radius of the clearing it claims, and
+      // a group of them standing shoulder to shoulder is what columnar basalt
+      // looks like, so it is held at a hand's width beyond its own reach.
+      opts: Object.assign({
+        at: (sm, r) => 4.5 + r() * 26, scale: (r) => 0.7 + r() * 0.8, tilt: 0.07,
+        tint: (r) => 0.88 + r() * 0.22, r: 1.5, tries: 40,
+      }, offRock),
+    },
+    /** `ash-fallen` is a **four-metre log lying down**, and the two numbers that
+     *  make it work are both about lying down rather than standing. It is nearer
+     *  the lane than anything else in the biome, because a trunk on its side is
+     *  the one piece here a snail can walk round - and it claims **`r: 2.2`**,
+     *  which is its own *length* and not a clearing: a log placed at the columns'
+     *  `r` has other logs growing out of its middle, and a log with another log
+     *  across it stops being a tree that came down. */
+    'ash-fallen': {
+      prop: 'ash-fallen', mat: 'rock', count: 12,
+      // **`mat.rock` and not `mat.foliage`, and the reason is the wind list rather
+      //  than the vertex colours**: both carry `vertexColors` and both are on it,
+      // and the wind bends on `max(transformed.y, 0)`, which for a scattered piece
+      //  is the height above its own origin. A trunk lying flat has its whole
+      //  silhouette under a metre and would breathe; an `ash-tree` stands five
+      //  metres up and wants to. `mat.rock` is the county's other vertex-coloured
+      //  dielectric and it is off the wind list.
+      opts: Object.assign({
+        at: (sm, r) => 6 + r() * 26, scale: (r) => 0.8 + r() * 0.5, tilt: 0.04,
+        tint: (r) => 0.86 + r() * 0.24, r: 2.2, tries: 50,
+      }, offRock),
+    },
+    /** **`ash-scrub` is the biome's `bush`**, and `bush` is declined here, which
+     *  had left an ashlands course with nothing at all between the ankle-high tufts
+     *  and the five-metre trees - nine metres of bare ground, which reads as an
+     *  oversight rather than as a decision. It is placed at the `bush`'s own
+     *  distance band (3.2 to 25.2) and its own count (70), because a scrub is a
+     *  scrub. */
+    'ash-scrub': {
+      prop: 'ash-scrub', mat: 'foliage', count: 70,
+      opts: Object.assign({
+        at: (sm, r) => 3.2 + r() * 22, scale: (r) => 0.55 + r() * 0.6, tilt: 0.12,
+        tint: (r) => 0.86 + r() * 0.26, r: 0.6,
+      }, offRock),
+    },
+    'ash-tuft': {
+      prop: 'ash-tuft', mat: 'ashFoliage', count: grassCount(),
+      opts: Object.assign({
+        at: (sm, r) => sm.w + 0.25 + r() * 13, scale: (r) => 0.5 + r() * 0.8, shadow: false, tilt: 0.14,
+        tint: (r) => 0.84 + r() * 0.28,
+      }, offRock),
+    },
+    vent: {
+      prop: 'vent', mat: 'rock', count: 9,
+      // **Well out and well clear.** A fumarole is a place somebody would put a
+      // warning board, so it is at least eight metres off the verge and it claims
+      // its own radius: two of them together is one wide crack and the pair of
+      // them read as a mistake.
+      opts: Object.assign({
+        at: (sm, r) => 9 + r() * 24, scale: (r) => 0.7 + r() * 0.6, tilt: 0.05,
+        tint: (r) => 0.9 + r() * 0.2, r: 1.9, minGap: 22, tries: 50,
+      }, offRock),
+    },
+    'obsidian-shard': {
+      prop: 'obsidian-shard', mat: 'rock', count: 26,
+      // **Low, and against something.** A shard standing alone in the open is an
+      // ornament; a shard at the foot of a column is a piece of the thing the
+      // column broke off. The band is the same one the ash scree uses and the
+      // `r` is smaller, because a shard is small enough to crowd with its
+      // neighbours - which is the arrangement.
+      opts: Object.assign({
+        at: (sm, r) => sm.w + 0.8 + r() * 9, scale: (r) => 0.5 + r() * 0.9, tilt: 0.3,
+        tint: (r) => 0.92 + r() * 0.16, r: 0.9, tries: 40,
+      }, offRock),
+    },
+
+    /**
+     * **And the cherry, one slot in from the end, and where it sits is a decision
+     * with a cost in it.**
+     *
+     * **Not with the other trees**, which is where the arrangement would put it on
+     * the biome skill's own argument - a conifer a metre across claims its metre
+     * before a six-metre mushroom has said anything. The argument does not carry
+     * here, because **the gate is `golden.spec.js` and a prop that joins the middle
+     * of the walk moves every `rand()` drawn after it**: conifer, evergreen and
+     * broadleaf would all be re-dealt on five of the five baseline courses, and the
+     * standing report would come back a different set of counts for no reason
+     * anybody could name. So this slot is **last but one**, which moves the bower's
+     * own leaf draws and nothing else - and the bower touches no register, its
+     * positions come out of the plan rather than out of `rand()`, and its litter
+     * length is a plan number too, so the half of the gate that compares the
+     * standing and the half that compares the sim are both untouched. **A new prop
+     * in this table is a `rand()`-stream event and the cheap place for it is the
+     * end**, and the cost of that is one tree's neighbours being decided after it.
+     *
+     * **Eight in the meadow and four in the ashlands, read off `noGreens`**,
+     * which is the biome's own statement that nothing green is alive in it. A pink
+     * tree in a burnt valley is a survivor: eight of them on a course is a stand
+     * and four is four things that lived. It is a proxy rather than a name, and
+     * **the day a third biome arrives this is the first number it has to be told**,
+     * because nothing else in the county will ask it.
+     *
+     * **Four and not two, and `scatter()`'s own floor is why**: `want` is
+     * `Math.max(4, ...)` of the count, so nothing in the county is ever asked for
+     * fewer than four and a `count: 2` here would place four. The four is written
+     * down so that the number in this table is the number that happens.
+     *
+     * **And `scale` is a function of the biome too, and it is doing the half of the
+     * contrast the count cannot.** Four in the ashlands and four in the meadow
+     * would be the same statement made twice, so the ashlands' four are **half the
+     * size**: three to four and a half metres of a young survivor rather than a
+     * five-metre specimen. A burnt valley with a stand of full-grown cherries in it
+     * is a meadow with the colour left out, and the thing that says *survivor* is
+     * the height and not the number.
+     *
+     * **And the eight is a ceiling and not a target.** This prop was at eleven when
+     * it was written, and eleven of it put the county's lamp walk in
+     * `tools/e2e/smoke.spec.js` **over its five-minute ceiling** - a spec with two
+     * circles of the inspector's eye in 121 steps each, on a software rasteriser,
+     * and with a two per cent margin between a pass and a timeout measured here.
+     * The model's own vertex count is in `meshes/build-scenery.html`'s `cherryTree()`
+     * note, and it is smaller than the broadleaf's; **what this slot's `count` and
+     * the piece's tessellation have to hold between them is the county's whole
+     * per-course vertex budget**, and the count is the number that is easy to move.
+     *
+     * **And it is the only tree in the county with `minGap` and `r` written down.**
+     * Every other one takes what it can get, and on the four temperate courses a
+     * cherry came back on **five of the eleven asked for** at a 26-metre spacing:
+     * eleven gaps of twenty-six metres is two hundred and eighty-six metres of
+     * course and the longest of them is two hundred and one, so the arrangement was
+     * being throttled by a number rather than by the ground. `r` is on the register
+     * for the other half of the same problem - the register reads a piece's radius
+     * off its own geometry, which on a weeping crown is the width of the widest
+     * pair of limbs *plus* the fringe hanging off the far side of them, so the
+     * ground it claims is about a metre more than the ground it stands on and on a
+     * narrow course it never places at all. Two and a third is the crown's
+     * half-width at the top of this slot's scale range and not a number about a box.
+     */
+    'cherry-tree': {
+      prop: 'cherry-tree', mat: 'foliage', count: biome.noGreens ? 4 : 8,
+      opts: {
+        at: (sm, r) => 13 + r() * 26,
+        scale: (r) => (biome.noGreens ? 0.52 + r() * 0.34 : 0.72 + r() * 0.62),
+        tint: (r) => 0.88 + r() * 0.24, tilt: 0.05, r: 2.35, minGap: 12, tries: 70,
+      },
+    },
+
+    /**
+     * **And the green bower, last in the table**, and both of those are the point.
+     *
+     * **Last**, so the `rand()` its leaves draw cannot shift any other prop's
+     * placement: `golden.spec.js` compares the standing half of `dash` and
+     * `marathon` against a capture taken off the pre-split game, and an
+     * arrangement that moved because a new feature joined the middle of the walk
+     * would have cost that gate a false failure. `arch-plan` has to sit first
+     * because the lantern poles read it; **the bower has no such constraint**, so
+     * putting it anywhere but last would move the whole arrangement for nothing.
+     *
+     * **And one slot rather than two**, because `DECLINED` counts slots and `rock`
+     * is already two bands under one prop name: a course that declines the bower
+     * is one declined slot, and the prop-level list is `plan-test.mjs --biomes`'s
+     * job.
+     *
+     * **It touches no register at all**, which is worth stating because the
+     * obvious move is `reserveIt()` at each foot and it is not needed:
+     * `scatter()`'s own floor is `ad < sm.w + 1.0`, two and three-quarter metres
+     * from the centre line, and everything big enough to be on the register is far
+     * out - trees at twelve to forty-two, mushrooms at twenty-six to fifty-six. A
+     * bower's footprint is two and a half metres of canopy about the lane, so it
+     * is **inside the arrangement's floor** and reserving ground nothing was ever
+     * going to stand on would move the report and nothing else.
+     */
+    bower: { prop: 'bower-arch', kind: 'bower' },
+  };
+
+  /**
+   * **And the walk**, which is the one loop in this function. Three jobs: place a
+   * prop the biome named, decline one it did not, and count the declining so that
+   * *this biome placed some things and declined the rest* is a number on a screen
+   * (`standingReport()`) rather than an absence somebody has to notice.
+   *
+   * **A prop the biome did not name is counted, and a prop the biome named that is
+   * not in `PLACE` stops the boot** - the second is the same rule as the rest of
+   * this project: a name that resolves to nothing is a quiet answer, and the gate
+   * for it is `plan-test.mjs --biomes` rather than a branch anybody can forget.
+   * The first is a count, and a biome that quietly stopped declining anything says
+   * so in that count rather than by looking the same as it always did.
+   *
+   * **The counts are of slots and not of props**, because `rock` is two bands of
+   * the same stone and the biome says "rock" once.
+   */
+  const named = (prop) => biome.props.indexOf(prop) >= 0;
+  for (const entry of Object.values(PLACE)) {
+    if (entry.kind === 'arch-plan') {
+      if (!named(entry.prop)) { DECLINED += 1; continue; }
+      archS = archSpots();
+      continue;
+    }
+    if (entry.kind === 'arch') {
+      if (!named(entry.prop) || !archS) { DECLINED += 1; continue; }
+      standArches();
+      continue;
+    }
+    if (entry.kind === 'bower') {
+      // **both names, and not one.** The slot in `PLACE` carries the arch because
+      // the arch is the piece a bower is, but the canopy is half of it and a
+      // biome that named one and not the other would get a colonnade with no
+      // leaves on it - which is not an error anywhere and reads as a ruin rather
+      // than as a missing prop.
+      const want = ['bower-arch', 'bower-foliage', 'bower-litter'];
+      if (!want.every(named) || !ranges.length) { DECLINED += 1; continue; }
+      standBower(ranges);
+      continue;
+    }
+    if (!named(entry.prop)) { DECLINED += 1; continue; }
+    const material = mat[entry.mat];
+    // **and `opts` is resolved here rather than at the table**, because one entry's
+    // options cannot be written down until an entry above it has run - see
+    // `lantern-pole`. It is a thunk or it is a value and there is no third case.
+    const opts = typeof entry.opts === 'function' ? entry.opts() : Object.assign({}, entry.opts);
+    // **the parts, from the prop's own name** - and `flower` is the one entry with
+    // no prop, so it has no parts and none is looked for.
+    if (entry.prop && props[entry.prop]) {
+      const parts = partList(entry.prop, material);
+      if (parts) opts.parts = parts;
+    }
+    if (entry.parts) opts.parts = entry.parts();
+    const geo = entry.geo ? entry.geo() : props[entry.prop];
+    for (const im of [].concat(scatter(tr, geo, material, entry.count, opts))) group.add(im);
   }
-  // and the flowers themselves, standing out of the same water on their own
-  // short stems. A plant that grows in a pool is given `inWater`, like the
-  // pads: without it the `clear` rule asks for a berth out past the waterline,
-  // and a range offered inside the pool is thrown away every time.
-  group.add(scatter(tr, props.lily, mat.foliage, 56, {
-    at: (sm, r) => sm.w + 0.6 + r() * Math.max(0.2, sm.basin - sm.w - 1.2), scale: (r) => 0.7 + r() * 0.9,
-    shadow: false, onWater: true, inWater: true, offLane: 0.6, shore: true, tint: (r) => 0.9 + r() * 0.2,
-    tries: 40,
-  }));
-  // and the pads floating on the same water: a flower's own leaf, with the
-  // notch in it and another flower open on it, lying flat on the surface. They
-  // sit a little proud of it, or the water draws over them, and they are given
-  // right out into the open water, so a pool reads as planted rather than bare.
-  group.add(scatter(tr, props['lily-pad'], mat.foliage, 76, {
-    at: (sm, r) => sm.w + 0.9 + r() * Math.max(0.2, sm.basin - sm.w - 1.6), scale: (r) => 0.7 + r() * 0.9,
-    shadow: false, onWater: true, inWater: true, offLane: 0.9, shore: true, lift: () => 0.022,
-    tint: (r) => 0.88 + r() * 0.24, tries: 40,
-  }));
-  // The wet band is its own small world: sugar cane in the shallows and on the
-  // wet sand, and shells left on the sand. Both only ever appear where there is
-  // water, and nothing else does.
-  group.add(scatter(tr, props.reeds, mat.foliage, 54, {
-    at: (sm, r) => bankRadius(sm) * (0.74 + r() * 0.34), scale: (r) => 0.9 + r() * 0.8,
-    tilt: 0.05, shadow: false, shore: true, inWater: true, offLane: 0.8,
-    lift: () => 0.03, skip: (sm) => sm.basin <= 0.05, tint: (r) => 0.88 + r() * 0.26, tries: 40,
-  }));
-  group.add(scatter(tr, props.seashell, mat.vcol, 34, {
-    at: (sm, r) => bankRadius(sm) * (0.9 + r() * 0.5), scale: (r) => 1.1 + r() * 0.9,
-    tilt: 0.5, shadow: false, shore: true, inWater: true, offLane: 0.8,
-    lift: () => 0.02, skip: (sm) => sm.basin <= 0.05, tint: (r) => 0.9 + r() * 0.2,
-  }));
   return group;
 }
 
@@ -1434,11 +2600,28 @@ function gateGroup(tr, s, finish, midway) {
  * they are painted as background**, and a piece of geometry that cannot occlude
  * anything says so on itself rather than being on a list somewhere.
  */
-function makeBackdrop(seed) {
+/**
+ * **The signature is `makeBackdrop(seed, barren)` and the second argument is the
+ * one that is not the same shape twice**, because a barren horizon is mostly
+ * silhouette and a silhouette is geometry: **tinting** the group is free and
+ * **reshaping** it is not, so a biome that wants a different skyline has to have
+ * the group rebuilt rather than recoloured. That is `rebuildBackdrop()` below,
+ * and it exists because two biomes are alive in one session - the stable is
+ * temperate and the Adversary's duel is not, from the player's very first race.
+ *
+ * What "barren" changes is all silhouette and all of it is three numbers: fewer
+ * clouds (six rather than fourteen, because there is less water up there to make
+ * them), and hills that are **lower, wider and much further off**. That last is
+ * the one that reads: a ridge a hundred and fifty metres away is a shape on the
+ * skyline, and a ridge three hundred is a line. The near ones are pulled back
+ * furthest of the two, which inverts the meadow's arrangement on purpose - in a
+ * green valley the near hills are the ones that carry the distance, and in a dead
+ * one they are the ones that would spoil it.
+ */
+function bakeBackdrop(into, seed, barren) {
   for (const m of [mat.cloud, mat.hillNear, mat.hillFar]) m.userData.painted = true;
-  const g = new THREE.Group();
   const R = makeRng(seed);
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < (barren ? 6 : 14); i++) {
     const parts = [];
     const n = 3 + ((R() * 3) | 0);
     for (let j = 0; j < n; j++) {
@@ -1450,25 +2633,51 @@ function makeBackdrop(seed) {
       });
     }
     const cloud = new THREE.Mesh(bake(parts), mat.cloud);
-    cloud.position.set(-300 + i * 44 + R() * 26, 17 + R() * 15, -175 + R() * 205);
-    cloud.scale.setScalar(1.8 + R() * 2.2);
+    cloud.position.set(-300 + i * 44 + R() * 26, barren ? 13 + R() * 9 : 17 + R() * 15,
+      -175 + R() * 205);
+    cloud.scale.setScalar((barren ? 2.6 : 1.8) + R() * 2.2);
     cloud.frustumCulled = false;
-    g.add(cloud);
+    into.add(cloud);
   }
   for (let i = 0; i < 16; i++) {
     const near = i % 3 === 0;
-    const h = (near ? 8 : 12) + R() * (near ? 7 : 12);
-    const r = (near ? 26 : 40) + R() * (near ? 18 : 34);
+    const h = barren ? 5 + R() * 5 : (near ? 8 : 12) + R() * (near ? 7 : 12);
+    const r = barren ? 48 + R() * 26 : (near ? 26 : 40) + R() * (near ? 18 : 34);
     const hill = new THREE.Mesh(new THREE.SphereGeometry(1, 9, 6), near ? mat.hillNear : mat.hillFar);
     hill.scale.set(r, h, r * 0.8);
-    hill.position.set(-520 + i * 68 + R() * 60, -h * 0.55, (R() < 0.6 ? -1 : 1) * (near ? 105 + R() * 40 : 150 + R() * 70));
+    hill.position.set(-520 + i * 68 + R() * 60, -h * 0.55,
+      (R() < 0.6 ? -1 : 1) * (barren ? (near ? 240 + R() * 60 : 300 + R() * 80) : (near ? 105 + R() * 40 : 150 + R() * 70)));
     hill.rotation.y = R() * TAU;
     hill.frustumCulled = false;
-    g.add(hill);
+    into.add(hill);
   }
-  return g;
+  return into;
 }
-const backdrop = makeBackdrop(77);
+function makeBackdrop(seed, barren) {
+  return bakeBackdrop(new THREE.Group(), seed, !!barren);
+}
+/**
+ * The course's own backdrop, and **it is one module-scope `const` that is rebuilt
+ * in place**, which is what lets the frame loop and `dropCourse()` carry on not
+ * knowing anything about it: `race.js` adds this group to the race scene once and
+ * repositions it every frame to follow the snail, and neither of those moves.
+ *
+ * **The disposal is inside this function and that is the whole of why it is here.**
+ * A module-scope group whose children are replaced on every course change is the
+ * one place in this file where a geometry outlives the thing that asked for it:
+ * fourteen clouds of three to five merged icosahedra and sixteen
+ * `SphereGeometry(1, 9, 6)` hills, once per course, and `renderer.info.memory.
+ * geometries` after four duels is the number that says so. `dropCourse()`
+ * cannot help - it is handed the *course* group and this is not in it.
+ */
+const backdrop = makeBackdrop(77, false);
+function rebuildBackdrop(biome) {
+  for (const child of [...backdrop.children]) {
+    backdrop.remove(child);
+    if (child.geometry) child.geometry.dispose();
+  }
+  return bakeBackdrop(backdrop, 77, !!biome.barren);
+}
 
 /**
  * What is standing on the last course built, and whether any of it is
@@ -1503,8 +2712,37 @@ const standingReport = () => {
     by,
     yards: RESERVED.map((z) => [+z.x.toFixed(1), +z.z.toFixed(1), z.r]),
     tightest: worst,
+    // **and the two a biome adds**, beside the count rather than after it: which
+    // biome placed this, and how many of the arrangement it declined to place.
+    // *This biome placed some things and declined the rest* is a number on a
+    // screen; without it a biome that declined everything is an empty course and
+    // a biome that declined nothing is a meadow wearing a dead valley's name, and
+    // neither is visible in `pieces`. **They are stripped off before the golden
+    // spec compares this object**, because `tools/e2e/baseline.json` is the
+    // pre-split capture and may never be regenerated - `biome.spec.js` is where
+    // these two are asserted instead.
+    biome: biomeNow().name,
+    declined: DECLINED,
   };
 };
+
+/**
+ * What the green bower put on this course: `{ ranges, ribs, mass, spray, litter, s }`.
+ *
+ * **How many sections, how many hoops, how much foliage, and the arc length of
+ * each.** `litter` is the total length of `BOWER` lane in metres and **it is the
+ * number the sim's answer hangs off** - a bower is slow because there are leaves
+ * on the road, and leaves that were never painted make a tunnel over a road that
+ * gives no reason to be slow, which is the failure where the picture and the
+ * simulation stop being the same fact.
+ *
+ * `null` when the biome declined the props or the plan dealt no bower, and both of
+ * those are the same answer to a test. **A copy and not the register itself**,
+ * because `BOWERS` is a module `let` whose live binding is read-only from outside
+ * - and `tools/e2e/biome.spec.js` holds this object across a `page.evaluate()`
+ * boundary where a live binding would not survive.
+ */
+const bowerReport = () => (BOWERS ? { ...BOWERS } : null);
 
 /**
  * Where the windmills on this course are, and how far round each fan has got.
@@ -1526,8 +2764,8 @@ const mills = () => fans.map((f) => ({
 // `millReport`'s answer, for the same reason.
 // ------------------------------------------------------------------
 export {
-  placeMidway, placeLamps, knoll, lampPosts, lampWalk, makeBackdrop, backdrop, gateGroup,
-  clearRegister, standingReport, spinFans, fans, mills,
+  placeMidway, placeLamps, knoll, lampPosts, lampWalk, makeBackdrop, rebuildBackdrop, backdrop, gateGroup,
+  clearRegister, standingReport, bowerReport, spinFans, fans, mills,
   scatter, propName, partList, populate, populateFarms, farmstead, standIt, reserveIt, clearOf,
   FARM_STEP, FARM_FOOT, MUSHROOM_COUNT, ROCK_SCALE,
 };

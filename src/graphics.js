@@ -3,7 +3,7 @@
  *
  * The settings ladder, the renderer, the dome, and the hour of the day. Four
  * things, and they are one thing: **every one of them is a row on the panel**,
- * from `antialias: false` on the context down to the eight degrees of sun that
+ * from `antialias: true` on the context down to the eight degrees of sun that
  * make a course at dusk a different picture from the same course at dawn. What
  * the county looks like is decided here and nowhere else - a course module that
  * asked the fog for its distance would have a second opinion about the same
@@ -200,28 +200,37 @@ const nativePixelRatio = () => Math.min(devicePixelRatio, 2);
 const RENDER_SCALE = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const RENDER_SCALE_CAP = 4.0;
 
-/** **How the county's resolution becomes the window's pixels.** Three steps and not
- *  six, because the middle of the ladder is bilinear and the top two are bicubic and
- *  a row with a step nobody would ever choose is a cell spent for nothing. The
- *  bottom four are bilinear and not nearest on purpose: nearest is one fetch and
- *  bilinear is four, so nearest is the cheap end, but at 0.5x a nearest neighbour is
- *  four square blocks for every texel and the row that is meant to make a machine
- *  playable is the one that makes it unplayable.
+/** **How the county's resolution becomes the window's pixels.** Five steps
+ *  and not six, because the bottom two are what a machine is afforded -
+ *  one tap and four, both hardware - and the top three are what a
+ *  picture is asked to look like: sixteen taps each, the same price,
+ *  and the only difference between them is sharpness, soft to sharp.
+ *  A row with a step nobody would ever choose is a cell spent for
+ *  nothing, and a row whose top three cost the same is a row where
+ *  the choice is the picture and not the machine.
  *
- *  **Nearest and bilinear are hardware and bicubic is not**, so the first two are
- *  four and one explicit taps and the third is sixteen - and the tap count is the
- *  caption, because a filter you cannot see the cost of is a filter nobody chooses
- *  on purpose. The taps are written out rather than left to the sampler, at texel
- *  centres, so the texture's own `minFilter` cannot change the answer: a row that
- *  reads the bloom's input as well is a row that quietly alters the bloom. */
-const SCALE_NAMES = ['nearest', 'bilinear', 'bicubic'];
+ *  **The bottom four are bilinear and not nearest on purpose**: nearest
+ *  is one fetch and bilinear is four, so nearest is the cheap end, but
+ *  at 0.5x a nearest neighbour is four square blocks for every texel
+ *  and the row that is meant to make a machine playable is the one
+ *  that makes it unplayable.
+ *
+ *  **The tap count is the caption**, because a filter you cannot see
+ *  the cost of is a filter nobody chooses on purpose. The taps are
+ *  written out rather than left to the sampler, at texel centres, so
+ *  the texture's own `minFilter` cannot change the answer: a row that
+ *  reads the bloom's input as well is a row that quietly alters the
+ *  bloom. */
+const SCALE_NAMES = ['nearest', 'bilinear', 'b-spline', 'mitchell', 'lanczos'];
 /** What each one costs a pixel, and the caption's whole content. Written beside
  *  the names and not counted in the shader, so the menu cannot quote a price the
  *  shader does not charge. */
-const SCALE_TAPS = [1, 4, 16];
-/** What each preset writes onto the scaling row: bilinear everywhere but the top
- *  two, which are bicubic. A row that does not rise with quality does not mean what
- *  its neighbours mean. */
+const SCALE_TAPS = [1, 4, 16, 16, 16];
+/** What each preset writes onto the scaling row: bilinear everywhere but the
+ *  top two, which are b-spline - the softest of the three that cost
+ *  sixteen, so a preset that rises in quality rises in smoothness before
+ *  it rises in sharpness. A row that does not rise with quality does not
+ *  mean what its neighbours mean. */
 const SCALE_PRESET = [2, 2, 2, 2, 3, 3];
 /** Fog near/far, in metres. Level 3 is `makeEnv(78, 300)` unchanged. */
 const FOG_LADDER = [[40, 130], [58, 200], [78, 300], [95, 430], [112, 600], [130, 820]];
@@ -238,22 +247,38 @@ const GRASS_DENSITY = [0.25, 0.50, 1.00, 1.50, 2.00, 3.00];
 /** Dome segments, [width, height]. Level 3 is the 40x24 it has always been. */
 const SKY_LADDER = [[16, 10], [28, 16], [40, 24], [64, 32], [96, 48], [128, 64]];
 /**
- * The occlusion row, **which is a 2x2 and not one axis**: resolution on one side
- * of it and indirect light on the other, so the six steps read
- * `{off, G half, G full, G+GI half, G+GI full, G+GI full with a finer kernel}`.
+ * The occlusion row, **which is a 1x2 and not one axis**: sample count on one
+ * side of it and indirect light on the other, so the six steps read
+ * `{off, 4 spp, 8 spp, 4 spp + GI, 8 spp + GI, 16 spp + GI}`.
  *
- * **The `gi` field is the whole of what a step decides about the new pass** - it
- * is zero or absent on the two G-only steps, so they construct nothing and pay
- * exactly what they paid before this, and it is the `uGIStrength` the composite
- * multiplies the irradiance by on the four that have it. A row that grows a
- * second axis is a row that has to be spread, because the alternative - a seventh
- * `fx` switch - is a second place the same decision is written down.
+ * **It used to be a 2x2**, with the G-buffer's resolution on the other axis and
+ * `{off, G half, G full, G+GI half, G+GI full, G+GI full with a finer kernel}` as
+ * the six steps. The half-resolution steps are gone and the axis went with them,
+ * because **a reflected ray marched against half-res depth breaks against
+ * silhouettes** - and on a pool the silhouette that matters is the shoreline. A
+ * row with a cell in it that a second effect cannot use is a row that has to be
+ * watched, so the cheaper thing to fix is the cell. `sizeGBuffers()` now sizes
+ * the G-buffer from `scenePixels()` on every path and there is no step where the
+ * buffer a reflection reads is the wrong one.
  *
- * **And `half` is now the answer to two questions at once.** It already sized the
- * existing G-buffer, and it sizes the new albedo buffer with it, so the "Light
- * G+GI" step at index 3 runs the ray march over a quarter of the pixels for the
- * same reason level 1 exists at all: that step is the one a machine that cannot
- * pay for the top one can still be given something better than no light at all.
+ * **And the samples had to be re-spread, because deleting the flag alone would
+ * have shipped two cells that draw the same frame.** Steps 3 and 4 were
+ * half-res-8 against full-res-8, and with `half` gone they are the same entry
+ * twice - so `ssao: 4` and `ssao: 5` would have been one picture on two buttons.
+ * Step 3 drops to four samples, which also lands it at half the count and twice
+ * the sample rate of what it was: **a wash**.
+ *
+ * **The one cell that gets dearer is step 2**, which was half-res at four samples
+ * and is now full-res at four: about four times the samples. That is the honest
+ * price of the row having no cell a reflection cannot host, and `ssao: 1` is off
+ * and is the answer for a machine that cannot pay it.
+ *
+ * **The `gi` field is the whole of what a step decides about the bounce** - it is
+ * zero on the two G-only steps, so they construct nothing and pay exactly what
+ * they paid before, and it is the strength the bounce multiplies its irradiance
+ * by on the four that have it. A row that grows a second axis is a row that has
+ * to be spread, because the alternative - a seventh `fx` switch - is a second
+ * place the same decision is written down.
  *
  * **The gain is a dial on how much the county flattens**, because the term it
  * scales is already the fraction of the county that can see each other. What
@@ -270,9 +295,9 @@ const SKY_LADDER = [[16, 10], [28, 16], [40, 24], [64, 32], [96, 48], [128, 64]]
  */
 const AO_LADDER = [
   null,
-  { half: true, samples: 4, radius: 0.8, blend: 0.95, gi: 0 },
+  { samples: 4, radius: 0.8, blend: 0.95, gi: 0 },
   { samples: 8, radius: 0.8, blend: 0.95, gi: 0 },
-  { half: true, samples: 8, radius: 0.7, blend: 0.95, gi: 0.95 },
+  { samples: 4, radius: 0.7, blend: 0.95, gi: 0.95 },
   { samples: 8, radius: 0.7, blend: 0.95, gi: 0.95 },
   { samples: 16, radius: 0.6, blend: 0.95, gi: 0.95 },
 ];
@@ -335,6 +360,24 @@ const REFL_FRESNEL = [false, false, false, false, true, true];
  * way the ladder did. `cells` is the row's own labels **and its number of states**,
  * which is how the bloom's second strength is carried: `off / bloom / bloom hi` is
  * one effect at two strengths and not two effects, and the ladder had both.
+ *
+ * **Seven rows and not six, and the seventh is a composer pass** - so it goes
+ * above the bloom rather than below it, because both are passes and this list's
+ * order is the order the old stack turned things on, with the cheap filters
+ * first. **The row is named for the mechanism and not for today's users of it**:
+ * "water reflections" would be a row lying the moment a surface outside the list
+ * carried a mark, and a shell carrying one is a single line at its plant site.
+ *
+ * **It is an fx switch and not a seventh ladder row, and that is a shape decision
+ * rather than a preference.** `setToggle`'s 0-based clamp is the right clamp here
+ * and `setRow`'s 1-based one would put a 1 on the row's *second* cell; `gfxLoad`'s
+ * fx loop validates against `cells.length` and an old save with no `fxSsr` keeps
+ * the default, so there is no migration and no version bump; and `setPreset`
+ * writes `want[r.key] || 0`, which makes `FX_PRESET` the only place the rung is
+ * decided at all. The landmine it walks around is `gfxLevelRow()`, which reads
+ * the first owned row carrying no table out of `GFX_ROWS` - a new *ladder* row
+ * inserted before `distance` would become the level row and every preset would
+ * come back `mixed`.
  */
 const FX_TOGGLES = [
   { key: 'fxGlow', name: 'Lamp and sun glow', cells: ['off', 'on'], short: 'glow',
@@ -345,6 +388,10 @@ const FX_TOGGLES = [
     cost: 'one fullscreen quad' },
   { key: 'fxCloud', name: 'Cloud shade', cells: ['off', 'on'], short: 'cloud shade',
     cost: 'a uniform on five materials' },
+  { key: 'fxSsr', name: 'Screen reflections', cells: ['off', 'on', 'on hi'], short: 'ssr',
+    cost: 'a composer pass · needs ambient occlusion on', live: true },
+  { key: 'fxPom', name: 'Parallax relief', cells: ['off','two-sided','relief 4','relief 8','parallax 8','parallax 12'], short: 'pom',
+    cost: 'a height march in the course shader' },
   { key: 'fxBloom', name: 'Bloom', cells: ['off', 'bloom', 'bloom hi'], short: 'bloom',
     cost: 'a composer pass' },
   { key: 'fxWind', name: 'Wind', cells: ['off', 'on'], short: 'wind',
@@ -354,14 +401,17 @@ const FX_KEYS = FX_TOGGLES.map((r) => r.key);
 /** What each preset writes, and it is the stack with the grain and the vignette
  *  lifted out of it: every level keeps its glow, level 4 its cloud shade, level 5
  *  its bloom and level 6 its wind, so a player climbing the ladder under the new
- *  menu arrives at the picture they chose under the old one. */
+ *  menu arrives at the picture they chose under the old one. **The reflections
+ *  are on the two top steps**, which is where the occlusion row already carries
+ *  the bounce, so the top of the ladder is the first place the county is asking
+ *  for a frame that traces rays. */
 const FX_PRESET = [
   { fxGlow: 1 },
   { fxGlow: 1 },
   { fxGlow: 1 },
   { fxGlow: 1, fxCloud: 1 },
-  { fxGlow: 1, fxCloud: 1, fxBloom: 1 },
-  { fxGlow: 1, fxCloud: 1, fxBloom: 2, fxWind: 1 },
+  { fxGlow: 1, fxCloud: 1, fxBloom: 1, fxSsr: 1, fxPom: 4 },
+  { fxGlow: 1, fxCloud: 1, fxBloom: 2, fxWind: 1, fxSsr: 2, fxPom: 5 },
 ];
 /** And the stack itself, kept for the one save that still carries it. The same
  *  six levels read out as the same six switches, so a level means what it meant. */
@@ -377,16 +427,54 @@ const PRESET_NAMES = ['Low', 'Light', 'Balanced', 'High', 'Very high', 'Ultra'];
 /** Steps to sample counts. **Three states and not six**, because a multisampled
  *  buffer's sample count is one of one, two or four and a cell saying x3 would be
  *  a cell no machine could honour. The first step is zero samples and not one,
- *  because a one-sample target is the same as no target with more bookkeeping. */
+ *  because a one-sample target is the same as no target with more bookkeeping.
+ *
+ *  **The bottom cell is `direct only` and not `off`, because the frame is smoothed
+ *  there.** `getContext` takes a boolean for the context's own multisampled default
+ *  framebuffer and no sample count at all, so the direct path is anti-aliased
+ *  whatever the row says - `antialias` is true at the renderer below and nothing in
+ *  the menu can change it. Zero is what the *compositor's buffer* is built at, and the
+ *  buffer is not the only place a pixel can be smoothed, so `off` would be a claim
+ *  about the buffer wearing a word about the frame.
+ *
+ *  `MSAA_SHORT` is the same three answers for the perf panel, which is not the modal:
+ *  its value column is 3.4em because the widest value in it is five characters, and
+ *  `direct only` is eleven. **A second table rather than a truncation**, because the
+ *  panel would otherwise be printing an ellipsis where a word was - the same reason
+ *  `short` is a field on `GFX_ROWS` and on every `FX_TOGGLES` row.
+ */
 const MSAA_LADDER = [0, 2, 4];
-const MSAA_NAMES = ['off', 'x2', 'x4'];
+const MSAA_NAMES = ['direct only', 'x2', 'x4'];
+const MSAA_SHORT = ['direct', 'x2', 'x4'];
+/** The parallax relief's march step count, per fxPom cell. **A cell is a
+ *  technique and a quality, and the step count is the quality half of it.**
+ *  Cells 0 and 1 (off and two-sided) write 0 steps - the two-sided path is
+ *  two samples and not a loop - and cells 2-5 (relief 4, relief 8,
+ *  parallax 8, parallax 12) write the step count that the coarse march runs.
+ *  A cell press is a write of these numbers into `gfxU.uPomSteps`,
+ *  `gfxU.uPomTwoSided` and `gfxU.uPomBisect` in `applyEffects()`, the same
+ *  one-line-per-effect shape as `uCloudAmt` and `uWindAmp`, so a cell press is
+ *  a uniform write and not a recompile, and the off path is byte-identical to
+ *  today's frame.
+ */
+const POM_STEPS = [0, 0, 4, 8, 8, 12];
+/** **And which of those cells get the bisection, in a table of its own.** The
+ *  first cut read it off `POM_STEPS` - "on exactly the parallax cells, so it
+ *  is `uPomSteps > 4.0`" - and that is the shape of this county's favourite
+ *  mistake: **cells 3 and 4 are both 8**, one relief and one parallax, so a
+ *  flag derived from the number cannot tell a relief-8 from a parallax-8 and
+ *  the relief cell was quietly drawing the parallax picture. Two tables keyed
+ *  by the same cell is the honest form, and it is the reason the uniform is
+ *  `uPomBisect` rather than a comparison in the shader: **a state two buttons
+ *  share is a state that cannot say which button is pressed.** */
+const POM_BISECT = [0, 0, 0, 0, 1, 1];
 /** What each preset writes onto the anti-aliasing row, and **the row has to carry a
  *  table of its own** rather than be written by identity like the other eight: three
  *  states cannot hold six numbers, so a cascade writing *N* into it would put a step
  *  it has no cell for on the row and a cell it cannot reach in the table. Balanced is
- *  `off`, which is the picture the composer path has always drawn, and the top three
- *  are x4 - a row that rises with quality or it does not mean what its neighbours
- *  mean. */
+ *  `direct only`, which is the picture the composer path has always drawn, and the
+ *  top three are x4 - a row that rises with quality or it does not mean what its
+ *  neighbours mean. */
 const MSAA_PRESET = [1, 1, 1, 2, 3, 3];
 const GFX_STEPS = ['1', '2', '3', '4', '5', '6'];
 /** The render scale's cells, **read off the ladder rather than written beside it**:
@@ -417,7 +505,12 @@ const GFX_ROWS = [
   { key: 'grass', name: 'Grass density', short: 'grass' },
   { key: 'sky', name: 'Sky quality', short: 'sky' },
   { key: 'ssao', name: 'Ambient occlusion', short: 'ssao' },
-  { key: 'refl', name: 'Reflections', short: 'reflections' },
+  // **And not "Reflections".** Two rows meaning reflections, one of them on and
+  // one of them off, is a menu asking the player which is which - and "sky probe"
+  // is also what this row is *for*: it is the fallback a traced reflection falls
+  // back to, and on a surface the trace misses the frame is already carrying the
+  // probe's answer.
+  { key: 'refl', name: 'Sky probe', short: 'reflections' },
 ];
 /** The nine rows below the preset, in the order the cascade writes them, and
  *  **including the one it does not write** - this is the save, the load and the
@@ -441,7 +534,7 @@ const gfxRowValue = (row, n) => (row.map ? row.map[n - 1] : n);
 const gfx = {
   preset: 3, render: 3, msaa: 1, scale: 2, distance: 3, shadow: 3, props: 3,
   grass: 3, sky: 3, ssao: 3, refl: 3,
-  fxGlow: 1, fxVig: 0, fxGrain: 0, fxCloud: 0, fxBloom: 0, fxWind: 0,
+  fxGlow: 1, fxVig: 0, fxGrain: 0, fxCloud: 0, fxSsr: 0, fxPom: 0, fxBloom: 0, fxWind: 0,
 };
 
 /* --- the value each row reads, so the appliers never index a ladder twice --- */
@@ -627,17 +720,32 @@ gfxLoad();
  * the world so the colour at the horizon is the same from every angle and
  * the fog can be set to exactly that colour.
  *
- * **`antialias: false`, and that is the whole of the anti-aliasing story being
- * one mechanism.** A context's multisampled default framebuffer is free, which is
- * why it was on, and it is the reason the two paths did not agree: it is a
- * context-creation parameter, so it cannot be changed, it is a boolean and not a
- * sample count, and `EffectComposer` builds its own targets at `samples: 0`, so a
- * composer frame had no anti-aliasing at all while the same picture without one
- * had four samples. Two mechanisms that cannot be reconciled, and the menu had no
- * way to say anything about either. Everything now goes through the composer's
- * target and the `msaa` row, which is why `antialias: true` would be a bug.
+ * **`antialias: true`, so the frame has two smoothing mechanisms again - and one
+ * of them is outside anybody's reach.** A context's multisampled default
+ * framebuffer is free, and it is the only smoothing a frame drawn straight to the
+ * window can have, so it is on and the direct path is anti-aliased. It is also a
+ * **context-creation parameter**: `getContext` reads it once, here, and there is no
+ * WebGL call that changes it afterwards, so **no row in the menu can touch the
+ * direct path's anti-aliasing until the page is reloaded.** The row's `x2` and `x4`
+ * are the *compositor buffer's* count and say nothing about this.
+ *
+ * **And it is a boolean, which is why the row says `direct only` rather than
+ * quoting a number for it.** `getContext` has no way to ask the driver for two of
+ * anything; it takes a boolean and the driver picks the count, four on most of
+ * them. So the direct path is smoothed by a number the game cannot read, cannot
+ * state and cannot change, and `gfxCaption()` names it `context MSAA` rather than
+ * putting a figure on it. **A menu that quoted the row's ladder here would be
+ * quoting a number it does not control** - which is what `MSAA_NAMES`' bottom cell
+ * is for.
+ *
+ * **The wart this leaves, written down because it is visible.** The two counts are
+ * not the same number: on a driver that gave the context four, `x2` on the
+ * compositor path is *less* smoothed than `direct only` on the direct path. That is
+ * inherent rather than a mistake in the wiring - the context's count is not a
+ * parameter anybody passes - and the honest response is the caption and the row
+ * name rather than a second mechanism pretending to reconcile them.
  * ================================================================== */
-const renderer = new THREE.WebGLRenderer({ antialias: false });
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -1011,7 +1119,19 @@ function refreshEnvironment(colours, envs) {
   for (const e of envs) if (e) e.scene.environment = envTarget.texture;
 }
 
-function makeEnv(fogNear, fogFar) {
+/**
+ * A scene's light: its dome, its fog, its sun, its three fills and its sixteen
+ * lamp slots. **The third argument is whether this env's lamp bank can ever take
+ * a lamp**, and it is asked here at construction because the number of lights in
+ * a scene is baked into every program drawn in it - a bank that is switched off
+ * and on with the binding is a recompile of the county every time the binding
+ * moves, and the general form of it is that **a count that decides what is
+ * compiled may not be a count that changes with the camera.** The race env says
+ * yes; the stable says no and carries sixteen dark lights that never enter its
+ * light list, because `lampPosts` is empty there and a light nothing can bind to
+ * is a light no fragment should be paying for.
+ */
+function makeEnv(fogNear, fogFar, lit) {
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(FOG_MATCH, fogNear, fogFar);
   const sky = new THREE.Mesh(skyGeo, matSky);
@@ -1042,17 +1162,43 @@ function makeEnv(fogNear, fogFar) {
   // the back of a wall, the near side of a bank - are not black holes
   const fill = new THREE.DirectionalLight(0xe4eef8, 0.55);
   scene.add(fill, fill.target);
-  // the lamps, which are dark until the hour asks for them
+  // The lamps, which are dark until the hour asks for them - **and which are
+  // never switched off**, which is the whole of what the third argument is for.
+  //
+  // **A light's `visible` is not whether it is lit, it is whether it is in the
+  // render state's light list**, and the list is what `NUM_POINT_LIGHTS` is
+  // written out of, once per material, once per program. So a lamp handed a light
+  // and then handed it back is not one lamp going dark: it is a different number
+  // in every program in the county, and every material that draws this frame
+  // stops being the program it was and becomes one three has to build. Measured
+  // on Grand Marathon by walking the inspector down the lane in 40 cm steps:
+  // **19 of 120 frames compiled anything at all, 522 shader compiles in 120
+  // frames, and every one of those 19 frames was a frame the visible lamp count
+  // had changed on** - and on this machine's own renderer **ten frames out of 250
+  // walked cost 682 to 710 ms each**, with the frame average over that walk going
+  // from 8.3 ms to 33.2 ms. It is the same sentence the render scale row is
+  // written against: **a count that decides what gets compiled may not be a count
+  // the camera moves.**
+  //
+  // So the count is a property of the scene and is settled here, once: sixteen in
+  // a race, and **none on the stable, which has no lamps to bind to and so pays
+  // for no light it never switches on**. `litLamps()` moves the glass and writes
+  // the intensity, and the intensity is the whole of what a dark lamp is.
   const lamps = [];
   for (let i = 0; i < LAMP_LIGHTS; i++) {
     const l = new THREE.PointLight(0xffd9a0, 0, 13, 1.6);
-    l.visible = false;
+    l.visible = lit;
     scene.add(l);
     lamps.push(l);
   }
+  // and **which of the sixteen is standing on a lamp**, which `visible` cannot be
+  // asked for any more. One flag per slot beside the bank, because the bank is
+  // always in the scene and the binding is always moving: the two stopped being
+  // the same fact the moment the count stopped following the binding.
+  const lampOn = new Uint8Array(LAMP_LIGHTS);
   // how high and how far round the sun sits, and how much of it there is: the
   // hour of the day writes these, the frame loop follows the snail with them
-  return { scene, sky, key, rim, fill, hemi, lamps, sunHeight: 1, sunSide: 1, sunI: 1 };
+  return { scene, sky, key, rim, fill, hemi, lamps, lampOn, sunHeight: 1, sunSide: 1, sunI: 1 };
 }
 // ------------------------------------------------------------------
 // What the other modules ask this one for, and the list is the settings
@@ -1068,7 +1214,7 @@ export {
   nativePixelRatio, canvasRatio, sceneRatio, needsResample,
   FOG_LADDER, EDGE_LADDER, SHADOW_MAP, SHADOW_RADIUS, SHADOW_CAST,
   PROP_DENSITY, GRASS_DENSITY, SKY_LADDER, AO_LADDER, GI_RADIUS, GI_INNER, GI_THICK,
-  REFL_LADDER, REFL_FRESNEL, MSAA_LADDER, MSAA_NAMES, MSAA_PRESET, PRESET_NAMES,
+  REFL_LADDER, REFL_FRESNEL, MSAA_LADDER, MSAA_NAMES, MSAA_SHORT, MSAA_PRESET, POM_STEPS, POM_BISECT, PRESET_NAMES,
   FX_TOGGLES, FX_KEYS, FOG_MATCH,
   gfxMsaa, gfxEdge, gfxGroundFloor, gfxWideRows, gfxPropDensity, gfxGrassDensity, grassCount,
   gfxSsao, gfxReflSize, gfxReflOn, triesBoost,

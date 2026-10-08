@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>build the shells</title>
+<title>the shell, from the reference</title>
 <style>
   body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 24px; background: #171a1c; color: #d8d4cc; }
   h1 { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; }
   button { font: inherit; padding: 8px 16px; margin-right: 8px; background: #2b3134; color: #d8d4cc;
            border: 1px solid #3d4548; border-radius: 3px; cursor: pointer; }
-  .note { color: #8b9195; max-width: 62ch; }
+  .note { color: #8b9195; max-width: 64ch; }
   code { color: #b9c4a8; }
 </style>
 <!-- three's addons import the bare name 'three' -->
@@ -17,234 +17,586 @@
 </script>
 </head>
 <body>
-<h1>meshes/shell-&hellip;.glb</h1>
+<h1>meshes/shell.glb</h1>
 <p class="note">
-  The three whorls the snail wears: <code>shell-bands</code>, <code>shell-swirl</code> and
-  <code>shell-spots</code>. One is a round dome with a spiral furrow cut into it and
-  the pattern painted on in vertex colours - the same dome three times over, so the
-  three files can never drift apart in shape. Open this page from the folder that
-  serves the game and save each one over the file of the same name.
+  One shell, and it is the reference model's own geometry rather than a coil wound here:
+  <code>references/snailRef.glb</code> is a scanned or sculpted snail shell, and a swept
+  logarithmic spiral cut from three numbers in this folder was never going to be that.
+  This page takes its first mesh and makes it a piece of the county, which is four
+  things and none of them optional:
   <br><br>
-  Nothing here is named for the game to find: it loads each file, takes the first
-  mesh in it and keeps the geometry, handing out its own material and its own
-  colour. So the mesh name is only for the person reading the folder.
+  - **a <code>color</code> attribute**, because a glb without one draws
+    <b>pure white</b> - three substitutes white for an absent vertex colour - and
+    <code>race.js</code> multiplies the racer's own shell colour into it. The ramp is
+    near white on purpose: the hue is the tint's and never the model's.
+  <br>
+  - **no embedded images.** The reference carries two, on a
+    <code>pbrSpecularGlossiness</code> extension, and a texture baked into a glb is one
+    the game cannot swap or leave out. The maps come out of <code>meshes/tex/</code> by
+    name instead, through <code>maps.js</code>.
+  <br>
+  - **a uv on the county's tile**, so <code>shell-n</code>'s growth lines land at a
+    size rather than at whatever the reference's wrap happened to be, and
+  <br>
+  - **the middle of its own bounding box at the origin**, so
+    <code>shellG</code>'s position is the middle of the shell and the same number means
+    the same thing on any machine.
   <br><br>
-  <code>snail.glb</code> carries a shell of its own, cut from this dome, and the
-  game swaps in one of these three the moment a racer is built.
+  <strong>And it is not double-sided.</strong> The reference's material says
+  <code>doubleSided</code> and its signed volume is positive, so the geometry faces out
+  and the flag was covering for something else. The county is single-sided, because a
+  back face is a hole at every angle the field is seen from.
+  <br><br>
+  <code>snail.glb</code> carries a shell of its own, cut from this one, and the game
+  swaps it in the moment a racer is built.
 </p>
-<button id="bands">write shell-bands</button>
-<button id="swirl">write shell-swirl</button>
-<button id="spots">write shell-spots</button><button id="prev">preview</button>
+<button id="go">write shell.glb</button><button id="prev">preview</button><button id="isl">islands</button>
 <pre id="log"></pre>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFExporter } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js';
+import { COUNTY } from './palette.js';
 
 const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
 const $ = (id) => document.getElementById(id);
+const C = COUNTY;
 
-// ---------------------------------------------------------------- the shape
-// A snail's shell is one whorl after another, each a little bigger than the
-// last, all of them wrapped round the same axis - so it is drawn as a dome with
-// a spiral furrow cut into it, from the little dimple at the top down to the
-// rim, and the pattern is painted along the furrow.
-
-const R = 0.300;        // how wide the shell is
-const A = 0.330;        // how tall the dome stands above the middle
-const RIM = 1.66;       // where the shoulder turns under, in radians
-const UNDER = -0.200;   // and how far it carries on underneath
-
-/** The dome's outline in the half plane: radius across, height up. */
-function profile(phi) {
-  if (phi <= RIM) return [R * Math.sin(phi), A * Math.cos(phi)];
-  // and under the rim it dishes away to the middle, where it would open
-  const t = (phi - RIM) / (Math.PI / 2 - RIM);
-  const e = t * t * (3 - 2 * t);                 // eased, so the rim stays crisp
-  return [R * (1 - e) + 0.015 * e, RIM_Y + (UNDER - RIM_Y) * e];
-}
-const RIM_Y = A * Math.cos(RIM);
+const SRC = '../references/snailRef.glb';
+/**
+ * **The uv, and it is the reference's own unwrap and not a tile.**
+ *
+ * The reference unwraps the whole snail - shell and body together - into one 0..1
+ * atlas, and **the shell island's uv rectangle is a sub-rectangle of it**: `u` from
+ * 0.222 to 0.867 and `v` from 0.007 to 0.992, in the file's own numbers and measured
+ * by `uvRect()` below. Remapping that rectangle onto 0..1 hands the shell the frame the
+ * reference painted its whorl in, which is the only frame in which `shell-tone`'s
+ * `APEX` is a measured number rather than a guess.
+ *
+ * **The first version rescaled this to a tile in metres, as every other surface in the
+ * county is tiled, and it destroyed the very thing it was carrying.** Two and a half
+ * growth lines to the tile across a dome is not a whorl, it is **corrugation**: the
+ * shell came out looking like a scallop, and the reason was that a tile is the wrong
+ * answer for a map of a *thing* rather than of a *material*. A ribbon and a flank carry
+ * `trackUv` because metres are what they are made of; **a shell is one object with one
+ * unwrap, and a second repeat of it would be a second seam**, which is the thing an
+ * unwrap exists to avoid. The tiling rule in this county is about materials, and this
+ * map is a picture of a shell.
+ */
 
 /**
- * The furrow, laid on the dome as a spiral: it comes out of the dimple at the
- * top, winds round the whorl and down to the rim. Everything is measured
- * against that line - how far a point is from it decides how deep it is cut, and
- * where along it a point sits decides what colour it wears.
+ * **The size, and it is written into the file rather than left to the mount.** The
+ * reference measures 3.69 by 1.34 by 2.20 in whatever unit it was sculpted in, and a
+ * prop in `meshes/` is in world units - one unit is about a snail's length - so
+ * `NORMALISE` divides the longest span down to **0.44**, which is the width the old
+ * swept coil measured and therefore the size `shellG` in `build-snail.html` was already
+ * written against. **A mount scale is a second opinion about a size and two numbers
+ * for one fact is two places to be wrong in**, so the file carries the answer and the
+ * group carries only the position and the rotation.
  */
-const TURNS = 1.75;
-const PATH = (() => {
-  const pts = [];
-  for (let i = 0; i <= 96; i++) {
-    const s = i / 96;
-    const [r, y] = profile(0.13 + (1.42 - 0.13) * Math.pow(s, 0.96));
-    const a = 1.1 + s * TURNS * Math.PI * 2;
-    pts.push([r * Math.cos(a), y, r * Math.sin(a), s]);
-  }
-  return pts;
-})();
-
-/** How near the furrow a point is, and how far along the furrow it lies. */
-function nearPath(x, y, z) {
-  let best = 1e9, bs = 0;
-  for (let i = 0; i < PATH.length - 1; i++) {
-    const p = PATH[i], q = PATH[i + 1];
-    const dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
-    const len = dx * dx + dy * dy + dz * dz;
-    const t = len ? Math.max(0, Math.min(1, ((x - p[0]) * dx + (y - p[1]) * dy + (z - p[2]) * dz) / len)) : 0;
-    const d = Math.hypot(p[0] + dx * t - x, p[1] + dy * t - y, p[2] + dz * t - z);
-    if (d < best) { best = d; bs = p[3] + (q[3] - p[3]) * t; }
-  }
-  return [best, bs];
-}
-
-const W = 0.030;        // how wide the furrow is cut
-const D = 0.015;        // how deep it goes
-const LIP = 0.026;      // and the low lip of whorl either side of it
-
-/** What the furrow does to a point, out from the line: down, then a low lip. */
-function groove(d) {
-  if (d < W) return -D * Math.pow(1 - d / W, 0.65);
-  const e = (d - W) / LIP;
-  return e < 1 ? 0.06 * D * Math.sin(e * Math.PI) : 0;
-}
-
-/** The colour along the furrow: the three whorls. */
-const PAINT = {
-  // ringed, like a banded snail: light and dark bands chasing round the whorl
-  bands: (s) => 0.86 + 0.20 * (0.5 + 0.5 * Math.cos(s * Math.PI * 5.0)),
-  // one soft sweep from the pale middle out to the dark rim
-  swirl: (s) => 1.06 - 0.20 * Math.pow(s, 1.3),
-  // blotched, and the blotches are put down at random so they never line up
-  spots: (() => {
-    const marks = [];
-    let seed = 20260926;
-    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-    for (let i = 0; i < 9; i++) marks.push([rnd(), rnd(), 0.06 + rnd() * 0.05, 0.34 + rnd() * 0.26]);
-    return (s, u) => {
-      let v = 1.00;
-      for (const [ms, mu, w, d] of marks) {
-        const du = Math.abs(u - mu); const ds = Math.abs(s - ms);
-        const dd = Math.hypot(du * 0.55, ds);
-        if (dd < w) v -= d * (1 - dd / w);
-      }
-      return v;
-    };
-  })(),
-};
+const NORMALISE = 0.44;
 
 /**
- * One shell: a dome of `u` segments around and `v` up its side, every point
- * pushed in where the furrow runs, every point coloured by how far along the
- * furrow it lies.
+ * **The value ramp across the shell, and it is a cavity term and not a gradient** -
+ * pale where the sun and the foot reach it, a shade deeper in the shelter of the middle,
+ * which is the same question about a rounded surface the mushroom's cap tone answers.
+ *
+ * **And it is 0.74 to 0.94 and not near white**, which is the same answer with the
+ * ceiling taken off. `race.js` multiplies this by the racer's own shell colour, so a
+ * ramp that topped out above 1 made a shell that came out *lighter than the body* under
+ * a light where the body was carrying its own `snail-tone` - and a snail whose shell is
+ * the brightest thing on it reads as a shell **balanced on the back**, which is the one
+ * reading the mount below is written to avoid. **The hue is the tint's and the value is
+ * this**, so it cannot outshine the animal wearing it.
  */
-function buildShell(style) {
-  const U = 64, V = 28;
-  const paint = PAINT[style] || PAINT.bands;
-  const pos = [], col = [], idx = [];
-  for (let v = 0; v <= V; v++) {
-    const phi = (v / V) * (Math.PI / 2);
-    const [r0, y0] = profile(phi);
-    // the dome's own normal in the half plane, from the outline's slope, turned
-    // to point away from the middle
-    const [r1, y1] = profile(Math.min(Math.PI / 2, phi + 0.01));
-    let nr = -(y1 - y0), ny = (r1 - r0);
-    const nl = Math.hypot(nr, ny) || 1; nr /= nl; ny /= nl;
-    for (let u = 0; u <= U; u++) {
-      const a = (u / U) * Math.PI * 2;
-      const ca = Math.cos(a), sa = Math.sin(a);
-      const [d, s] = nearPath(r0 * ca, y0, r0 * sa);
-      let r = r0, y = y0;
-      if (d < W + LIP) {
-        // deepest in the middle of the furrow, fading out at both ends of it
-        const fade = Math.min(1, s / 0.05) * Math.min(1, (1 - s) / 0.08);
-        const cut = groove(d) * fade;
-        r += nr * cut; y += ny * cut;
-      }
-      pos.push(r * ca, y, r * sa);
-      // the furrow itself is a shade darker, and the paint rides on top
-      const shade = paint(s, u / U) * (1 - 0.30 * Math.max(0, 1 - d / (W * 1.2)));
-      col.push(shade, shade * 0.985, shade * 0.96);
-    }
-  }
-  for (let v = 0; v < V; v++) {
-    for (let u = 0; u < U; u++) {
-      const a = v * (U + 1) + u, b = a + 1, c = a + U + 1, d = c + 1;
-      idx.push(a, b, c, b, d, c);
-    }
-  }
-  // and a lid for the middle of the underside, so there is no hole under there
-  const lid = pos.length / 3;
-  pos.push(0, UNDER, 0);
-  col.push(0.55, 0.54, 0.52);
-  const last = V * (U + 1);
-  for (let u = 0; u < U; u++) idx.push(lid, last + u, last + u + 1);
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
-  g.setIndex(idx);
-  g.computeVertexNormals();
-  return g;
+const RAMP_LO = 0.74, RAMP_HI = 0.94;
+
+async function loadShell() {
+  const src = await new GLTFLoader().loadAsync(SRC);
+  let mesh = null;
+  src.scene.traverse((o) => { if (o.isMesh && !mesh) mesh = o; });
+  if (!mesh) throw new Error('no mesh in ' + SRC);
+  const cut = pickShell(mesh.geometry);
+  return cut;
 }
 
-async function assemble(style) {
+/**
+ * **The reference is a whole snail, and the shell is cut out of it by connectivity.**
+ * `references/snailRef.glb` is a Sketchfab import and arrives as **one mesh, one
+ * material, 538 triangles**: the foot, the head and the coil are three hundred and
+ * ninety-two triangles of body and one hundred and forty-six of shell, in a single
+ * soup with nothing in the file to say which is which. **A shell is not a mesh in
+ * this file, so there is no name to select and nothing to keep** - taking the first
+ * mesh takes the snail, which is exactly what the first version of this page exported.
+ *
+ * So the split is made here, and it is made on a number rather than on a name:
+ * `islands()` cuts the soup by shared vertices, and the shell is **the island that
+ * stands up**. A snail's body lies along the ground and its height is its own
+ * thickness, while the coil is a dome standing over it - **392 triangles 1.09 tall
+ * against 146 triangles 1.34 tall** in this file, which is a foot lying down and a
+ * shell sitting on it. The two numbers are logged every run, because **a rule that
+ * names no number is a rule nobody can check**, and a snail with its head up would
+ * break the one that picked the tallest island blindly: this one compares the two.
+ */
+/** The uv rectangle the shell island occupies, measured rather than declared. */
+function uvRect(g, verts) {
+  const uv = g.attributes.uv;
+  if (!uv) return null;
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const v of verts) {
+    const u = uv.getX(v), w = uv.getY(v);
+    if (u < u0) u0 = u;
+    if (u > u1) u1 = u;
+    if (w < v0) v0 = w;
+    if (w > v1) v1 = w;
+  }
+  return [u0, u1, v0, v1];
+}
+
+function pickShell(g) {
+  const islands = splitIslands(g);
+  if (islands.length === 1) {
+    return finish(g, islands[0], 'the file is one island and all of it is shell',
+      uvRect(g, islands[0].verts));
+  }
+
+  const tall = islands.reduce((a, b) => (b.height > a.height ? b : a));
+  const rest = islands.filter((i) => i !== tall);
+  log(`islands: ${islands.map((i) => `${i.tris} tris, ${i.height.toFixed(2)} tall`).join('  ·  ')}`);
+  log(`shell: ${tall.tris} tris at ${tall.height.toFixed(2)} tall`
+    + `   body: ${rest.map((i) => `${i.tris} tris at ${i.height.toFixed(2)}`).join(' and ')}`);
+  return finish(g, tall, 'the taller island', uvRect(g, tall.verts));
+}
+
+/** Cut a soup of triangles into its connected pieces, by shared vertices. */
+function splitIslands(g) {
+  const p = g.attributes.position, ix = g.index ? g.index.array : null;
+  const tris = ix ? ix.length / 3 : p.count / 3;
+  const par = new Int32Array(p.count).map((_, i) => i);
+  const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  const uni = (a, b) => { a = find(a); b = find(b); if (a !== b) par[b] = a; };
+  for (let t = 0; t < tris * 3; t += 3) {
+    const a = ix ? ix[t] : t, b = ix ? ix[t + 1] : t + 1, c = ix ? ix[t + 2] : t + 2;
+    uni(a, b); uni(b, c);
+  }
+  const out = new Map();
+  for (let t = 0; t < tris; t++) {
+    const head = find(ix ? ix[t * 3] : t * 3);
+    if (!out.has(head)) out.set(head, { verts: [], tris: 0, height: 0 });
+    const is = out.get(head);
+    is.tris++;
+    for (let k = 0; k < 3; k++) {
+      const v = ix ? ix[t * 3 + k] : t * 3 + k;
+      is.verts.push(v);
+    }
+  }
+  for (const is of out.values()) {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of is.verts) { const y = p.getY(v); if (y < lo) lo = y; if (y > hi) hi = y; }
+    is.height = hi - lo;
+  }
+  return [...out.values()];
+}
+
+/**
+ * **And the island becomes a geometry of its own**, with its own index buffer, its own
+ * tight vertex list and no vertex in it that belongs to the body. **Carrying the
+ * whole soup and hiding the body with a material would ship the snail inside the shell
+ * file** - the body would be drawn, it would be in the file, and the moment anybody
+ * swapped the tint the snail would come back as white.
+ */
+function extract(g, is) {
+  const src = g.attributes.position;
+  const nrm = g.attributes.normal, uvs = g.attributes.uv;
+  const map = new Int32Array(is.verts.length).fill(-1);
+  const pos = [], nor = [], uv = [], idx = [];
+  for (let i = 0; i < is.verts.length; i++) {
+    const v = is.verts[i];
+    if (map[v] >= 0) continue;
+    map[v] = pos.length / 3;
+    pos.push(src.getX(v), src.getY(v), src.getZ(v));
+    if (nrm) nor.push(nrm.getX(v), nrm.getY(v), nrm.getZ(v));
+    if (uvs) uv.push(uvs.getX(v), uvs.getY(v));
+  }
+  for (let t = 0; t < is.tris; t++) for (let k = 0; k < 3; k++) idx.push(map[is.verts[t * 3 + k]]);
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (nor.length) out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  if (uv.length) out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  out.setIndex(idx);
+  return out;
+}
+
+/**
+ * **The shell is an open cap, and that is the landmark the whole orientation hangs on.**
+ *
+ * The first attempt at this page read the shell's two ends off two things it guessed at:
+ * the vertex nearest the unwrap's `APEX` for the spire, and the vertex furthest from the
+ * middle for the mouth. **Both were wrong, and neither was wrong in a way that looked
+ * wrong** - the file came out a striped egg standing on a back, which reads as a shell
+ * balanced rather than a shell worn. The furthest vertex from the middle is not the
+ * mouth of a shell; on a dome it is whatever part of the rim happens to stick out.
+ *
+ * **So the mesh is asked instead of guessed at, and the answer is the boundary.** An
+ * edge used by exactly one triangle is a hole, and this island has **32 of them** on a
+ * loop of **32 vertices** - the aperture, cut open where the sculpt's shell met its body.
+ * That loop gives two things exactly: its **best-fit plane is the mouth**, and the
+ * **vertex furthest from that plane on the material's own side is the spire**. Measured
+ * off the reference the mouth faces `(0.66, 0.72, -0.23)` in the sculpt's frame and the
+ * spire stands at `(0.97, 0.24, 0.10)` - **near-antipodal, which is the answer to
+ * whether these are the right two ends**: the axis of a coiled shell runs from its
+ * opening to its point, and two directions 142 degrees apart is a shell.
+ *
+ * **And it is an open cap, which is why the county being single-sided is free here.**
+ * The hole faces down and forward into the animal's own back, so there is nothing behind
+ * it to see through - the one thing a single-sided surface cannot survive is a back face
+ * at an angle the player can get to, and this one is a mouth pressed against a body.
+ */
+function apertureOf(shell) {
+  const ix = shell.index.array, pos = shell.attributes.position;
+  const seen = new Map();
+  for (let t = 0; t < ix.length; t += 3) {
+    for (const [a, b] of [[ix[t], ix[t + 1]], [ix[t + 1], ix[t + 2]], [ix[t + 2], ix[t]]]) {
+      const k = a < b ? `${a},${b}` : `${b},${a}`;
+      seen.set(k, (seen.get(k) || 0) + 1);
+    }
+  }
+  const loop = new Set();
+  let hole = 0;
+  for (const [k, v] of seen) {
+    if (v !== 1) continue;
+    hole++;
+    const [a, b] = k.split(',').map(Number);
+    loop.add(a); loop.add(b);
+  }
+  if (!hole) return null;
+  const R = [...loop].map((i) => new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+  const centre = new THREE.Vector3();
+  for (const v of R) centre.add(v);
+  centre.divideScalar(R.length);
+  // **the loop's own winding gives the plane's normal**, summed over its edges: a
+  // Newell's method over the boundary of a surface is the plane it sits in, and it is
+  // the one place the shell says which way is out
+  const nrm = new THREE.Vector3();
+  for (let i = 0; i < R.length; i++) {
+    const a = R[i].clone().sub(centre), b = R[(i + 1) % R.length].clone().sub(centre);
+    nrm.add(new THREE.Vector3().crossVectors(a, b));
+  }
+  if (nrm.lengthSq() < 1e-12) return null;
+  nrm.normalize();
+  // **and its sign is the side the shell's own material is not on**, which is the only
+  // way to tell an opening from a dent
+  let all = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) all.add(new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+  all.divideScalar(pos.count);
+  if (nrm.dot(all.sub(centre)) > 0) nrm.negate();
+  // the spire is the furthest point on the material's side of that plane
+  let spire = null, far = Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+    const d = v.clone().sub(centre).dot(nrm);
+    if (d < far) { far = d; spire = v; }
+  }
+  return { loop: R, centre, mouth: nrm, spire: spire.sub(centre).normalize(), hole };
+}
+
+/**
+ * **And the one rotation is a half turn about `x`, and it is the whole model's.**
+ * `references/snailRef.glb` is a Sketchfab import and **the model arrives upside down**:
+ * stood on its own lowest point, its head and both eye stalks are in the dirt, and
+ * `Rx(180°)` stands it up. **A shell island taken out of a model that is upside down is a
+ * shell upside down**, and the island is the only piece of the file that does not know
+ * there was a body attached to it - so the island gets the same half turn, and **that is
+ * the only thing in the file that says which way was up.**
+ *
+ * **Two versions of this page got it wrong by reading a landmark and acting on it, and
+ * both were confident.** One read the spire as standing on the sculpt's own `+x`, where a
+ * snail's spire goes along the animal and not up it, and **turned a quarter turn about
+ * `z`** to make it point up - which stood the shell on its pointed end: rendered beside the
+ * reference at the same scale, `2.50 x 1.34` had become `1.34 x 2.50` and the shape had
+ * not changed, because the shape was never the problem. The one before it built a
+ * rotation from both measured ends onto two written targets, which fitted a 142-degree
+ * pair to a 133-degree one and **left the roll about the spire free** - and the free
+ * parameter was the one that mattered, landing the whorl the better part of ninety
+ * degrees the wrong way round the animal.
+ *
+ * **A shape's own two ends are not enough to place a shape.** The reference is a whole
+ * snail, and a whole snail says which way up it is - **and the only evidence for that is
+ * a whole snail standing on the ground, not a number about a shell.**
+ */
+
+/** What the shell's own two ends should be pointing at on a snail, to measure them against. */
+const SPIRE_WANT = new THREE.Vector3(-0.22, 0.975, 0).normalize();
+const MOUTH_WANT = new THREE.Vector3(0.72, -0.50, 0).normalize();
+
+/**
+ * **How near a snail's frame the file's own two ends are, printed and not acted on.**
+ * The spire reads `(0.97, 0.24, 0.10)` and the mouth `(-0.66, -0.72, 0.23)` — **along the
+ * animal and not up it, which is correct**: a shell's spire points back over the animal's
+ * tail, not at the sky. The two numbers are here because **a reference re-exported into
+ * another frame should show up here as a pair of directions rather than as a snail on its
+ * side in a still**, and because this page twice got the orientation wrong by reading a
+ * landmark and acting on it.
+ */
+function reportEnds(hole) {
+  if (!hole) return;
+  const v3 = (v) => `(${v.x.toFixed(2)}, ${v.y.toFixed(2)}, ${v.z.toFixed(2)})`;
+  const dot = (a, b) => a.dot(b);
+  log(`mouth ${v3(hole.mouth)}  ·  ${dot(hole.mouth, MOUTH_WANT).toFixed(2)} of ${v3(MOUTH_WANT)}`);
+  log(`spire ${v3(hole.spire)}  ·  ${dot(hole.spire, SPIRE_WANT).toFixed(2)} of ${v3(SPIRE_WANT)}`);
+}
+
+/** An orthonormal frame from two directions: the first, then `b` made perpendicular. */
+function basisOf(a, b) {
+  const e1 = a.clone().normalize();
+  const e2 = b.clone().addScaledVector(e1, -b.dot(e1)).normalize();
+  const e3 = new THREE.Vector3().crossVectors(e1, e2);
+  return [e1, e2, e3];
+}
+
+/** The rotation carrying one orthonormal frame onto another, as a Matrix4. */
+function frameToFrame(from, to) {
+  // `makeBasis` takes the three axes as columns, and the product is `to·from⁻¹` — the
+  // frames are orthonormal, so `from⁻¹` is `from`'s transpose and the whole thing is
+  // **two calls and no arithmetic to be wrong in.**
+  return new THREE.Matrix4().makeBasis(...to)
+    .multiply(new THREE.Matrix4().makeBasis(...from).invert());
+}
+
+/** Everything the county needs of the shell, once it is the shell and only the shell. */
+function finish(g, is, why, rect) {
+  const shell = extract(g, is);
+  shell.computeBoundingBox();
+  const bb = shell.boundingBox;
+  const span = new THREE.Vector3().subVectors(bb.max, bb.min);
+  // **and the uv off the reference's own atlas and onto 0..1**, so the shell and
+  // `shell-tone` are drawn in one frame and the whorl in the map is the whorl on the
+  // animal. The rectangle is measured off the island rather than declared, because a
+  // declared one is a number that goes stale the moment the reference is re-exported -
+  // **and a stale one does not fail, it draws the pattern somewhere else.**
+  const uv = shell.attributes.uv;
+  if (uv && rect) {
+    const [u0, u1, v0, v1] = rect;
+    const du = Math.max(1e-6, u1 - u0), dv = Math.max(1e-6, v1 - v0);
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, (uv.getX(i) - u0) / du, (uv.getY(i) - v0) / dv);
+    }
+    uv.needsUpdate = true;
+  }
+
+  // **and the colour**, from the jar and near white: the racer's own `def.shell`
+  // multiplies it, so anything with a hue in here is a hue the player did not choose.
+  const p = shell.attributes.position;
+  const col = new Float32Array(p.count * 3);
+  const y0 = bb.min.y, dy = Math.max(1e-6, bb.max.y - bb.min.y);
+  for (let i = 0; i < p.count; i++) {
+    // pale at the crown and at the rim, where the sun and the foot reach, and a shade
+    // deeper in the shelter of the middle - the same exposure term the mushroom's
+    // cap tone is drawn with, because it is the same question about a rounded surface
+    const t = (p.getY(i) - y0) / dy;
+    const v = RAMP_LO + (RAMP_HI - RAMP_LO) * (0.35 + 0.65 * Math.pow(Math.abs(t * 2 - 1), 1.3));
+    col[i * 3] = v * 0.995;
+    col[i * 3 + 1] = v * 0.985;
+    col[i * 3 + 2] = v * 0.960;
+  }
+  shell.setAttribute('color', new THREE.BufferAttribute(col, 3));
+
+  // **the turn, and it is `Rx(270°)` and it is about the shell's own long axis.**
+  // Standing `references/snailRef.glb` on its lowest point puts **its head and both eye
+  // stalks in the dirt** - the file arrives upside down, which is a fact about the import
+  // and not about the shell - so the shell needs the flip the whole model needs.
+  //
+  // **And it is 270 and not 180, and the quarter is on `x` because that is the shell's own
+  // axis.** Three quarters is the half turn the model needs **plus a quarter about the
+  // axis the shell is long on**, which rolls the whorl over without moving the shell
+  // anywhere. `Rx(180°)` alone stood it the right way up with the ribs running *along* the
+  // animal where every reference has them across it, and **a whorl drawn the other way
+  // round is a correct shell in the wrong orientation and nothing in a silhouette says
+  // so.** `Ry(90°)` was tried instead and put the long axis across the animal - **2.50
+  // along the body became 2.50 across it** - which is the difference between rolling a
+  // shell and turning a cartwheel.
+  shell.applyMatrix4(new THREE.Matrix4().makeRotationX(3 * Math.PI / 2));
+  // **and then the half turn about the vertical, which is the shell's own handedness.**
+  // The reference's coil faces one way and this one faces the other: three quarters about
+  // `x` stands the shell up and rolls the whorl, and it leaves the coil still facing the
+  // wrong side of the animal. **`Ry(180°)` is the only part of the turn that is about
+  // which way round rather than which way up**, and a shell facing the wrong way round is
+  // the one orientation error a silhouette cannot show you - **the tell is the coil's own
+  // eye, which unwinds the wrong direction.**
+  shell.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI));
+  reportEnds(apertureOf(shell));
+
+
+  // **and the middle of it at the origin, at the county's own size, in the animal's
+  // own frame.** The bbox centre is the shell's middle in all three axes, which is the
+  // only frame `shellG` can be positioned in and still mean the same thing on any
+  // machine, and the uniform scale is what turns a sculpt into a prop. **The scale is
+  // on the span the turn produced**, not the one it arrived with — a shell turned on its
+  // side is a different shape from the same shell upright, and normalising first would
+  // have measured the wrong one.
+  shell.computeBoundingBox();
+  const fb = shell.boundingBox;
+  const fspan = new THREE.Vector3().subVectors(fb.max, fb.min);
+  const mid = new THREE.Vector3();
+  fb.getCenter(mid);
+  shell.translate(-mid.x, -mid.y, -mid.z);
+  const k = NORMALISE / Math.max(fspan.x, fspan.y, fspan.z);
+  shell.scale(k, k, k);
+
+  log(`source ${SRC} · ${why} · ${p.count} verts, ${shell.index.count / 3} tris`);
+  log(`shell spans ${fspan.x.toFixed(3)} x ${fspan.y.toFixed(3)} x ${fspan.z.toFixed(3)}`
+    + `  ·  ${NORMALISE} on the long axis`
+    + (rect ? `  ·  uv remapped off ${rect.map((n) => n.toFixed(3)).join(' ')} onto 0..1`
+            : '  ·  the file carries no uv'));
+  return shell;
+}
+
+/** The signed volume, and it is positive exactly when a closed mesh faces outwards. */
+function volume(g) {
+  const p = g.attributes.position;
+  // **a reference model is as likely as not to arrive with no index buffer**, and an
+  // absent `g.index` read as an absent array is a NaN rather than a sign, which is the
+  // one answer a winding check must never give
+  const ix = g.index ? g.index.array : null;
+  const n = ix ? ix.length : p.count;
+  let vol = 0;
+  for (let t = 0; t < n; t += 3) {
+    const a = ix ? ix[t] : t, c = ix ? ix[t + 1] : t + 1, d = ix ? ix[t + 2] : t + 2;
+    vol += (p.getX(a) * (p.getY(c) * p.getZ(d) - p.getZ(c) * p.getY(d))
+      + p.getY(a) * (p.getZ(c) * p.getX(d) - p.getX(c) * p.getZ(d))
+      + p.getZ(a) * (p.getX(c) * p.getY(d) - p.getY(c) * p.getX(d))) / 6;
+  }
+  return vol;
+}
+
+async function assemble() {
+  const g = await loadShell();
   const root = new THREE.Group();
-  const mesh = new THREE.Mesh(buildShell(style),
-    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.06 }));
-  mesh.name = 'shell-' + style;
+  root.name = 'shell-set';
+  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    name: 'shell',
+    color: 0xffffff, vertexColors: true, roughness: 0.42, metalness: 0.06,
+  }));
+  mesh.name = 'shell';
   mesh.castShadow = true;
   root.add(mesh);
+  const vol = volume(g);
+  log(`signed volume ${vol.toExponential(3)}`
+    + (vol > 0 ? '   ✓ every face faces outwards' : '   ← REVERSED'));
   return root;
 }
 
-async function write(style) {
-  const root = await assemble(style);
+/**
+ * **The button, and it goes through the server's hook when there is one.** `tools/serve.py`
+ * injects `window.__shellExport` into this page, and that is the route that actually
+ * writes into `meshes/` — a plain download lands in the browser's folder instead, which
+ * is a shell built and thrown away. **The two are the same call with one argument
+ * between them**, so the button asks for the hook first and falls back to the download
+ * only where the file was opened off the filesystem.
+ */
+$('go').onclick = async () => {
+  const root = await assemble();
+  if (window.__shellExport) {
+    const r = await window.__shellExport('shell', 'shell.glb');
+    log(`wrote meshes/shell.glb — ${r.bytes} bytes`);
+    return;
+  }
   const buf = await new Promise((res, rej) =>
     new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
   const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
   const a = document.createElement('a');
-  a.href = url; a.download = 'shell-' + style + '.glb';
+  a.href = url; a.download = 'shell.glb';
   document.body.appendChild(a); a.click(); a.remove();
-  log(`wrote shell-${style}.glb — ${buf.byteLength} bytes`);
-}
+  log(`wrote shell.glb — ${buf.byteLength} bytes (downloaded, not saved into meshes/)`);
+};
 
-for (const style of ['bands', 'swirl', 'spots']) $(style).onclick = () => write(style);
-
-$('prev').onclick = () => {
+/**
+ * **The rule, drawn rather than asserted.** One button that lays every island of the
+ * reference down side by side in its own colour and prints its triangle count, because
+ * "the taller one is the shell" is a claim about a picture and the only way to check a
+ * claim about a picture is to look at it. **It is also the page's own worst case** - a
+ * file that arrived as one island has nothing to lay out, so the button says so rather
+ * than drawing an empty frame and leaving the reader to wonder which is which.
+ */
+$('isl').onclick = async () => {
   document.getElementById('view')?.remove();
+  const src = await new GLTFLoader().loadAsync(SRC);
+  let mesh = null;
+  src.scene.traverse((o) => { if (o.isMesh && !mesh) mesh = o; });
+  const islands = splitIslands(mesh.geometry);
+  if (islands.length < 2) { log('one island in the file — there is nothing to separate'); return; }
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xaebfcc);
   scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
   const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
   key.position.set(2.5, 4, 3);
   scene.add(key);
-  ['bands', 'swirl', 'spots'].forEach((style, i) => {
-    const root = new THREE.Group();
-    const mesh = new THREE.Mesh(buildShell(style), new THREE.MeshStandardMaterial({
-      color: 0xb0662f, vertexColors: true, roughness: 0.42, metalness: 0.06,
-    }));
-    mesh.castShadow = true;
-    root.add(mesh);
-    root.position.x = (i - 1) * 0.72;
-    root.rotation.y = -0.4;
-    scene.add(root);
+  // each island in the whole thing, centred where it stands, so the two are judged as
+  // they are rather than as two things somebody arranged
+  const SWATCH = [0xc98f5a, 0x8fb8c9, 0xb9c48a, 0xc9a0c9];
+  islands.forEach((is, i) => {
+    const m = new THREE.Mesh(extract(mesh.geometry, is),
+      new THREE.MeshStandardMaterial({ color: SWATCH[i % SWATCH.length], roughness: 0.6 }));
+    scene.add(m);
   });
+  const camera = new THREE.PerspectiveCamera(32, 300 / 300, 0.05, 40);
+  const cell = 900 / 4;
+  camera.aspect = cell / 300;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(900, 300);
+  renderer.domElement.id = 'view';
+  document.body.appendChild(renderer.domElement);
+  renderer.setScissorTest(true);
+  const VIEWS = [0, 1.57, 3.14, 4.71];
+  renderer.setAnimationLoop(() => {
+    VIEWS.forEach((a, i) => {
+      camera.position.set(Math.cos(a) * 5.2, 1.6, Math.sin(a) * 5.2);
+      camera.lookAt(0, 0, 0);
+      renderer.setViewport(i * cell, 0, cell, 300);
+      renderer.setScissor(i * cell, 0, cell, 300);
+      renderer.render(scene, camera);
+    });
+  });
+  log('islands: ' + islands.map((is, i) => `${SWATCH[i % SWATCH.length].toString(16)} = ${is.tris} tris, ${is.height.toFixed(2)} tall`).join('  ·  '));
+};
+
+$('prev').onclick = async () => {
+  document.getElementById('view')?.remove();
+  const root = await assemble();
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xaebfcc);
+  scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+  const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
+  key.position.set(2.5, 4, 3);
+  scene.add(key);
+  scene.add(root);
   const ground = new THREE.Mesh(new THREE.CircleGeometry(5, 40),
     new THREE.MeshStandardMaterial({ color: 0x8fa0ab }));
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.16;
+  ground.position.y = -0.62;
   scene.add(ground);
-  const camera = new THREE.PerspectiveCamera(32, 900 / 340, 0.05, 50);
-  let angle = 0.9;
+  const camera = new THREE.PerspectiveCamera(32, 900 / 300, 0.05, 40);
+  const cell = 900 / 4;
+  camera.aspect = cell / 300;
+  let angle = 2.1;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(900, 340);
-  renderer.id = 'view';
+  renderer.setSize(900, 300);
+  renderer.domElement.id = 'view';
   document.body.appendChild(renderer.domElement);
+  renderer.setScissorTest(true);
+  // four bearings round it, because a shell is not a radially symmetric object and a
+  // shape that reads from one of them can be wrong from the other three
+  const VIEWS = [0, 1.57, 3.14, 4.71];
   renderer.setAnimationLoop(() => {
-    camera.position.set(Math.cos(angle) * 3.2, 2.10, Math.sin(angle) * 3.2);
-    camera.lookAt(0, 0.05, 0);
-    renderer.render(scene, camera);
-    angle += 0.006;
+    VIEWS.forEach((a, i) => {
+      camera.position.set(Math.cos(a) * 0.95, 0.42, Math.sin(a) * 0.95);
+      camera.lookAt(0, -0.02, 0);
+      renderer.setViewport(i * cell, 0, cell, 300);
+      renderer.setScissor(i * cell, 0, cell, 300);
+      renderer.render(scene, camera);
+    });
   });
-  log('preview: spinning');
+  log('preview: four bearings round the shell');
 };
 </script>
 </body>

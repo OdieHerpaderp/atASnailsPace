@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>the wardrobe</title>
+<style>
+  body { margin: 0; background: #171a1c; color: #d8d4cc;
+         font: 12px/1.5 ui-monospace, Menlo, monospace; overflow-x: auto; }
+  #bar { position: sticky; left: 0; padding: 10px 12px 8px; display: flex; gap: 6px;
+         flex-wrap: wrap; align-items: center; background: #171a1cee; }
+  #bar b { font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+           font-size: 11px; color: #8b9195; margin-right: 4px; }
+  #bar button { font: inherit; padding: 4px 8px; border-radius: 3px; cursor: pointer;
+                background: #2b3134; color: #d8d4cc; border: 1px solid #3d4548; }
+  #bar button.sel { background: #d8d4cc; color: #171a1c; border-color: #d8d4cc; }
+  #bar button.locked { color: #a3323c; }
+  #bar .gap { width: 14px; }
+  #bad { padding: 0 12px 10px; color: #e0a04a; }
+  #bad:empty { display: none; }
+  canvas { display: block; }
+</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+</script></head>
+<body>
+<div id="bar"></div>
+<div id="bad"></div>
+<script type="module">
+/**
+ * The wardrobe, on the game's own head.
+ *
+ * **This page wears `meshes/snail.glb`'s `headG` and not a sphere it built.** That
+ * is the whole of what makes it worth having: a face is four centimetres of
+ * geometry placed against six numbers, and a preview page that carries its own
+ * copy of those numbers is a second place for them to be wrong. So the head here is
+ * the file's node, the face is dropped on it at the origin exactly as
+ * `makeSnail()` does it, and **the two cannot disagree** - which is not something
+ * either builder page can promise, because each of them has the head's numbers
+ * written down beside the code that places a hat on it.
+ *
+ * The one thing the page does hide is `eyeM`, `eyeM_1` and `smileM`, and for the
+ * reason the game hides them: a face is the face, and a preview with the shipped
+ * face showing through the top of a new one answers no question anybody asked.
+ *
+ *   /tools/wardrobe.html                       every face and every hat, bare heads
+ *   /tools/wardrobe.html?face=cheer            that face on every hat
+ *   /tools/wardrobe.html?hat=straw             that hat on every face
+ *   /tools/wardrobe.html?face=cheer&hat=straw  one, big - the pair
+ *   &on=snail                                  the whole snail rather than the head
+ *   &cols=6                                    how many a row (default 5)
+ *   &body=0xf3e7d3&shell=0xb0662f              the snail's own colours
+ *   &turn=0                                    hold still
+ *
+ * Drag to turn it, shift-drag to slide, wheel to come closer, double-click to put
+ * the view back - the same control `render.html` and `compare.html` take, so a hand
+ * that has learned one has learned all three.
+ *
+ * **And it reports a name with no file behind it**, which is the silent half of
+ * what `node tools/plan-test.mjs --faces` gates: that check says the manifest and
+ * the derivation agree, and this page says whether the bytes are actually there.
+ * A rival wearing a name no file is behind draws as a snail with no face, and that
+ * is indistinguishable from a snail whose face is plain.
+ */
+import * as THREE from 'three';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js';
+import { orbitControl } from '/tools/orbit.js';
+import { FACE_SET, HAT_SET } from '/src/core.js';
+
+const q = new URLSearchParams(location.search);
+const bodyCol = +(q.get('body') || 0xf3e7d3);
+const shellCol = +(q.get('shell') || 0xb0662f);
+const onSnail = q.get('on') === 'snail';
+const turn = q.get('turn') !== '0';
+const COLS = Math.max(1, +(q.get('cols') || 5));
+
+const loader = new GLTFLoader();
+/**
+ * One piece of the wardrobe, read the way `loadMeshes()` reads it.
+ *
+ * **The part rule is the loader's and it is four lines**, so this is a copy of it
+ * and not a simplification of it: a mesh named `<prefix>` is the piece, a mesh
+ * named `<prefix>-<part>` is a part, and anything else is a stray that makes the
+ * game reject the file outright. Only `hat-propeller` has a part - `rotor` - and it
+ * is why this returns a geometry *and* its parts rather than one or the other.
+ *
+ * **`prefix` is `'face-'` or `'hat-'` and not the bare name**, because that is what
+ * the mesh inside the file is called: `MESH_SETS` fetches
+ * `meshes/hats/propeller.glb` and registers it under `'hat-propeller'`, and the
+ * file's own mesh is named to match. Slicing on the bare name finds no prefix at all
+ * and calls the rotor a stray - **which is a page reporting a rejection the loader
+ * would never make**, and the exact class of false alarm this page exists to remove
+ * in the other direction.
+ *
+ * The geometry is kept and shared, and the material is the file's own, so a face
+ * looks here exactly as it looks in the county: the same vertex colours, the same
+ * 0.30 gloss the eye is drawn with, and no maps at all, because a face is a
+ * four-centimetre object and `meshes/maps.js` gives all sixteen an empty array.
+ */
+async function piece(dir, name, prefix) {
+  const path = `/meshes/${dir}/${name}.glb`;
+  let gltf;
+  try {
+    gltf = await loader.loadAsync(path);
+  } catch (e) {
+    return { path, missing: true };
+  }
+  const parts = {}, mats = {};
+  const strays = [];
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const key = o.name.startsWith(prefix + '-') ? o.name.slice(prefix.length + 1) : '';
+    if (key) { if (!parts[key]) { parts[key] = o.geometry; mats[key] = o.material; } return; }
+    if (parts['']) { strays.push(o.name); return; }
+    parts[''] = o.geometry; mats[''] = o.material;
+  });
+  if (!parts['']) return { path, missing: true, why: 'no mesh named ' + prefix };
+  return { path, geo: parts[''], mat: mats[''], parts, strays };
+}
+
+/** Every name the game's own tables say exist, loaded once each. */
+const files = {};
+for (const f of FACE_SET) files['f:' + f.name] = await piece('faces', f.name, 'face-' + f.name);
+for (const h of HAT_SET) {
+  // **`none` is a sentinel and has no file**, which is the whole point of it: a
+  // hatless snail is a null mesh and not a missing one. Asking for the file is
+  // not an error here and the report below leaves it alone.
+  if (h.sentinel) continue;
+  files['h:' + h.name] = await piece('hats', h.name, 'hat-' + h.name);
+}
+
+/** The head, off the game's own snail file. */
+const loaded = (await loader.loadAsync('/meshes/snail.glb')).scene;
+/**
+ * **The node and not the scene, and it is the two lines `loadMeshes()` runs.**
+ * `GLTFLoader` hands back a scene with the real root inside it, so taking the scene
+ * puts an `AuxScene` wrapper between a cell and the snail - and every filter below
+ * then has to know about a wrapper it should never have heard of. That is how the
+ * first version of this file hid the whole animal: the filter listed the names to
+ * keep, the wrapper was not on the list, and `visible = false` on a parent hides
+ * everything under it however the children are set.
+ */
+const snail = loaded.getObjectByName('snail') || loaded;
+
+/**
+ * **A cell is 240 × 250, and the pair is 960 × 620.** Two numbers because a pair is
+ * one thing to look at and a grid is seventeen, and a grid at pair size is a page
+ * you scroll sideways through. **The camera's aspect is the viewport's**, and that
+ * has to be said out loud because it is the fourth thing that had to be right: a
+ * `PerspectiveCamera`'s aspect is baked in when the projection is built, so a camera
+ * left at the grid's 0.96 and then pointed at a 3.6-wide viewport stretches the frame
+ * by nearly four times and the head overflows its own picture.
+ */
+const W = 240, CELL_H = 250;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xaebfcc);
+scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+const key = new THREE.DirectionalLight(0xfff3dc, 1.6);
+key.position.set(2.0, 3.0, 3.0);
+scene.add(key);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setScissorTest(true);
+document.body.appendChild(renderer.domElement);
+const cam = new THREE.PerspectiveCamera(30, W / CELL_H, 0.01, 12);
+
+/**
+ * A little sky, because the face's eye is at roughness 0.30 and **a gloss with
+ * nothing to reflect is not a gloss** - it is the flat colour the file was painted,
+ * which is the one thing a preview of a face must not show. This is the same
+ * twenty-line environment `render.html` stands up, and it is why a hat's felt and a
+ * coin's eye look like objects here and not like paint.
+ */
+function makeEnv() {
+  const w = 32, h = 16, px = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const t = 1 - (y + 0.5) / h;
+    const c = t < 0.5
+      ? [0.58 + 0.34 * t * 2, 0.70 + 0.24 * t * 2, 0.86 + 0.10 * t * 2]
+      : [0.86 - 0.52 * (t - 0.5) * 2, 0.82 - 0.52 * (t - 0.5) * 2, 0.72 - 0.44 * (t - 0.5) * 2];
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      px[o] = c[0] * 255; px[o + 1] = c[1] * 255; px[o + 2] = c[2] * 255; px[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(px, w, h);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return new THREE.PMREMGenerator(renderer).fromEquirectangular(tex).texture;
+}
+scene.environment = makeEnv();
+
+/**
+ * One cell: a head wearing a face and a hat.
+ *
+ * `face` and `hat` are **names or `null`, and `null` is not the same as
+ * `'plain'`** - a cell with nothing on it is the bare head the game draws before
+ * anything is picked, and the point of the grid is to see it beside the things.
+ */
+function cell(face, hat) {
+  const g = new THREE.Group();
+  const clone = snail.clone(true);
+  const node = {};
+  clone.traverse((o) => { if (o.name) node[o.name] = o; });
+  const headG = node.headG;
+  if (onSnail) {
+    // the whole animal, at the game's own scale and with its own colours
+    for (const [k, m] of Object.entries({ body: bodyCol, foot: bodyCol, stalk: bodyCol, shell: shellCol })) {
+      const list = [];
+      clone.traverse((o) => { if (o.isMesh && o.material.name === k) list.push(o); });
+      for (const o of list) { o.material = o.material.clone(); o.material.color.set(m); }
+    }
+  } else {
+    // **the head, and only the head.** The node keeps its own rotation - the game
+    // tips it six degrees nose down and a face previewed straight is a face
+    // previewed wrong - and loses its own position, because a cell wants the head
+    // in the middle of the cell and not on a shoulder.
+    headG.position.set(0, 0, 0);
+    /**
+     * **And what stays is what is *reachable* from the head, not a list of names.**
+     *
+     * A name list is how this file rendered an empty grid: `visible = false` on a
+     * parent hides everything beneath it however the children are set, `headG` is a
+     * child of `bodyG`, and a filter that walked the names and kept the two it knew
+     * about hid a wrapper node on the way up that nobody had heard of - so the head
+     * went with it. Asking instead what can be *reached* from `headG` - upwards to
+     * hold it and downwards for the feelers, which are its children and are part of
+     * a head - cannot go wrong that way, and it needs no list to forget to update
+     * when the snail file gains a node.
+     */
+    const keep = new Set();
+    for (let o = headG; o; o = o.parent) keep.add(o);
+    headG.traverse((o) => keep.add(o));
+    clone.traverse((o) => { o.visible = keep.has(o); });
+    const body = node.bodyM && node.bodyM.material;
+    if (body) { node.bodyM.material = body.clone(); node.bodyM.material.color.set(bodyCol); }
+  }
+  // and the shipped face off, whatever is being shown
+  for (const nm of ['eyeM', 'eyeM_1', 'smileM']) if (node[nm]) node[nm].visible = false;
+
+  /**
+   * Put one piece on the head, and **hand back its part if it has one.**
+   *
+   * `hat-propeller` is the only hat in the county of two surfaces and its rotor is
+   * a second mesh about the head's own `y`; a preview that stopped at the first
+   * mesh would show a cap and no spinner, which reads as a hat that is not one.
+   * So the return is the part when there is one and `null` when there is not, and
+   * the caller keeps it for the turntable.
+   */
+  const attach = (name, isHat) => {
+    const file = files[(isHat ? 'h:' : 'f:') + name];
+    if (!file || file.missing) return null;
+    const m = new THREE.Mesh(file.geo, file.mat);
+    m.castShadow = true;
+    headG.add(m);
+    const extra = file.parts && file.parts[isHat ? 'rotor' : ''];
+    if (!extra) return null;
+    const r = new THREE.Mesh(extra, file.mat);
+    r.castShadow = true;
+    headG.add(r);
+    return r;
+  };
+  let rotor = null;
+  if (face) attach(face, false);
+  if (hat) rotor = attach(hat, true);
+  g.add(clone);
+  return { g, rotor };
+}
+
+/* ------------------------------------------------------------------ the views */
+/**
+ * **Four views out of one list of cells**, and the one that matters is `pair`.
+ * A grid of every face on its own head is the first thing anybody wants; a grid of
+ * one face against every hat is the question nobody thinks to ask and the one that
+ * finds a brim that hides a brow. `pair` is the two of them together at a size
+ * where a millimetre shows.
+ */
+/**
+ * A name looked up in one of the game's two tables, **and `null` for a name that is
+ * not in it rather than `undefined`.**
+ *
+ * The two are not the same thing here. Every button on the bar asks whether the
+ * *current* `?face=` and `?hat=` are set before it carries them over to the next
+ * url, so an absent parameter reaches this on every page load - and
+ * `HAT_SET.find(h => h.name === null)` is `undefined`, whose `.sentinel` is the
+ * crash an unwritten default invites. **A lookup that can be asked about nothing
+ * has to have an answer for nothing**, and `null` is the answer that reads as one.
+ */
+const F = (name) => (name == null ? null : FACE_SET.find((f) => f.name === name));
+const H = (name) => (name == null ? null : HAT_SET.find((h) => h.name === name));
+const faceArg = q.get('face'), hatArg = q.get('hat');
+const mode = q.get('mode') || (faceArg && hatArg ? 'pair' : faceArg ? 'face' : hatArg ? 'hat' : 'grid');
+
+const cells = [];
+const add = (face, hat, label) => cells.push({ ...cell(face, hat), face, hat, label });
+
+if (mode === 'grid') {
+  for (const f of FACE_SET) add(f.name, null, f.name + (f.locked ? ' · theirs' : ''));
+  for (const h of HAT_SET) add(null, h.name, h.name + (h.locked ? ' · theirs' : h.sentinel ? ' · nothing' : ''));
+} else if (mode === 'face') {
+  if (!F(faceArg)) throw new Error('no face called ' + faceArg);
+  for (const h of HAT_SET) add(faceArg, h.sentinel ? null : h.name, h.name + (h.locked ? ' · theirs' : h.sentinel ? ' · nothing' : ''));
+} else if (mode === 'hat') {
+  if (!H(hatArg)) throw new Error('no hat called ' + hatArg);
+  for (const f of FACE_SET) add(f.name, H(hatArg).sentinel ? null : hatArg, f.name + (f.locked ? ' · theirs' : ''));
+} else {
+  if (faceArg && !F(faceArg)) throw new Error('no face called ' + faceArg);
+  if (hatArg && !H(hatArg)) throw new Error('no hat called ' + hatArg);
+  add(faceArg || 'plain', hatArg && !H(hatArg).sentinel ? hatArg : null, (faceArg || 'plain') + ' + ' + (hatArg || 'none'));
+}
+
+/* ------------------------------------------------------------------ the report */
+/**
+ * **What a name with no file behind it looks like from here: nothing.** Which is
+ * the failure `--faces` cannot see and this can, so the page says it in the one
+ * place a person is already looking.
+ */
+const bad = [];
+for (const f of FACE_SET) {
+  const file = files['f:' + f.name];
+  if (file.missing) bad.push('meshes/faces/' + f.name + '.glb — ' + (file.why || 'not there'));
+  else if (file.strays.length) bad.push('meshes/faces/' + f.name + '.glb — ' + file.strays.length + ' mesh(es) the loader would reject');
+}
+for (const h of HAT_SET) {
+  if (h.sentinel) continue;
+  const file = files['h:' + h.name];
+  if (file.missing) bad.push('meshes/hats/' + h.name + '.glb — ' + (file.why || 'not there'));
+  else if (file.strays.length) bad.push('meshes/hats/' + h.name + '.glb — ' + file.strays.length + ' mesh(es) the loader would reject');
+}
+if (bad.length) {
+  document.getElementById('bad').textContent = 'the loader would not accept: ' + bad.join(' · ');
+}
+
+/* ------------------------------------------------------------------ the bar */
+/**
+ * **The bar is the page's own navigation and it writes the url**, so a pair is a
+ * link: `/tools/wardrobe.html?face=cheer&hat=straw` is what goes in a commit
+ * message or a note beside a number. It is also why the buttons are the tables
+ * and not a hard-coded list - `FACE_SET` and `HAT_SET` are the game's own, so a
+ * new face appears here the moment it is in `core.js` and not before, which is the
+ * moment there is something to look at.
+ */
+const bar = document.getElementById('bar');
+const title = document.createElement('b');
+title.textContent = 'the wardrobe';
+bar.append(title);
+const go = (params) => {
+  const u = new URL(location.href);
+  for (const k of ['face', 'hat', 'mode', 'on', 'cols']) u.searchParams.delete(k);
+  for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
+  location.href = u.pathname + '?' + u.searchParams.toString();
+};
+const mk = (label, params, sel, locked) => {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (sel) b.classList.add('sel');
+  if (locked) b.classList.add('locked');
+  b.onclick = () => go(params);
+  bar.append(b);
+  return b;
+};
+mk('all', { mode: 'grid' }, mode === 'grid');
+bar.append(Object.assign(document.createElement('span'), { className: 'gap' }));
+const faceBox = document.createElement('span');
+bar.append(faceBox);
+for (const f of FACE_SET) {
+  const b = document.createElement('button');
+  b.textContent = f.name;
+  b.title = `${f.price ? f.price + ' gold' : f.locked ? 'theirs' : 'free'} — ${f.rule}`;
+  if (mode === 'face' && faceArg === f.name) b.classList.add('sel');
+  if (f.locked) b.classList.add('locked');
+  b.onclick = () => go({ mode: 'pair', face: f.name, hat: H(hatArg) && H(hatArg).sentinel ? '' : hatArg });
+  faceBox.append(b);
+}
+bar.append(Object.assign(document.createElement('span'), { className: 'gap' }));
+const hatBox = document.createElement('span');
+bar.append(hatBox);
+for (const h of HAT_SET) {
+  const b = document.createElement('button');
+  b.textContent = h.name;
+  b.title = `${h.price ? h.price + ' gold' : h.locked ? 'theirs' : 'free'} — ${h.rule}`;
+  if ((mode === 'hat' && hatArg === h.name) || (mode === 'pair' && (h.sentinel ? !hatArg || !H(hatArg) : hatArg === h.name))) b.classList.add('sel');
+  if (h.locked) b.classList.add('locked');
+  b.onclick = () => go({ mode: 'pair', face: F(faceArg) ? faceArg : '', hat: h.sentinel ? '' : h.name });
+  hatBox.append(b);
+}
+bar.append(Object.assign(document.createElement('span'), { className: 'gap' }));
+mk(onSnail ? 'heads' : 'snail', { face: F(faceArg) ? faceArg : '', hat: H(hatArg) && H(hatArg).sentinel ? '' : hatArg, on: onSnail ? '' : 'snail' }, false);
+
+/* ------------------------------------------------------------------ the draw */
+/**
+ * **One canvas, one draw, a viewport per cell** - the same mechanism
+ * `render.html`'s four angles use, so the cells all turn together and there is one
+ * frame loop rather than seventeen. Every cell in a view is framed identically: the
+ * same distance, the same bearing, the same aim, all measured once from the tallest
+ * thing in the set. **A cell that framed itself would draw a straw hat and a pair of
+ * horns at the same size on the screen**, which is a page lying about the height of
+ * a hat.
+ */
+const big = mode === 'pair';
+const VW = big ? 960 : W;
+const VH = big ? 620 : CELL_H;
+const COLS_X = big ? 1 : COLS;
+
+const rows = [];
+let n = 0;
+for (const c of cells) {
+  const r = Math.floor(n / COLS_X), i = n % COLS_X;
+  if (!rows[r]) rows[r] = [];
+  rows[r].push(c);
+  n++;
+}
+
+/**
+ * **The frame is measured off the pieces and measured once.**
+ *
+ * A head is 0.112 m in radius and two feelers stand 160 mm above its centre, and the
+ * tallest hat in the county is a pair of horns: none of those numbers are written
+ * down here and all of them are wrong the day a hat gets bigger. So every cell is
+ * built at the origin first, the union of what is *visible* in them is measured, and
+ * the distance and the pitch come out of that - the same rule `render.html` and
+ * `compare.html` use, so a piece looks the same size on every page in the kit.
+ *
+ * **`Box3.setFromObject()` does not skip what it cannot see**, and that is the whole
+ * of why this page first framed a four-centimetre head at a third of its cell: a
+ * cell with the body and the shell hidden still measured half a metre of snail.
+ * Three offers no `visible` flag on it, so `visibleBox()` below is the ten lines it
+ * takes to ask the question it does not.
+ */
+function visibleBox(root) {
+  const b = new THREE.Box3();
+  root.updateWorldMatrix(true, true);
+  root.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    // **and the whole chain**, because a mesh under a hidden group is not drawn
+    // however visible it says it is - which is the rule that hid the entire animal
+    for (let p = o.parent; p; p = p.parent) if (!p.visible) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    b.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
+  });
+  return b;
+}
+for (const c of cells) scene.add(c.g);
+const box = new THREE.Box3();
+for (const c of cells) box.union(visibleBox(c.g));
+const centre = box.getCenter(new THREE.Vector3());
+const size = box.getSize(new THREE.Vector3());
+
+cam.aspect = VW / VH;
+cam.updateProjectionMatrix();
+const fov = (cam.fov * Math.PI) / 180;
+const SLACK = 1.18;
+const DIST = Math.max((size.x * 0.5) / (Math.tan(fov * 0.5) * cam.aspect),
+  (size.y * 0.5) / Math.tan(fov * 0.5)) * SLACK;
+/**
+ * **And the pitch is the *visible* extent, not the model's.** Every cell is drawn
+ * into its own scissored viewport, so a neighbour only spoils a cell if it falls
+ * inside what that cell can see - which is twice the distance times the tangent of
+ * half the field, and a different number from the size of the thing in it. The pitch
+ * is asked of the camera.
+ */
+const VIS_H = 2 * DIST * Math.tan(fov * 0.5);
+const VIS_W = VIS_H * cam.aspect;
+const PITCH_X = Math.max(size.x, VIS_W) * 1.06;
+const PITCH_Y = Math.max(size.y, VIS_H) * 1.06;
+/**
+ * **The cells are spread by that pitch, and it is no longer what keeps them apart** -
+ * `draw()` shows one at a time. It stays because a scene in which every cell is on top
+ * of every other cell is unreadable from the console and from `__wardrobe`, and a
+ * number that used to be load-bearing and no longer is worth saying so about rather
+ * than quietly deleting.
+ */
+cells.forEach((c, i) => {
+  const r = Math.floor(i / COLS_X), col = i % COLS_X;
+  c.g.position.set((col - (COLS_X - 1) / 2) * PITCH_X, -((rows.length - 1) / 2 - r) * PITCH_Y, 0);
+});
+
+renderer.setSize(COLS_X * VW, rows.length * VH);
+
+const orbit = orbitControl(cam, renderer.domElement);
+let t0 = performance.now();
+const draw = () => {
+  const ms = performance.now() - t0;
+  renderer.clear();
+  rows.forEach((row, r) => row.forEach((c, i) => {
+    renderer.setViewport(i * VW, (rows.length - 1 - r) * VH, VW, VH);
+    renderer.setScissor(i * VW, (rows.length - 1 - r) * VH, VW, VH);
+    /**
+     * **And only this cell is drawn, and that is the only reason it has to be
+     * said out loud.**
+     *
+     * Every cell is drawn into its own scissored viewport, but *every cell draws the
+     * whole scene*, so a neighbour that falls inside this viewport arrives with it.
+     * A pitch big enough to keep them apart is the obvious answer and it is not
+     * available: **the camera is three-quarters round, so the neighbour in the
+     * direction the camera came from sits between the camera and the cell being
+     * drawn** - nearer than the cell is, and therefore larger on the screen than the
+     * pitch is wide. A grid framed with a straight-on bearing still has it, in the
+     * one column the camera looks along.
+     *
+     * Thirty-four assignments per frame is the whole of the fix, and unlike a pitch
+     * it cannot be defeated by a hat that grows.
+     */
+    for (const o of cells) o.g.visible = o === c;
+    c.g.visible = true;
+    // **the turn is the page's own and not the snail's.** In the county the propeller
+    // is wound up by the snail's stride and stops when it stops; there is no snail
+    // here, so it turns at a constant rate - which is the right thing for a preview
+    // and the wrong thing for the game, and saying so is cheaper than a page that
+    // quietly models a behaviour the game does not have.
+    if (c.rotor) c.rotor.rotation.y = turn ? ms * 0.004 : 0.35;
+    /**
+     * **`a = 0` is the front, because a snail's face is at `+x`.** The bearing is a
+     * compass angle in the plane of the ground, and the head is looking down `+x`:
+     * a quarter turn off puts the camera behind the snail's shoulder and a preview of
+     * a face that is a preview of a cheek. **A fifth of a radian off square** is the
+     * three-quarter, which is where a brim's depth and a horn's sweep read and the
+     * face still reads.
+     *
+     * **And it looks at the measured centre, not at the cell's own origin** - a
+     * snail's head is not centred on its origin, because two feelers stand 160 mm
+     * above it, and a tenth of a frame of that is invisible on its own and fatal in
+     * a grid: the top of the frame lands inside the row above and every cell carries
+     * a slice of its neighbour's head.
+     */
+    orbit.aim({ a: 0.35, d: DIST, y: c.g.position.y + centre.y + DIST * 0.14,
+      ty: c.g.position.y + centre.y, tx: c.g.position.x, tz: c.g.position.z });
+    renderer.render(scene, cam);
+  }));
+};
+orbit.onDraw(draw);
+/**
+ * A handle on the page, because a preview you can only look at is half a tool.
+ * `__ready` is the signal that the glbs are in; this is the way to ask what is:
+ * `__wardrobe.cells[0].g` is one cell's group, `__wardrobe.files` is every piece
+ * the loader found with what came back, `__wardrobe.frame` is the measured framing,
+ * and `__wardrobe.draw()` re-renders after you have moved something. It is the same
+ * reason `window.__snail` exists in the game.
+ */
+window.__wardrobe = { scene, cam, renderer, cells, files, mode, bad, draw, orbit,
+  frame: { DIST, VIS_H, VIS_W, PITCH_X, PITCH_Y, size: size.toArray(), centre: centre.toArray(), rows: rows.length } };
+
+/**
+ * **The labels are in the document and not in the canvas**, because a cell that says
+ * nothing is a cell you have to remember what it was - and because the text stays at
+ * one size however far the view is dragged in, which is the one thing a piece of
+ * chrome in a render target can never do.
+ *
+ * They follow the canvas down the page: the bar wraps to two rows on a narrow window,
+ * and a fixed number for the bar's height is right on one window and a whole cell out
+ * on the next. **`offsetTop` is asked for rather than remembered** because it costs
+ * nothing and cannot be stale, and `pointer-events: none` is what keeps a label from
+ * swallowing a drag - the two are the same mechanism seen from opposite ends, and the
+ * first version of this page removed the labels on the first pointerdown instead,
+ * which is a worse answer to the same problem.
+ */
+const labels = document.createElement('div');
+labels.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+for (const c of cells) {
+  const el = document.createElement('div');
+  el.textContent = c.label;
+  el.style.cssText = 'position:absolute;font:10px ui-monospace,monospace;color:#e8eef2;'
+    + 'background:rgba(20,24,28,.55);padding:2px 6px;border-radius:3px;white-space:nowrap';
+  labels.append(el);
+  c.el = el;
+}
+document.body.appendChild(labels);
+const placeLabels = () => {
+  const off = renderer.domElement.offsetTop;
+  cells.forEach((c, i) => {
+    const r = Math.floor(i / COLS_X);
+    c.el.style.left = (i % COLS_X) * VW + 10 + 'px';
+    // **`r * VH` and not the row's `y` in gl coordinates.** The viewport for row `r`
+    // is drawn with its bottom at `(rows.length - 1 - r) * VH`, which is near the
+    // *top* of the canvas because gl's origin is bottom-left; reusing that number as
+    // a css top offset puts the first row's label a whole screen of rows away from
+    // the first row. The two coordinate systems disagree about the top and only one
+    // of the two conversions has to be written down.
+    c.el.style.top = r * VH + 8 + off + 'px';
+  });
+};
+placeLabels();
+addEventListener('resize', placeLabels);
+if (turn) renderer.setAnimationLoop(draw);
+window.__ready = true;
+</script></body></html>

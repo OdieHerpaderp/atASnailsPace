@@ -14,8 +14,10 @@ Nothing in here is part of the game: the game is `snail-race.html`,
 | `render.html` | one model on its own, four angles or one, wearing the maps its file declares |
 | `compare.html` | two models at once: A, then B in the same framing, then B over a ghost of A, with the numbers that answer "is it the right size" |
 | `inspect.html` | what is actually inside a `.glb`: mesh names, vertex counts, bounding boxes, attributes, maps — and the audit of the whole map manifest at the foot |
+| `wardrobe.html` | the ten faces and the seven hats on the game's **own head** out of `meshes/snail.glb` — every one of them, or one face against every hat, or one pair, big |
 | `maps.js` | the bit both preview pages share: load `meshes/tex/` and hand a model the maps its own file declares, the way the game does |
 | `plan-test.mjs` | the track planner imported and run in node, for checking a course or an obstacle |
+| `bench.mjs` | frame rates for a cup's courses, raced on the card the machine has - see *Reading a frame rate* |
 | `check.sh` | the static gate: every module parses, and `wired.mjs` reads the whole graph |
 | `wired.mjs` | the graph itself, in four directions - see *Reading the graph* |
 | `e2e/` | the browser suite: 26 Playwright tests against a golden baseline captured from the pre-split game, and the one capture both of its specs share |
@@ -30,11 +32,14 @@ Nothing in here is part of the game: the game is `snail-race.html`,
 | `/_harness/shell.html` | `meshes/build-shell.html` likewise |
 | `/_harness/scenery.html` | `meshes/build-scenery.html` likewise |
 | `/_harness/textures.html` | `meshes/build-textures.html` likewise, posting into `meshes/tex/` |
+| `/_harness/face.html` | `meshes/build-face.html` likewise, posting into `meshes/faces/` |
+| `/_harness/hat.html` | `meshes/build-hat.html` likewise, posting into `meshes/hats/` |
 | `/tools/render.html?f=hut.glb` | a model on its own |
 | `/tools/compare.html?a=meshes/hut.glb&b=meshes/mushroom-giant.glb` | two models, side by side and overlaid |
 | `/tools/inspect.html?f=snail.glb` | the inside of a model file |
+| `/tools/wardrobe.html?face=cheer&hat=straw` | one face and one hat, on one head |
 | `POST /__save?name=x.glb` | writes into `meshes/` |
-| `POST /__save?name=x.png&dir=tex` | and into `meshes/tex/` |
+| `POST /__save?name=x.png&dir=tex` | and into `meshes/tex/`, `dir=faces` and `dir=hats` |
 
 The harness routes are the whole point of the server. Each builder page is a
 page of three.js that writes a `.glb` or a `.png` when you press its button; the
@@ -44,14 +49,18 @@ press the button, reload the game. Nothing is written by hand and no scratch fil
 lands in the project.
 
     window.__snailExport('snail.glb')
-    window.__shellExport('swirl', 'shell-swirl.glb')
+    window.__shellExport('shell', 'shell.glb')
     window.__sceneryExport('lantern-arch')          // appends .glb
     window.__texExport('rock-n')                    // appends .png, into tex/
+    window.__faceExport('cheer')                    // appends .glb, into faces/
+    window.__hatExport('straw')                     // appends .glb, into hats/
 
 Each returns `{ bytes, ok }`, and `ok: false` means the server was not reached
-rather than that the build failed. `dir` is a key into an allowlist of `""` and
-`"tex"`, not a path — the server has no authentication, so nothing in it accepts
-one.
+rather than that the build failed. `dir` is a key into an allowlist of `""`,
+`"tex"`, `"faces"` and `"hats"`, not a path — the server has no authentication, so
+nothing in it accepts one. **The wardrobe's two are the reason the allowlist is a
+list**: the name carries no folder, because `do_POST()` takes `basename()` of it,
+and a face posted as `faces/cheer.glb` lands at `meshes/cheer.glb` in silence.
 
 ## Turning a model round
 
@@ -96,6 +105,40 @@ which is how you see a prop as it looked before its phase. Only a file in
 `meshes/` gets them: the copy of one in `backup/` is a record of what it used to
 be, and a comparison wants the old one to look old.
 
+## Reading the wardrobe
+
+    /tools/wardrobe.html                        every face and every hat, bare heads
+    /tools/wardrobe.html?face=cheer             that face on every hat
+    /tools/wardrobe.html?hat=straw              that hat on every face
+    /tools/wardrobe.html?face=cheer&hat=straw   one pair, big
+    &on=snail                                   the whole snail rather than the head
+    &cols=6                                     how many a row (default 5)
+    &body=0xf3e7d3&shell=0xb0662f               the snail's own colours
+    &turn=0                                     hold still
+
+A face is four centimetres of geometry placed against six numbers, so this page
+wears **`meshes/snail.glb`'s own `headG` node** and drops the piece on it at the
+origin — the same two lines `makeSnail()` runs. It does not build a head of its
+own: a preview page carrying its own copy of the head's numbers is a second place
+for them to be wrong, and both builder pages already have the numbers written down
+beside the code that places a hat on them. This one cannot disagree with the game.
+
+**The second view is the one worth having.** A grid of every face on its own head
+is the first thing anybody wants; *one face against every hat* is the question
+nobody thinks to ask and the one that finds a brim that hides a brow. It already
+has: the feelers come through the crown of every hat in the set.
+
+**And it says a name with no file behind it.** `--faces` checks that the manifest
+and the derivation agree; this page checks that the bytes are there and that the
+part naming is one the loader will accept. The failure the two halves share is
+silent in the game — a rival wearing a name no file is behind draws as a snail
+with no face, which is indistinguishable from a snail whose face is plain — so it
+is worth saying twice in two different places.
+
+`window.__wardrobe` is the same kind of handle as `window.__snail`: `cells`,
+`files`, `frame` and `draw()`, for asking a page what it found rather than only
+looking at it.
+
 ## Reading the planner
 
     node tools/plan-test.mjs                    every course, two seeds
@@ -114,6 +157,93 @@ The condition line is the course in order — `RUN×20 CLIMB×8
 FLY×9 CLIMB×10` is a run, a lip, a gap to fly and the wall on the far side of
 it — and `--leaps` gives every gap's width, how far the lip stands above the
 lane, and how deep the water is.
+
+## Reading a frame rate
+
+    node tools/bench.mjs                              the first cup, High, 1280×720
+    node tools/bench.mjs --w 2560 --h 1440            the panel's own pixels
+    node tools/bench.mjs --cup gp --preset Ultra      another cup, another rung
+    node tools/bench.mjs --courses dash,splash        two of them
+    node tools/bench.mjs --secs 20                    a fixed window, not a race
+
+It races each of a cup's courses - read out of `seasons.json`, finale included -
+and writes `bench/<cup>-p<preset>-<w>x<h>-<when>.json` and a `.md` beside it
+carrying the same numbers as a table. **A frame rate is a fact about a machine and
+not about the build**, which is why the card, the window, the render scale, the
+preset, the display's refresh and the passes the frame went through are in the file
+beside the numbers: the same course on another card, at another resolution or one
+preset up is a different number, and a table that does not say which is an
+anecdote.
+
+**It is not `tools/e2e/`, and the difference is the whole of what it is.** The
+suite runs SwiftShader at 480×300 because it asserts numbers rather than pictures
+and a software rasteriser holds a county of 144 thousand pixels sixty times a
+second. **So this asks for the real renderer and exits rather than print a table
+if it cannot get one** - a headful chromium on a machine with no card falls back
+to SwiftShader silently, and a frame rate off one is not wrong-looking: it is
+honest arithmetic over 3.7 megapixels at about a fortieth of the speed, which is
+indistinguishable from a slow card once it is in a table. `--allow-software`
+overrides it, and `--arg=--use-angle=swiftshader` is how the refusal is tested on a
+machine that has a card.
+
+**The window opens when the countdown ends and closes when the race finishes**,
+after the probe queue has drained and after a settle: a cube probe is six scene
+renders and a PMREM, one is pumped every 260 ms, and a window that opens with
+three queued is measuring the county catching up with itself. The frame time is
+the raw gap between rAF callbacks - a second `requestAnimationFrame` in the same
+page, which is handed the same timestamp as the game's, so the gap it records is
+the gap `src/app.js` pushes into `perfPush()` and not the loop's clamped `dt`.
+
+**And it is vsync-quantised, which is the shape of every number in the table.** A
+frame is either one refresh interval or the next one up, so the medians are 8.3 or
+16.7 and nothing between, and an average is a blend of two rates rather than a
+rate. `missed` is the honest column: **a frame is missed when it lands on the next
+vsync deadline, not when it is slow**, so it counts the frames that took the longer
+step, and a course marked *at the refresh* is being paced by the display and says
+nothing about what the card could do.
+
+**The scene's own numbers are medians over the window and not the last frame's**,
+because `renderer.info` is reset once per frame and read again after it, so one
+reading is whatever the camera happened to be looking at when the race ended -
+Hedgerow Dash measured 27.9 M triangles at the finish line and 27.1 M six seconds
+in, on the same preset at the same resolution. And `tris/frame` is the **whole**
+frame: the occlusion and indirect-light passes each rasterise the scene again.
+
+**And every course is also split along the lane**, on by default and quietened with
+`--quiet`, because a total cannot tell **a course that is slow everywhere** from
+**a course that is slow in one place**, and the second is the one anybody can act
+on. Each frame is tagged with the racer's own arc position and the window is cut
+into the bower's own ranges where the plan dealt a bower - `bowerReport().s` is the
+arc, so "is it the tunnel" is a question with metres attached - and ten arcs of the
+lane where it did not.
+
+**Sort a section by `mean ms` and not by `med ms`.** The median is either one
+refresh interval or the next one up, so on a course already missing most of its
+deadlines it saturates: Hedgerow Dash's is **16.7 ms on the open road and 16.7 ms
+under the bower**, while the means are **14.0 and 16.8** - and watching the frame
+rate from the outside is what turned that into ~70 fps on the road and ~60 in the
+tunnel, which the whole-race total could not show. **A median that has hit the
+refresh has no resolution left and the mean is what is still measuring.**
+
+Run to run the whole-race figure moves about ±2 fps and a section figure about ±1,
+so a difference smaller than that is not a difference. `.kilo/skills/perf-bench/`
+is the working document: the questions worth asking of a slow course, what an
+observation has to carry, and what this cannot tell you.
+
+**There is deliberately no way to ask for an uncapped ceiling.** It is the obvious
+next flag and it does not work: with `--disable-gpu-vsync
+--disable-frame-rate-limit` the refresh is out of the loop and rAF is no longer
+paced by a display answering every frame - Hedgerow Dash came back with a **204 ms
+worst frame and a 1% low of 18 fps** on a course the vsync run put at a 16.7 ms
+median, and the browser closed on the fifth course. So the ceiling is asked the
+only way that answers honestly: **raise the work** - a bigger window, a higher
+preset - and read the frame time once the median has left the refresh interval.
+
+The results are gitignored. `tools/e2e/baseline.json` is committed because
+SwiftShader at 480×300 is the same rasteriser on every machine that runs it, so it
+is comparable; a bench run on one card at one resolution is not comparable to
+anything, and committing one would invite the reading that it is a floor or a
+ceiling.
 
 ## Reading the graph
 

@@ -4,8 +4,21 @@
 #   tools/e2e/run.sh                 every spec
 #   tools/e2e/run.sh golden          the specs whose names match
 #   CAPTURE=1 tools/e2e/run.sh        and the capture, which rewrites the baseline
+#   GOLDEN=1 tools/e2e/run.sh         and the golden specs, which read it
 #   PORT=9000 tools/e2e/run.sh        and a specific port rather than a free one
 #   tools/e2e/run.sh -c tools/playwright.config.js smoke.spec.js
+#
+# **Two env vars and not one, and they do opposite things.** `CAPTURE` *writes* the
+# committed artifacts and may only ever be taken from the pre-split game. `GOLDEN`
+# *reads* them and is off by default, because the rating scale moved under them:
+# `makePool()` now spreads the pool over the attributes a snail can actually hold, so
+# the fields it draws are different animals and the whole-race comparisons in
+# `golden.spec.js` are comparing against numbers from a game that no longer exists.
+# The plan, the lane and the terrain in that same file are unchanged and still true,
+# so the file is gated rather than deleted - **and a default run that reported 26
+# passes with it in would be claiming to have compared numbers it never compared.**
+# `tools/playwright.config.js` is the line that reads `GOLDEN`; this comment is the
+# other half of it.
 #
 # **The repo has no package manager and no dependencies, and the runner is not
 # the exception.** Playwright lives in npm's npx cache, and the cache holds

@@ -9,17 +9,21 @@ routes that exist to make a model change a loop instead of a chore:
   /_harness/shell.html     .../build-shell.html ...
   /_harness/scenery.html   .../build-scenery.html ...
   /_harness/textures.html  .../build-textures.html ...
+  /_harness/face.html      .../build-face.html ...
+  /_harness/hat.html       .../build-hat.html ...
                            Each hook gives the page a window.__snailExport /
-                           __shellExport / __sceneryExport / __texExport, which
-                           builds the model or the map in the browser and POSTs
-                           the bytes straight into meshes/. Nothing is written
-                           into meshes/ by hand and no scratch file lands in
-                           the project.
+                           __shellExport / __sceneryExport / __texExport /
+                           __faceExport / __hatExport, which builds the model or
+                           the map in the browser and POSTs the bytes straight
+                           into meshes/. Nothing is written into meshes/ by hand
+                           and no scratch file lands in the project.
   /tools/render.html       a model on its own, four angles or one
   /tools/inspect.html      what is actually inside a .glb: mesh names, vertex
                            counts, bounding boxes, maps
   POST /__save?name=x.glb  writes into meshes/
   POST /__save?name=a.png&dir=tex   ... and into meshes/tex/, for the maps
+  POST /__save?name=b.glb&dir=faces ... and into meshes/faces/ and
+                                          meshes/hats/, for the wardrobe
 
 Nothing is cached, because a stale build of the thing being worked on is worse
 than no build at all.
@@ -87,13 +91,41 @@ window.__texExport = async (name, dir) => {
   return { bytes: buf.byteLength, ok: r.ok, name, dir: dir || 'tex' };
 };
 """,
+    # **The two wardrobe builders, and they differ from the other three in the
+    # `dir` they post into.** A face is `meshes/faces/cheer.glb` and a hat is
+    # `meshes/hats/straw.glb`, so the name is a bare file name and the folder
+    # is `dir` - and `do_POST()` takes `basename()` of the name and looks `dir`
+    # up in `SAVE_DIRS`, so a path written into the name would be silently
+    # flattened to its last segment and the file would land beside the glbs.
+    "face": """
+window.__faceExport = async (name) => {
+  const root = assemble(name);
+  if (!root) return { ok: false, name, error: 'no face called ' + name };
+  const buf = await new Promise((res, rej) =>
+    new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
+  const r = await fetch('/__save?dir=faces&name=' + name + '.glb', { method: 'POST', body: buf });
+  return { bytes: buf.byteLength, ok: r.ok, name };
+};
+""",
+    "hat": """
+window.__hatExport = async (name) => {
+  const root = assemble(name);
+  if (!root) return { ok: false, name, error: 'no hat called ' + name };
+  const buf = await new Promise((res, rej) =>
+    new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
+  const r = await fetch('/__save?dir=hats&name=' + name + '.glb', { method: 'POST', body: buf });
+  return { bytes: buf.byteLength, ok: r.ok, name };
+};
+""",
 }
 
-# The one place the dev server writes to, and the only subfolder of it that
+# The one place the dev server writes to, and the only subfolders of it that
 # anything may write into. A path is not accepted: `dir` is a key into this,
 # not path, so there is nothing to traverse out of. `tex` holds the maps that
-# meshes/build-textures.html draws; everything else lands beside the glbs.
-SAVE_DIRS = {"", "tex"}
+# meshes/build-textures.html draws, `faces` and `hats` the wardrobe that
+# meshes/build-face.html and meshes/build-hat.html draw, and everything else
+# lands beside the glbs.
+SAVE_DIRS = {"", "tex", "faces", "hats"}
 
 # **And the only two things it will write**, which is the other half of the
 # same guard. `SAVE_DIRS` confines the *folder* and this confines the file, and

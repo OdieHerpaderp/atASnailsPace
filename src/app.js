@@ -42,6 +42,9 @@ import {
   buildCourse,
   dropCourse,
   startRace,
+  adversary,
+  duelCatId,
+  raceHourKeyOf,
   updateFx,
   surgeFx,
   updateRipples,
@@ -71,7 +74,13 @@ import {
 // The things standing next to the lane: the half-way tower, the lamps, the
 // scatter, the farms, and the backdrop both screens share. The register is
 // emptied and read through functions - see `src/scenery.js`'s footer.
-import { lampPosts, backdrop, standingReport, spinFans, fans, mills } from './scenery.js';
+import { lampPosts, backdrop, standingReport, bowerReport, spinFans, fans, mills } from './scenery.js';
+
+// The county's colour jar and the biome table beside it: `hex()` is the jar's own
+// sRGB encoder, so a biome's far-country colour is named rather than written, and
+// `BIOMES.temperate` is the one the stable is always in.
+import { COUNTY as C, hex } from '../meshes/palette.js';
+import { BIOMES } from '../meshes/biomes.js';
 
 // The lane, the frames and the ground either side of it. `NEST` rides along
 // because the surfaces' `groundColumns()` is reading the same twelve metres
@@ -112,12 +121,18 @@ import {
   optionsOpen,
   openOptions,
   closeOptions,
+  gtaoPass,
+  gbuffers,
+  flatSize,
+  maskSize,
+  maskDepthSize,
+  reflectReport,
 } from './post.js';
 
 // The jar, the loader and the four injections. One import for all of them,
 // because the county has one palette and one set of shaders and a file that
 // gave you half of either would be a file to cross-reference.
-import { mat, rippleU, colour, gfxU, gfxSurfaceTargets } from './materials.js';
+import { mat, rippleU, colour, gfxU, gfxSurfaceTargets, biomeNow, PAL as PAL_FOR_TEST } from './materials.js';
 
 // The ladder, the renderer, the dome and the hour. The renderer appends its
 // canvas here rather than in that module's body, because a module body runs
@@ -127,17 +142,17 @@ import {
   gfx,
   setDefaults,
   setRow,
+  setToggle,
   gfxSave,
   SCALE_NAMES,
   sceneRatio,
-  MSAA_NAMES,
+  MSAA_SHORT,
   FX_TOGGLES,
   gfxReflOn,
   renderer,
   paintSky,
   timeOfDay,
   refreshEnvironment,
-  LAMP_LIGHTS,
   LAMP_COLOUR,
   raceClock,
   clockText,
@@ -162,9 +177,18 @@ import {
   SWIM,
   FLY,
   PUSH,
+  BOWER,
   HOURS_PER_SECOND,
   COND,
   ATTRS,
+  CLUB_ATTR,
+  ratingOf,
+  faceFor,
+  hatFor,
+  FACE_SET,
+  HAT_SET,
+  FACE_BY_NAME,
+  HAT_BY_NAME,
   STAT_MAX,
   GOLD_PER_FRUIT,
   START_GOLD,
@@ -221,6 +245,16 @@ let mode = 'stable';
 /** The mode, handed to the registry as a function rather than copied into it -
  *  see `world.modeOf()`. */
 world.modeOf = () => mode;
+/**
+ * Is this frame about the stable? **It is a function and not a bare `mode ===
+ * 'stable'`, and that is because the far country and the fog both have to ask it
+ ***: `mat.hillNear` and `mat.hillFar` are one pair shared by two backdrops and the
+ * course's fog is tinted off the standing biome, so both need to know which
+ * screen they are painting for. The stable is always temperate - `buildStable()`
+ * says so out loud - so on the stable the biome is `BIOMES.temperate` and not
+ * whatever the last course happened to be.
+ */
+const onStableScreen = () => mode === 'stable' || mode === 'stroll';
 /** And the season, for `trackSeed()` - the scenery is upstream of this file and asks
  *  for it through the registry rather than reading `state` directly. */
 world.seasonOf = () => state.season;
@@ -235,8 +269,7 @@ world.forceTimeOfDay = forceTimeOfDay;
 // **The two the stable asks for**, and both are the app's for the same reason the
 // other six are. `restage` is `requestRestage` rather than `restage` because the debounce
 // is the reason the row is allowed to be applied on every click, and `applyLook` is a
-// screen - two colour inputs and a row of style buttons - with a stable's snail at
-// the other end of it.
+// screen - two colour inputs - with a stable's snail at the other end of it.
 world.restage = requestRestage;
 world.applyLook = applyLook;
 world.syncHUD = syncHUD;
@@ -478,6 +511,243 @@ function raceFrame(dt) {
   updateCountdown();
 }
 
+/* ------------------------------------------------------------------ *
+ * Which material a set-list question is about, and how it is asked.
+ * ------------------------------------------------------------------ */
+
+/**
+ * `setsOf('road')` - the live set names a set-wearing material is running, in
+ * order, or `null` for a material that runs none.
+ *
+ * **`'road'` and `'mat.road'` are both accepted, and an unknown key throws.**
+ * Three spellings are in circulation - the material block's key, the `mat.`
+ * prefix a reader reaches for, and the plain role name - and the first version of
+ * this took one of them and answered `null` to the other two. **A `null` for a
+ * name that is not a material and a `null` for a material that was never asked
+ * are the same answer**, which is this project's whole subject: a gate written
+ * `expect(setsOf('mat.road')).toEqual([...])` would have passed on a road with
+ * no setts at all. So an unknown key is a loud failure with the valid ones in the
+ * message, and only a material that genuinely runs no sets answers `null`.
+ *
+ * **And it reads the material rather than the biome's table**, because the table
+ * is what was asked for and this is what was built.
+ */
+function setsOf(which) {
+  const key = String(which).replace(/^mat\./, '');
+  const m = mat[key];
+  if (!m) throw new Error(`setsOf: '${which}' is not a material. The set-wearing ones are ${Object.keys(mat).filter((k) => mat[k].userData.setNames).join(', ')}`);
+  return m.userData.setNames || null;
+}
+
+/**
+ * `setHeightsOf('road')` - one boolean per live set, in the same order as
+ * `setsOf`, and true where the set got a `-h` map and false where it did not.
+ *
+ * It is the register the POM branch is gated on: `triplanarSets()` writes
+ * `userData.setHeights` alongside `setNames`, and a set that declared a `-h`
+ * and got none - the loader's quiet-failure path, where `detailOf` answers
+ * `null` and the set's height is filtered out and its normal kept - shows up
+ * here as a `false` rather than in a picture. **The gate is the material's own
+ * register and not the biome's table**, for the same reason `setsOf` is: a
+ * surface that marches on the normal alone is indistinguishable, in a frame,
+ * from one that never had a `-h at all, and the only thing that says which it
+ * is is this list.
+ */
+function setHeightsOf(which) {
+  const key = String(which).replace(/^mat\./, '');
+  const m = mat[key];
+  if (!m) throw new Error(`setHeightsOf: '${which}' is not a material. The set-wearing ones are ${Object.keys(mat).filter((k) => mat[k].userData.setNames).join(', ')}`);
+  return m.userData.setHeights || null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Which lamps cast real light, and which of them keep it.
+ *
+ * **A light belongs to a lamp and not to a slot**, and this whole block is that
+ * sentence made true. It was written twice - once in `updateTimeOfDay()` and
+ * again in `inspectFrame()`, the same six lines over a different camera - and
+ * both of them sorted the course's lamps by distance from the eye and handed the
+ * nearest sixteen to `env.lamps[0..15]` *by rank*. So the light on a lamp was a
+ * property of the camera's neighbourhood rather than of the lamp: the frame the
+ * eye crossed the perpendicular bisector between two posts, the two swapped
+ * slots, each took the other's glass **and the other's colour**, and a mint
+ * lantern standing beside a cream lamp was a cream one for a frame and a mint
+ * one for the next. Measured on Hedgerow Dash by walking six metres in
+ * centimetre steps: **three handoffs in six metres, every one of them a swap of
+ * two adjacent slots, and every swap a different colour.** A sort with no
+ * tie-break on a quantity two lamps are exactly equal in is not a near-tie; it
+ * is a coin toss every time the eye moves at all - and the walk of lamps
+ * alternates from one side of the lane to the other, so the bisectors are the
+ * places the eye passes most.
+ *
+ * So the binding is **held rather than ranked**. A lamp takes one of the sixteen
+ * when the eye comes inside `LAMP_ON` and only gives it up once the eye is past
+ * `LAMP_OFF`, fourteen metres further out - so a lamp has to be pushed a long
+ * way from the eye before its light goes, and two lamps at the same distance
+ * both keep what they hold instead of trading it. Which slot a lamp takes is
+ * settled once, in order of distance and then of position, so the choice is a
+ * function of the course and of where the eye started rather than of the sort's
+ * mood. The dead band between the two radii *is* the fix.
+ *
+ * **And the binding is written on the lamp record rather than kept in an array
+ * here.** `lampPosts` is emptied and built again for every course - `race.js`
+ * clears it at the top of `startRace()` - so a record rebuilt is a record with no
+ * `slot` on it, and the rebuild resets the binding by itself. One fewer piece of
+ * state to keep in step, and it cannot be left pointing at a lamp of the last
+ * course.
+ *
+ * **The intensity has no camera term in it at all**, and losing that one is the
+ * other half. It was `power * clamp(1 - distance-from-eye / 34, 0.15, 1)`, so a
+ * lamp's pool of light on the ground brightened as you walked towards it and
+ * dimmed as you walked away - a point light in the world does not do that, and
+ * three was already doing the physical falloff (`decay` and a `reach` cutoff) on
+ * the same lamp. Two falloffs, one of them imaginary: the nearest lamp was given
+ * roughly full power and every lamp beyond thirty metres was squashed onto the
+ * 0.15 floor, so the sixteen lamps lit the county almost equally from wherever
+ * you happened to be standing. `power` and the hour are the whole of a lamp now,
+ * and the light belongs to the lamp for as long as the lamp has one.
+ *
+ * Called from the frame loop and **not** from `updateTimeOfDay()`, because the
+ * hour is not what decides a lamp's light. `updateTimeOfDay()` returns early when
+ * the hour has not moved, and a binding that is stateful and lives behind that
+ * guard stands frozen for as long as the hour does - which during a countdown it
+ * does and on the stable it does. **The value that decides whether a resource is
+ * wanted is the setting, and the resource standing there is evidence about the
+ * past**: here the value is the eye and the hour is only the switch.
+ *
+ * **And nothing here switches a light off, because a light that is switched off
+ * is not a lamp going dark - it is a recompile of the county.** The binding was
+ * written in terms of `lamps[i].visible`, which reads as "does this slot hold a
+ * lamp" and is not that at all: three drops a light with `visible === false` out
+ * of the render state's light list, the list is what `NUM_POINT_LIGHTS` is written
+ * out of, and so every lamp that took a light and gave it back took every
+ * material in the county through a fresh program. Measured on Grand Marathon by
+ * walking the inspector down the lane in 40 cm steps: **19 of 120 frames compiled
+ * a shader, 522 compiles in 120 frames, and all 19 were frames the count had moved
+ * on** - 1943 ms on those frames against 666 ms on the ones that compiled
+ * nothing under SwiftShader, and on this machine's own renderer **ten frames out
+ * of 250 walked cost 682 to 710 ms each**, which is the number a player feels:
+ * the frame average over the same walk went from **8.3 ms to 33.2 ms** and back.
+ * It is the same sentence the render scale row is written against: **a number that
+ * decides what gets compiled may not be a number the camera moves.** So the
+ * sixteen are in the scene from `makeEnv()` and are never taken out, and the two
+ * halves of "off" are `lampOn[i]` for the binding and `intensity` for the light.
+ * ------------------------------------------------------------------ */
+/** Metres within which a lamp takes one of the sixteen. Further out than any
+ *  lamp's own `reach`, so a lamp's pool of light is already in the county before
+ *  it is switched on and the taking is not a pop. */
+const LAMP_ON = 34;
+/** ... and the further one past which it hands it back. The dead band between
+ *  the two numbers is the whole of the fix, so it wants to be wide enough to walk
+ *  a lamp's own reach in and not cross it. */
+const LAMP_OFF = 48;
+const LAMP_ON2 = LAMP_ON * LAMP_ON, LAMP_OFF2 = LAMP_OFF * LAMP_OFF;
+/** Scratch lists, reused: the frame loop does not allocate. */
+const _lampWant = [];
+/** The eye a lamp's light is decided against: **the snail in a race**, because the
+ *  road ahead of the snail is what is about to be run and the camera trails it by
+ *  seven metres, and the camera everywhere else. The camera is right in all three
+ *  of those on its own - `freeCameraFrame()` copies `freeCam` onto it before this
+ *  is asked - so the two of them are a race and not-a-race rather than a list of
+ *  four modes, and a fifth mode cannot fall through the gap. */
+function lampEye() {
+  const p = race.player;
+  return p && p.model ? p.model.group.position : camera.position;
+}
+function litLamps() {
+  const lamps = env.lamps;
+  // **which slot holds a lamp, and not `visible`** - the sixteen are all in the
+  // scene whatever they are standing on, because the count of them is baked into
+  // every program drawn here (see the note above). `intensity` is the light and
+  // this flag is the binding, and neither of them is ever the other's.
+  const on = env.lampOn;
+  const eye = lampEye();
+  const ex = eye.x, ez = eye.z;
+  // every lamp that has a light keeps it while the eye is inside `LAMP_OFF` and
+  // hands it back past it, so this pass *frees* slots rather than filling them -
+  // and it is also where the hour is written, because the hour moves every frame
+  // and the binding does not, so a lamp lit once at dawn's 0.30 and left there is
+  // a lamp still standing at 0.30 at dusk
+  let held = 0;
+  for (const l of lampPosts) {
+    if (l.slot === undefined) continue;
+    const dx = l.p.x - ex, dz = l.p.z - ez;
+    if (dx * dx + dz * dz > LAMP_OFF2) {
+      on[l.slot] = 0; lamps[l.slot].intensity = 0; l.slot = undefined;
+    } else { held++; lamps[l.slot].intensity = (l.power || 9) * Math.max(TOD.lamps, 0.25); }
+  }
+  // and a lamp takes one when the eye comes inside `LAMP_ON`, nearest first, so
+  // the sixteen are spent on what is in front of the eye rather than on whichever
+  // side of the course the sort felt like
+  const want = _lampWant;
+  want.length = 0;
+  let free = 0;
+  for (let i = 0; i < lamps.length; i++) if (!on[i]) free++;
+  // **And the count on each side has to agree, because it is the only thing that
+  // notices a course being built.** `startRace()` empties `lampPosts` and builds it
+  // again, so a new course's records arrive with no `slot` on them while the
+  // sixteen lights are still standing wherever the last course put them - and a
+  // binding that only ever *adds* would find every slot taken and light the new
+  // course with the old course's lamps. Nothing else can see that: a stale light
+  // is a light in the right place with a plausible intensity in it.
+  //
+  // So the check is one number against one number, counted after the release pass
+  // so the two are comparable. They can only differ when one of them belongs to a
+  // course that is no longer standing, because `litLamps()` is the only thing that
+  // writes either - and `0` against `0` is agreement, which is what a course built
+  // at noon leaves behind: every light off, every record gone, and the next course
+  // correctly starting from nothing.
+  if (held + free !== lamps.length) {
+    for (let i = 0; i < lamps.length; i++) { on[i] = 0; lamps[i].intensity = 0; }
+    for (const l of lampPosts) l.slot = undefined;
+    free = lamps.length;
+  }
+  if (!free || !lampPosts.length) return;
+  for (const l of lampPosts) {
+    if (l.slot !== undefined) continue;
+    const dx = l.p.x - ex, dz = l.p.z - ez;
+    const d2 = dx * dx + dz * dz;
+    if (d2 <= LAMP_ON2) want.push(l);
+  }
+  if (!want.length) return;
+  // **and the order of that list is settled rather than incidental**, which is the
+  // other half of the tie-break: two lamps at one distance and one lamp to take
+  // between them is a choice, and a choice made by `x` and then `z` is the same
+  // choice every frame rather than whichever way the sort happened to fall
+  want.sort((a, b) => {
+    const da = (a.p.x - ex) ** 2 + (a.p.z - ez) ** 2, db = (b.p.x - ex) ** 2 + (b.p.z - ez) ** 2;
+    return (da - db) || (a.p.x - b.p.x) || (a.p.z - b.p.z);
+  });
+  let slot = 0;
+  for (const l of want) {
+    // the next unlit one, in slot order, so a lamp cannot be handed the slot a
+    // nearer lamp gave up a frame ago and then give it straight back
+    while (slot < lamps.length && on[slot]) slot++;
+    if (slot >= lamps.length) break;
+    const lamp = lamps[slot];
+    l.slot = slot;
+    on[slot] = 1;
+    lamp.position.copy(l.p);
+    // a lantern lights the ground its own colour, a street lamp the one colour
+    // they all are
+    lamp.color.setHex(l.colour || LAMP_COLOUR);
+    lamp.distance = l.reach || 15;
+    // **and the hour is written here as well as on the release pass, because the
+    // two are the same answer and a slot that took its lamp this frame with the
+    // intensity of the last lamp it held is a light with no light in it** - which
+    // is what `syncGlow()` asks about, and the one thing a glow must never have.
+    lamp.intensity = (l.power || 9) * Math.max(TOD.lamps, 0.25);
+    slot++;
+  }
+  // and the hour decides whether any of them is lit at all, **with the bindings
+  // kept running underneath it** - so the set standing at dusk is the set that has
+  // been following the eye, and not a set thrown together by one frame of sorting.
+  // **It writes the intensity and not the binding**, which is the other half of the
+  // note at the top: a dark hour darkens sixteen lights, and it does not cost the
+  // county a program to say so.
+  if (TOD.lamps <= 0.02) for (const l of lamps) l.intensity = 0;
+}
+
 /**
  * Walk the hour. The four courses of a season run from first light to the
  * middle of the day and the finale runs from dusk into the dark, and it runs
@@ -485,12 +755,62 @@ function raceFrame(dt) {
  * under you at a steady rate whether you are quick or slow. The dome is one
  * mesh of vertex colours, so it is only repainted once the light has actually
  * moved far enough to be worth it.
+ *
+ * **And nothing here decides a lamp's light any more** - `litLamps()` is in the
+ * frame loop, because the hour is the clock and the lamps belong to the eye.
  */
 let todU = -1, todFinale = null, todPainted = -1;
 /** A race's hour starts at the beginning of its own stretch of the day, and the
  *  two assignments in front of `updateTimeOfDay(true)` are the cache's to clear -
  *  which is why the whole of it is asked for through the registry rather than
  *  half of it. */
+function applyHourMaterials(TOD) {
+  // **One function and not two.** The hour's lift on the lamps and the far
+  // country's colour were written identically in `updateTimeOfDay()` and
+  // `inspectFrame()`, so a change to the lift (the 0.35 / 0.72 slopes, or a
+  // fourth lit material) had to be made twice or the two screens diverged -
+  // the same "two screens disagreeing" failure the lamp binding refactor took
+  // out of the block below. The cloud's own colour is not in here: only
+  // `updateTimeOfDay()` copies it off `TOD.cloud`, and putting it in this
+  // function would paint the inspector's sky with the race's cloud.
+  mat.cloud.emissiveIntensity = 0.12 + 0.42 * clamp(TOD.sunI / 1.55, 0, 1);
+  // the far country sits outside the fog, so it has to take the colour of the
+  // air by hand or it stands there lit up in the middle of the night -
+  //
+  // **and the base it is taken from is the standing biome's two jar names, not
+  // two hexes written here.** They were `0xb2c8c6` and `0x8cae94`, and they were
+  // the only course-facing colour in the county that was not out of
+  // `meshes/palette.js`, which `AGENTS.md` says nothing outside that file may
+  // invent; they got away with it because nothing had ever wanted a second value
+  // for them, and a biome wants a second value. `hex()` is the jar's own encoder,
+  // so `hillNear` reads back as exactly `0x8cae94`.
+  //
+  // **And which biome it is depends on the screen, because the two hills
+  // materials are global.** `mat.hillNear` and `mat.hillFar` are one pair shared
+  // by the course's backdrop and the stable's, and the stable's own backdrop
+  // never leaves temperate - so on the stable the base is the stable's and not
+  // whatever the last course happened to be. That is the one place in the
+  // county where "read the standing biome" is wrong unless it is qualified, and
+  // it is qualified here rather than in the biome table, because the screen is
+  // what decides it.
+  const far = onStableScreen() ? BIOMES.temperate : biomeNow();
+  mat.hillFar.color.setHex(hex(far.far.far)).lerp(TOD.fog, TOD.haze);
+  mat.hillNear.color.setHex(hex(far.far.near)).lerp(TOD.fog, TOD.haze * 0.85);
+  mat.lampGlass.emissiveIntensity = TOD.lamps * 2.6;
+  // The paper carries most of its own light in its own colour, so that
+  // whatever colour a lantern is painted is the colour it gives out; the
+  // emissive only lifts it a little once the hour is on it.
+  mat.paper.emissiveIntensity = 0.10 + TOD.lamps * 0.35;
+  // **And the wax of a candle lantern is on the same ladder as the paper, at
+  // 1.6 times it** - and the factor is the whole of what it is for. The wax is
+  // the one lit surface in the county whose brightness has to come out of its
+  // emissive rather than out of a light, because a point light on the wick gives
+  // a closed cylinder nothing on its sides (`mat.candleWax` has the numbers).
+  // Paper needs a small lift because the hour is already lighting it; wax needs
+  // most of its brightness from the emissive or it is a dark cylinder, so it
+  // gets 0.16 by day and 0.72 at midnight against the paper's 0.10 and 0.45.
+  mat.candleWax.emissiveIntensity = 0.16 + TOD.lamps * 0.72;
+}
 function forceTimeOfDay() {
   todU = -1; todPainted = -1;
   updateTimeOfDay(true);
@@ -498,7 +818,14 @@ function forceTimeOfDay() {
 function updateTimeOfDay(force) {
   const p = race.player;
   const running = race.tr && p && race.phase !== 'idle';
-  const finale = running && race.catId === seasonFinaleId(state.tier);
+  // **and the hour is the course's own answer rather than the tier's finale.**
+  // `raceHourKeyOf()` reads a duel's `hour` off its entry, and that is not
+  // cosmetic: a duel on a course called `adversary` is not the season's finale,
+  // so `race.catId === seasonFinaleId(state.tier)` was false for it and the duel
+  // was raced at dawn-to-noon where it was raced at dusk-to-night - a green-lit
+  // course with dead ground and no sun in it, which is a wrong picture rather than
+  // a broken one and so nothing else would have caught it.
+  const finale = running && raceHourKeyOf(race.catId) === 'finale';
   // the light is on the clock, not on the snail: whatever the field is doing,
   // the hour goes by at HOURS_PER_SECOND and the course simply gets raced
   // somewhere in that stretch of the day
@@ -536,7 +863,7 @@ function updateTimeOfDay(force) {
     // queued and not taken. `pumpProbes()` spends one a quarter of a second.
     if (gfxReflOn()) queueProbes();
   }
-  for (const e of [env, stageEnv]) {
+  for (const [i, e] of [env, stageEnv].entries()) {
     e.key.color.copy(TOD.sun);
     e.key.intensity = TOD.sunI;
     e.sunH = TOD.sunH;
@@ -547,58 +874,34 @@ function updateTimeOfDay(force) {
     e.hemi.groundColor.copy(TOD.hemiGround);
     e.hemi.intensity = TOD.hemiI;
     e.scene.fog.color.copy(TOD.fog);
+    // **And the race env's fog takes the standing biome's haze and the stable's
+    // does not.** The stable is always temperate - `buildStable()` says so out
+    // loud - so tinting its fog off whatever the last course was would paint the
+    // lobby the colour of a dead valley. `env` is index zero because that is the
+    // order the pair is written in on the line above, which is the only place in
+    // the county that knows it.
+    if (i === 0) {
+      const haze = biomeNow().fog;
+      if (haze) e.scene.fog.color.multiply(colour(C[haze]));
+    }
   }
   renderer.toneMappingExposure = TOD.exposure;
   // the clouds are lit by the sun, so they have to go with it or they hang in
   // a night sky as bright white paper
   mat.cloud.color.copy(TOD.cloud);
   mat.cloud.emissive.copy(TOD.cloud);
-  mat.cloud.emissiveIntensity = 0.12 + 0.42 * clamp(TOD.sunI / 1.55, 0, 1);
-  // the far country sits outside the fog, so it has to take the colour of the
-  // air by hand or it stands there lit up in the middle of the night
-  mat.hillFar.color.setHex(0xb2c8c6).lerp(TOD.fog, TOD.haze);
-  mat.hillNear.color.setHex(0x8cae94).lerp(TOD.fog, TOD.haze * 0.85);
-  mat.lampGlass.emissiveIntensity = TOD.lamps * 2.6;
-  // The paper carries most of its own light in its own colour, so that
-  // whatever colour a lantern is painted is the colour it gives out; the
-  // emissive only lifts it a little once the hour is on it.
-  mat.paper.emissiveIntensity = 0.10 + TOD.lamps * 0.35;
-  // and the few lamps close enough to be worth lighting the ground under
-  for (const l of env.lamps) { l.intensity = 0; l.visible = false; }
-  if (TOD.lamps > 0.02 && lampPosts.length) {
-    const g = race.player ? race.player.model.group.position : camera.position;
-    const near = lampPosts
-      .map((l) => ({ l, d: (l.p.x - g.x) ** 2 + (l.p.z - g.z) ** 2 }))
-      .sort((a, b) => a.d - b.d);
-    for (let i = 0; i < Math.min(LAMP_LIGHTS, near.length); i++) {
-      const lamp = env.lamps[i];
-      // **No offset at all**, and that is the second half of the glass's own
-      // centre: `near[i].l.p` *is* the glass in world space, post and lantern
-      // alike, so there is nothing to add and a number added here is a number
-      // that will drift from the model the day the model changes
-      lamp.position.copy(near[i].l.p);
-      // a lantern lights the ground its own colour, a street lamp the one
-      // colour they all are
-      lamp.color.setHex(near[i].l.colour || LAMP_COLOUR);
-      lamp.intensity = (near[i].l.power || 9) * Math.max(TOD.lamps, 0.25)
-        * clamp(1 - Math.sqrt(near[i].d) / 34, 0.15, 1);
-      lamp.distance = near[i].l.reach || 15;
-      lamp.visible = true;
-    }
-  }
-  // The glows follow the lamps they belong to, in the same block and for the same
-  // reason: a glow scaled once and left is a glow that is wrong from the moment
-  // the light moves. The sun's is placed from the key light's own direction off
-  // the eye, so it is where the sun is from wherever you are standing - and only
-  // the env being drawn needs it placed, because the other one is not on screen.
-  syncGlow(env);
-  syncGlow(stageEnv);
-  const lit = mode === 'stable' || mode === 'stroll' ? stageEnv : env;
-  if (lit.sunGlow && lit.sunGlow.visible) {
-    _v1.copy(lit.key.position).sub(camera.position);
-    if (_v1.lengthSq() < 1e-6) _v1.set(0.4, 0.5, 0.3);
-    lit.sunGlow.position.copy(camera.position).add(_v1.normalize().multiplyScalar(320));
-  }
+  applyHourMaterials(TOD);
+  // **The lamps and their glows are not here.** They were, twice, and both copies
+  // of the block are gone: one in this function and one in `inspectFrame()`, each
+  // sorting the course's lamps by distance from the eye and handing the nearest
+  // sixteen to `env.lamps[0..15]` by rank, which made the light on a lamp a
+  // property of the camera rather than of the lamp. It is `litLamps()` in the
+  // frame loop now, and it is not behind the early return above - **a binding that
+  // is stateful and lives behind the hour's cache stands frozen for as long as
+  // the hour stands still**, which during a countdown it does and on the stable it
+  // does. The glows go with it, because a glow follows a light and a light
+  // follows a lamp, so putting them apart is a third answer to a question with
+  // two.
 }
 
 function updateWater() {
@@ -624,8 +927,9 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   // the canvas is native and takes its size from the window in CSS pixels; the
   // chain is a share of that and follows `applyChainSize()`, which is also where
-  // the half-resolution G-buffer is put back after `setSize()` has given it the
-  // full one, and where `presentPass` is told the source size its shader reads
+  // the county's own resolution is put back on the G-buffer and the two flat
+  // buffers after `setSize()` has given them the window's, and where
+  // `presentPass` is told the source size its shader reads
   applyRenderScale();
 });
 
@@ -659,6 +963,26 @@ function frame(now) {
   else if (mode === 'stroll') { freeCameraFrame(dt); strollFrame(dt); updateTimeOfDay(); }
   else if (mode === 'race') { raceFrame(dt); updateTimeOfDay(); }
   else if (mode === 'inspect') { freeCameraFrame(dt); inspectFrame(dt); }
+  // **The lamps and their glows, once, on every path, above the render rather than
+  // inside whichever screen happened to want them.** They were in two of the four
+  // screens and not the other two, and the ones they were in had their own copy of
+  // the same six lines - so what a lamp's light was depended on which screen you
+  // were looking at, which is the failure that reads. It goes here because this is
+  // the one place every mode has already moved its camera and the one place
+  // nothing has drawn yet: a glow placed before the light it belongs to is a glow
+  // at the last lamp's place.
+  litLamps();
+  syncGlow(env);
+  syncGlow(stageEnv);
+  // The sun's glow is placed from the key light's own direction off the eye, so it
+  // is where the sun is from wherever you are standing, and only the env being
+  // drawn needs it placed because the other one is not on screen.
+  const lit = mode === 'stable' || mode === 'stroll' ? stageEnv : env;
+  if (lit.sunGlow && lit.sunGlow.visible) {
+    _v1.copy(lit.key.position).sub(camera.position);
+    if (_v1.lengthSq() < 1e-6) _v1.set(0.4, 0.5, 0.3);
+    lit.sunGlow.position.copy(camera.position).add(_v1.normalize().multiplyScalar(320));
+  }
   // **One shadow pass a frame, on both paths.** `WebGLRenderer.render()` runs the
   // shadow map unconditionally and `autoUpdate` is on by default, so `GTAOPass` -
   // which renders the whole scene a second time into its normal buffer - would
@@ -678,7 +1002,7 @@ function frame(now) {
   // moved far enough to want one - see `queueProbes()`
   pumpProbes(now);
   if (chainUp()) {
-    // **All three passes, every frame, unconditionally, in one call** - see
+    // **All four passes, every frame, unconditionally, in one call** - see
     // `setChainScene()`. There are two scenes and which one is up changes with
     // the mode; a pass left pointing at the other one renders the stable into a
     // race's occlusion and produces nothing at all rather than something wrong,
@@ -795,10 +1119,13 @@ function perfPaint() {
   // would be a cell reporting the display; this one reports the number the frame
   // rate is a rate *of*.
   $('pDpr').textContent = sceneRatio().toFixed(2);
-  // The sample count and not the step, for the same reason the row is: `off` is
-  // zero and is the only one of the three that is not a number of samples a
-  // pixel, so a raw integer would read as 1x and mean none.
-  $('pMsaa').textContent = MSAA_NAMES[gfx.msaa - 1];
+  // The count and not the step, for the same reason the row is: `direct` is not a
+  // number of samples a pixel, so a raw integer would read as 1x and mean none.
+  // **And `MSAA_SHORT` rather than `MSAA_NAMES`** - the panel's value column is 3.4em
+  // because the widest thing in it is five characters, so the modal's `direct only`
+  // would print as an ellipsis where a word was. The panel has always shortened a
+  // cell rather than truncating one.
+  $('pMsaa').textContent = MSAA_SHORT[gfx.msaa - 1];
   // The kernel and not the step, for the same reason the row is: `nearest` is not a
   // number of anything and a raw `1` would read as the fetch count and mean the
   // cheapest filter in the list.
@@ -840,11 +1167,23 @@ function perfPaint() {
  * HUD
  * ================================================================== */
 const standRows = [];
+/**
+ * The HUD's order panel, and **it is the field's own size and not `FIELD`.**
+ *
+ * `updateHUD()` walks `race.racers` and indexes `standRows[i]`, so a two-snail duel
+ * against eight rows would have written the two it has and left six empty ones
+ * standing on the screen - six blank rows under a duel, which reads as a race that
+ * has not started rather than as a race with two people in it. This is the same
+ * number `laneSlot()` and `buildCrates()` take, and all three are the field's size
+ * for the same reason: **a duel is a two-snail race and every count of racers in this
+ * file has to be willing to say two.**
+ */
 function buildStandings() {
   const wrap = $('standings');
   wrap.innerHTML = '';
   standRows.length = 0;
-  for (let i = 0; i < FIELD; i++) {
+  const n = race.racers.length || FIELD;
+  for (let i = 0; i < n; i++) {
     const d = document.createElement('div');
     d.className = 'row2';
     d.innerHTML = '<span class="pl"></span><span class="dot"></span><span class="nm"></span><span class="g"></span>';
@@ -856,9 +1195,13 @@ function syncHUD() {
   const cat = CAT_BY_ID[race.catId];
   const races = seasonLength();
   const n = Math.min(races, state.results.length + 1);
-  $('raceName').textContent = cat.name;
+  $('raceName').textContent = race.duel ? 'The Adversary' : cat.name;
   const tally = race.tr.plan.tally;
-  const bits = [`race ${n} of ${races}`];
+  // **A duel says "a duel" and not "race 3 of 5".** `state.results` has no duel in
+  // it, so the counter below would read the same number the last season race read
+  // and then one less - a duel would move the season's own progress bar backwards,
+  // which is the one thing `finishRace()`'s branch goes out of its way not to do.
+  const bits = race.duel ? ['a duel', 'they do not move'] : [`race ${n} of ${races}`];
   if (cat.trait) bits.push(`tests ${cat.trait}`);
   if (tally.leaps) bits.push(`${tally.leaps} gap${tally.leaps > 1 ? 's' : ''} to fly`);
   if (tally.pools) bits.push(`${tally.pools} pool${tally.pools > 1 ? 's' : ''} to swim`);
@@ -1005,7 +1348,20 @@ function profileSVG(plan) {
   // exhaustive - `WALK` and `SWIM` are not in it - and a crate's span is here
   // for the same reason the other three are: a hole you push a crate into is the
   // one feature on the profile that says nothing at all without a colour.
-  for (const [cond, col] of [[RUN, '#b08f5c'], [CLIMB, '#7d746a'], [FLY, '#c2a15a'], [PUSH, '#a97c3f']]) {
+  //
+  // **And the bower's is a leaf green and not a green**, because the rail is a
+  // legend: `#b08f5c` is the footpath's own straw and a second green on the same
+  // strip is a legend nobody can read. `#6d7a3a` is a leaf, a shade darker and
+  // greener than anything else on the rail. It is a literal here with the other
+  // four and **not a `PAL` key**, because this is not a surface - nothing is
+  // painted in it - and the rail's existing four did not each earn a jar name
+  // either.
+  //
+  // **And it reads `plan.meta` and not the built track**, so a bower shows at the
+  // `x` the deal gave it rather than at the arc distance it lands on. Every other
+  // stroke on this card is a claim about the plan drawn before anything is built,
+  // and that is the whole of what the card is.
+  for (const [cond, col] of [[RUN, '#b08f5c'], [CLIMB, '#7d746a'], [FLY, '#c2a15a'], [PUSH, '#a97c3f'], [BOWER, '#6d7a3a']]) {
     let d = '', open = false;
     for (let i = 0; i < plan.meta.length; i++) {
       if (plan.meta[i].cond === cond) { d += (open ? 'L' : 'M') + X(i) + ' ' + YP(i); open = true; }
@@ -1023,6 +1379,7 @@ function terrainChips(plan) {
   if (t.pools) s += `<span class="chip swim">pool ×${t.pools}</span>`;
   if (t.floods) s += `<span class="chip swim">flooded chasm ×${t.floods}</span>`;
   if (t.crates) s += `<span class="chip push">crate ×${t.crates}</span>`;
+  if (t.bowers) s += `<span class="chip bower">bower ×${t.bowers}</span>`;
   return s;
 }
 
@@ -1041,7 +1398,14 @@ function terrainChips(plan) {
 function rivalRow(sn, cls) {
   const d = document.createElement('div');
   d.className = 'rival' + (cls ? ' ' + cls : '');
-  d.innerHTML = '<span class="rk"></span><span class="dot"></span><span class="nm"></span><span class="rt"></span>';
+  // **and the face cell, between the colour and the name.** There is no canvas in a
+  // `<div>`, so a face glyph is a class and not a drawing - which means a face with no
+  // rule in the stylesheet draws nothing at all, silently and without an error. That is
+  // the one thing about this row worth watching, and it is why `FACE_SET` in `core.js`
+  // and the `.f-*` rules in `snail-race.css` are two lists of the same ten names and
+  // one of them has to be kept in step with the other.
+  d.innerHTML = '<span class="rk"></span><span class="dot"></span><i class="f-' + (sn.face || 'plain')
+    + '" title="' + (sn.face || 'plain') + ' face"></i><span class="nm"></span><span class="rt"></span>';
   d.querySelector('.rk').textContent = rankOf(sn.rating);
   d.querySelector('.dot').style.background = '#' + sn.body.toString(16).padStart(6, '0');
   d.querySelector('.nm').textContent = sn.name;
@@ -1078,7 +1442,7 @@ function renderField() {
   wrap.innerHTML = '';
   const rivals = seasonRivals();
   for (const p of rivals) wrap.appendChild(rivalRow(p));
-  wrap.appendChild(rivalRow({ name: state.name, body: state.body, rating: state.rating }, 'me'));
+  wrap.appendChild(rivalRow({ name: state.name, body: state.body, rating: state.rating, face: state.face }, 'me'));
 
   // what the season is actually worth, and how you stand in it
   const lo = Math.min(...rivals.map((p) => p.rating)), hi = Math.max(...rivals.map((p) => p.rating));
@@ -1091,6 +1455,30 @@ function renderField() {
     'Your rating, your snail and your purse all come with you; only the season is new.';
   $('pickSeason').textContent = `choose season · ${open.length > 1 ? open.length + ' open to you' : 'one open to you'}`;
   $('openLadder').textContent = `the ladder · ${ordinal(mine)} of ${state.pool.length + 1}`;
+  /**
+   * **The Adversary's button, and there is one from the first frame.**
+   *
+   * Not "when you are ready" - a goal that is not on screen is not a goal, and the
+   * whole ladder means nothing while the top of it is a number with no face on it.
+   * So they are always named, and what changes is the one sentence underneath: you are
+   * told how far away they are and told nothing about how to close it.
+   *
+   * **The button goes to a duel, not to a season and not to the season card.** A duel
+   * is one course and two snails and it does not move the season on at all, so it is
+   * not on the card where four courses are listed - it is here, under the ladder it
+   * belongs to.
+   */
+  const adv = adversary();
+  const gap = adv.rating - state.rating;
+  $('openAdversary').textContent = state.beatAdversary ? 'the Adversary · beaten' : 'the Adversary';
+  // **two lines and not four**, because this card is `position: absolute` under the
+  // snail card and the options bar is `position: fixed` in the corner: a third line
+  // here is a third line over the settings button on a 800-pixel window, and the
+  // ladder modal is where the long version of this sentence belongs.
+  $('adversaryNote').textContent = state.beatAdversary
+    ? 'You have had them once. They do not move, and the ladder does not remember.'
+    : `They rate ${adv.rating} and are not in the pool — the ladder counts you two apart.`
+      + (gap > 0 ? ` ${gap} above you.` : ' Level with you.');
   layoutFieldCard();
 }
 
@@ -1148,6 +1536,10 @@ function openSeasons() {
 function closeSeasons() { $('seasons').classList.remove('on'); }
 
 let ladderOpen = false;
+// **and the wardrobe's own flag, for the same reason the ladder has one**: the
+// Escape chain at the bottom of this file is an `else if` over four screens in
+// order, and a modal with no flag cannot be in it.
+let wardrobeOpen = false;
 
 /**
  * The county ladder: the five nearest above you, you, and the five nearest
@@ -1178,7 +1570,7 @@ function renderLadder() {
   const wrap = $('ladderRows');
   wrap.innerHTML = '';
   for (const p of L.above) wrap.appendChild(rivalRow(p, mine.has(p.id) ? 'here' : ''));
-  wrap.appendChild(rivalRow({ name: state.name, body: state.body, rating: state.rating }, 'me'));
+  wrap.appendChild(rivalRow({ name: state.name, body: state.body, rating: state.rating, face: state.face }, 'me'));
   for (const p of L.below) wrap.appendChild(rivalRow(p, mine.has(p.id) ? 'here' : ''));
 
   // **One order and not two, and the note is where the two ways it can repeat
@@ -1186,13 +1578,66 @@ function renderLadder() {
   // you are one of the 65 - so your row and the row under it can never show the
   // same number on different ratings. What can share a number is a snail on your
   // own rating, which is counted separately and appears in neither list, and the
-  // `CLUB_SNAILS` club snails at the foot, all of them on 150 and every one of
-  // them the same snail.
+  // `CLUB_SNAILS` club snails at the foot, all of them on one rating and every
+  // one of them the same snail.
+  //
+  // **And that last number is computed rather than written down**, out of the
+  // same curve the pool's ratings came out of. It said `150` literally, because
+  // that is what `total * RATING_PER_ATTR` gave for three of five traits - and
+  // the rating is now `total ^ RATING_POW * RATING_SCALE`, so the literal was
+  // wrong the day that changed and would have been wrong quietly. The nine are
+  // `ratingOf(CLUB_ATTR * five traits)`, which is 175, and asking is the only
+  // way that number cannot go stale.
+  /**
+   * **The Adversary's rating is asked for and not written down**, and that is the
+   * whole of what the `+ 1` was: `adversary()` already ran nine lines below this
+   * one to build the row, and their rating is the pool's best plus the duel entry's
+   * `ratingOver`. **Two copies of a number in two files is how the ladder's one
+   * unanswerable question came to have two answers** - the stable says "1st of 65"
+   * with no rival above it, and the ladder's note has to agree with that.
+   */
+  const adv = adversary();
   $('ladderNote').textContent =
     `one more than how many of the other ${L.of - 1} rate above you, and you are one of the ${L.of}`
     + ' · two snails share a number only when they are on one rating: a snail level with you stands in neither list,'
-    + ` and ${CLUB_SNAILS} club snails share 150 outright`
-    + ' · a gold rule down the left is one of your seven';
+    + ` and ${CLUB_SNAILS} club snails share ${ratingOf(CLUB_ATTR * ATTRS.length)} outright`
+    + ' · a gold rule down the left is one of your seven'
+    + (state.beatAdversary
+      ? ' · the devil’s face and horns are yours'
+      : ` · The Adversary holds ${adv.rating} and is not on this list, and they are not in it because the ladder counts`
+        + ' the pool and them — you meet them on the road');
+  /**
+   * **The Adversary's own row, and it is not optional.**
+   *
+   * After a win `rankOf(state.rating)` is 1 and the stable says "1st of 65" with
+   * **no rival anywhere above it** — and the ladder has just told the player the
+   * count is one more than how many of the other 64 rate above them. Two screens
+   * would then be saying different things about the same fact, and the one saying
+   * it quietly is the field card.
+   *
+   * **So they are a row, they are marked `here` when they are above you, and they are not in
+   * the ladder's own counts.** They are in `state.pool` for nobody: `adversary()` builds
+   * them off the top rival rather than out of the pool, so `L.above`, `L.below` and
+   * `rankOf()` are all unchanged and the row is decoration on top of them — which is
+   * why it can come and go without touching a single number the ladder depends on.
+   *
+   * `adv` is the one `adversary()` above the note, and that is the point of it:
+   * two `adversary()` calls in one function build two rows off two readings of a
+   * pool and two sets of faces, and the only thing that says they cannot disagree
+   * is that `adversary()` is pure - which is a thing worth arranging for rather
+   * than a thing to rely on.
+   */
+  const you = document.createElement('div');
+  you.className = 'rival adversary';
+  you.innerHTML = '<span class="rk">—</span><span class="dot" style="background:#'
+    + adv.body.toString(16).padStart(6, '0') + '"></span>'
+    + '<i class="f-devil" title="devil face"></i>'
+    + '<span class="nm">The Adversary</span><span class="rt">' + adv.rating + '</span>';
+  const top = document.createElement('div');
+  top.className = 'rival adversary here';
+  top.innerHTML = you.innerHTML;
+  if (adv.rating > state.rating) wrap.insertBefore(top, wrap.children[0] || null);
+  else wrap.appendChild(you);
 }
 function openLadder() {
   renderLadder();
@@ -1202,6 +1647,96 @@ function openLadder() {
 function closeLadder() {
   ladderOpen = false;
   $('ladder').classList.remove('on');
+}
+
+/* ================================================================== *
+ * The wardrobe.
+ *
+ * **It is a shop and not a settings panel, and the difference is the price on
+ * every button.** A panel with a price on it has to be read together with the
+ * gold counter, or neither number means anything - and that is why the counter is
+ * in the modal's own subtitle rather than left on the snail card behind it.
+ *
+ * **Everything is a re-render of the same two grids**, not an incremental
+ * update. Sixteen buttons and a row of prices: a `renderWardrobe()` that builds
+ * them from `FACE_SET` and `HAT_SET` on every open is shorter than any scheme
+ * that would keep them up to date, and the table it reads is the same one the
+ * rival derivation and the loader's `MESH_SETS` are checked against.
+ *
+ * **A purchase is gold out and a name in, in that order**, and the save is
+ * written once afterwards rather than on every button - so a player who buys four
+ * things writes the save once and not four times.
+ * ================================================================== */
+const ownedHas = (n) => state.owned.indexOf(n) >= 0;
+/** What pressing one of these buttons should do, and it is a function so the
+ *  buy, the wear, the too-poor and the locked are one `switch` rather than four
+ *  `if`s fighting over the same node. */
+function wardrobePress(kind, item) {
+  if (item.locked) return;                      // the Adversary's; a duel hands them over
+  const slot = kind === 'face' ? 'face' : 'hat';
+  const worn = state[slot];
+  if (ownedHas(item.name)) {
+    // **Wearing something you already own costs nothing**, so pressing a worn
+    // swatch is a no-op rather than a purchase of itself
+    if (worn === item.name) return;
+    state[slot] = item.name;
+    save();
+    applyLook();
+    return;
+  }
+  if (state.gold < item.price) return;
+  state.gold -= item.price;
+  state.owned.push(item.name);
+  state[slot] = item.name;
+  save();
+  applyLook();
+}
+function wardrobeNote() {
+  const held = state.owned.filter((n) => FACE_BY_NAME[n] || HAT_BY_NAME[n]).length;
+  const locked = state.beatAdversary ? 0 : 2;
+  $('wdNote').textContent = state.beatAdversary
+    ? 'The Adversary’s face and horns are yours, and they are the only two in the county you did not buy.'
+    : `you are wearing ${held + 2} of ${FACE_SET.length + HAT_SET.length}`
+      + (locked ? `, and ${locked} more are theirs` : '')
+      + ' · a face is the whole face and a hat is a silhouette, so the hats are what you read at race distance';
+}
+function renderWardrobe() {
+  $('wdGold').textContent = state.gold;
+  const build = (host, kind, set) => {
+    host.textContent = '';
+    for (const item of set) {
+      const b = document.createElement('button');
+      // **the class is the glyph and the swatch, and there is no `src`:** the
+      // stylesheet draws ten faces and six hats out of gradients and box-shadows,
+      // which is the same trick the shell picker's swatches used
+      b.className = (kind === 'face' ? 'f-' : 'h-') + item.name
+        + (state[kind] === item.name ? ' sel' : '');
+      b.title = item.name;
+      const price = document.createElement('span');
+      price.className = 'price';
+      price.textContent = item.locked ? (state.beatAdversary ? 'won' : '—')
+        : ownedHas(item.name) ? '' : item.price;
+      b.append(price);
+      // **dimmed is three things and not one**: too poor, or not yours yet, or
+      // their. A single `disabled` would take the click away from a thing the player
+      // should be told about, and the note at the foot is where the telling is.
+      b.disabled = !item.locked && !ownedHas(item.name) && state.gold < item.price;
+      b.onclick = () => { wardrobePress(kind, item); renderWardrobe(); };
+      host.append(b);
+    }
+  };
+  build($('wdFaces'), 'face', FACE_SET);
+  build($('wdHats'), 'hat', HAT_SET);
+  wardrobeNote();
+}
+function openWardrobe() {
+  renderWardrobe();
+  wardrobeOpen = true;
+  $('wardrobe').classList.add('on');
+}
+function closeWardrobe() {
+  wardrobeOpen = false;
+  $('wardrobe').classList.remove('on');
 }
 
 /**
@@ -1235,8 +1770,27 @@ function applyLook() {
   st.snail.mats[2].color.setHex(state.body);
   st.snail.mats[3].color.setHex(state.body);
   st.snail.mats[1].color.setHex(state.shell);
-  st.snail.setShellStyle(state.style);
-  for (const el of document.querySelectorAll('#styles button')) el.classList.toggle('sel', el.dataset.s === state.style);
+  /**
+   * **And the face and the hat, and they have to be in here and nowhere else.**
+   *
+   * The plinth snail on the stable is built once and lives for the whole session, so
+   * a wardrobe change reaches it through this function or not at all: the shop can
+   * fill `state.face` and `state.hat`, save them and redraw the swatches, and the
+   * snail on the plinth goes on wearing what it had.
+   *
+   * `mats[0..3]` are still the body, shell, foot and stalk and were left by
+   * position on purpose - the face and the hat materials are at `4` and `5`, and a
+   * `mats.indexOf` here would be a way to change four working lines.
+   *
+   * **No `syncGlow()` and no `applyShadows()` on this path, and both were tried.**
+   * The glow belongs to the lamps and the shadows row stamps what casts, and the
+   * face and the hat stamp their own `gfxCast` where they are built (`makeSnail()`),
+   * so both calls were doing nothing for a costume and one of them threw - bare
+   * `syncGlow()` is `e.lampGlow` on `undefined`, which is a `TypeError` on the
+   * first frame the player presses a shop button.
+   */
+  st.snail.setFace(state.face);
+  st.snail.setHat(state.hat);
   $('bodyColor').value = '#' + state.body.toString(16).padStart(6, '0');
   $('shellColor').value = '#' + state.shell.toString(16).padStart(6, '0');
 }
@@ -1367,6 +1921,30 @@ function renderStable() {
     btn.onclick = () => { startRace(nextRaceId()); showRace(); };
   }
 }
+/**
+ * The duel, and it is **one call and one course entry**.
+ *
+ * `startRace(duelCatId())` is a race with two racers in it, and the course is
+ * whichever entry in `races.json` carries a `duel` - which is its own entry in
+ * the data rather than a constant here, because the whole of a duel used to be six
+ * literals spread over two files and now is one object: the size of the field, the
+ * lane share each racer holds, the crates, the countdown, their `attrBonus`, `skill`
+ * and `greed`, the two locked wardrobe names, the purse, the rating a win is
+ * worth, and the hour it is raced at. **And the course it is raced on is a course
+ * in `races.json` like any other**, so it has a name, a shape, a biome and a
+ * half-way tower, and the inspector will walk it.
+ *
+ * **It does not go through `startSeason()` and it does not touch `state.order`.**
+ * A duel is not a round, so it must not consume the season's next race: a player who
+ * beat the Adversary has still got four courses to run, and a `startSeason()` here
+ * would have taken the first of them and put it back at the end.
+ */
+function challengeAdversary() {
+  startRace(duelCatId());
+  showRace();
+}
+$('openAdversary').addEventListener('click', challengeAdversary);
+
 /**
  * An ordinal, whole: 1st, 2nd, 3rd, 4th, and the 21st and the 12th and the 65th.
  * `placeWord()` was the last-digit test and nothing more, which is right for a
@@ -1560,27 +2138,14 @@ function inspectFrame(dt) {
     e.hemi.intensity = TOD.hemiI;
     e.scene.fog.color.copy(TOD.fog);
   }
-  mat.cloud.emissiveIntensity = 0.12 + 0.42 * clamp(TOD.sunI / 1.55, 0, 1);
-  mat.hillFar.color.setHex(0xb2c8c6).lerp(TOD.fog, TOD.haze);
-  mat.hillNear.color.setHex(0x8cae94).lerp(TOD.fog, TOD.haze * 0.85);
-  mat.lampGlass.emissiveIntensity = TOD.lamps * 2.6;
-  mat.paper.emissiveIntensity = 0.10 + TOD.lamps * 0.35;
+  applyHourMaterials(TOD);
   renderer.toneMappingExposure = TOD.exposure;
-  // and the lanterns near the eye are the ones that light the ground
-  for (const l of env.lamps) { l.intensity = 0; l.visible = false; }
-  if (TOD.lamps > 0.02 && lampPosts.length) {
-    const near = lampPosts
-      .map((l) => ({ l, d: (l.p.x - freeCam.pos.x) ** 2 + (l.p.z - freeCam.pos.z) ** 2 }))
-      .sort((a, b) => a.d - b.d);
-    for (let i = 0; i < Math.min(LAMP_LIGHTS, near.length); i++) {
-      const lamp = env.lamps[i], n = near[i].l;
-      lamp.position.set(n.p.x, n.p.y, n.p.z);
-      lamp.color.setHex(n.colour || LAMP_COLOUR);
-      lamp.intensity = (n.power || 9) * Math.max(TOD.lamps, 0.25) * clamp(1 - Math.sqrt(near[i].d) / 34, 0.15, 1);
-      lamp.distance = n.reach || 15;
-      lamp.visible = true;
-    }
-  }
+  // **And the lanterns near the eye are not lit here.** This was the second copy of
+  // the same block `updateTimeOfDay()` had - the same nearest-sixteen-by-rank, the
+  // same tie-break that did not tie - over `freeCam.pos` rather than over the
+  // snail, which made a course you were walking light differently from the same
+  // course you were racing. It is `litLamps()` in the frame loop, once, and this
+  // function's only job with the eye is to move it.
   camera.position.copy(freeCam.pos);
   camera.lookAt(
     freeCam.pos.x + Math.sin(freeCam.yaw) * Math.cos(freeCam.pitch),
@@ -1592,7 +2157,20 @@ function inspectFrame(dt) {
   env.key.position.set(freeCam.pos.x + 3.6 * env.sunSide, freeCam.pos.y + 5.6 * env.sunH, freeCam.pos.z + 3.4 * env.sunSide);
   env.key.target.position.set(freeCam.pos.x, freeCam.pos.y, freeCam.pos.z);
   aimFill(env, freeCam);
-  updateTimeOfDay(true);
+  // **The hour is pinned in here and asked for unforced, and the `true` it used
+  // to carry was costing a probe a frame.** `openInspector()` clears the cache
+  // on the way in, so the first unforced call settles the hour and every call
+  // after it returns at the top - which is the guard `force` defeats, and it
+  // defeats a second one below it: force also walks the repaint threshold, so
+  // the dome, the environment and **every pool's cube probe** were rebuilt on
+  // every frame of a walk round a course whose light had not moved a degree.
+  // `queueProbes()` puts `probeLast` back to `-1e9` so the first probe after a
+  // tier change goes at once, so the pump's 260 ms gate stood open the whole
+  // time and `pumpProbes()` spent one per frame - six scene renders and a PMREM
+  // each, which on four pools is every pool's cube map four times a second.
+  // The general form: **force is for a caller that has changed something the
+  // cache cannot see**, and an hour nobody has touched is not that.
+  updateTimeOfDay();
 }
 
 /** The keys and the mouse, which are only wanted while a course is being looked at. */
@@ -1662,7 +2240,7 @@ function showResults(rec) {
     const move = `${f.dRating > 0 ? '+' : f.dRating < 0 ? '−' : ''}${Math.abs(f.dRating || 0)}`;
     tr.innerHTML =
       `<td class="p">${f.place}</td>` +
-      `<td><span class="dot" style="background:#${(f.player ? state.body : (state.pool.find((p) => p.name === f.name) || { body: 0x888888 }).body).toString(16).padStart(6, '0')}"></span> ${f.name}</td>` +
+      `<td><span class="dot" style="background:#${(f.player ? state.body : (state.pool.find((p) => p.name === f.name) || adversary()).body).toString(16).padStart(6, '0')}"></span> ${f.name}</td>` +
       `<td class="tm">${f.time ? f.time.toFixed(1) + 's' : '—'}</td>` +
       `<td class="pts">${f.points || '—'}</td>` +
       // **The rank sits beside the rating and not in the strip**, because the
@@ -1679,21 +2257,46 @@ function showResults(rec) {
   const strip = $('resStrip');
   strip.innerHTML = '';
   const finale = seasonFinaleId(state.tier);
-  for (const r of state.results.slice(-6)) {
-    const el = document.createElement('i');
-    el.className = r.place <= 4 ? 'p' + r.place : (r.catId === finale ? 'm' : '');
-    el.textContent = ordinal(r.place);
-    el.title = CAT_BY_ID[r.catId].name;
-    strip.appendChild(el);
+  // **a duel is not a round and is not in the season's strip.** The strip is the
+  // season's progress - the four pips and then the marathon - and a duel in it would
+  // be a fifth round that the ledger below did not record. It is emptied instead, so
+  // the gap says "this was not a season race" rather than showing somebody else's.
+  if (!rec.duel) {
+    for (const r of state.results.slice(-6)) {
+      const el = document.createElement('i');
+      el.className = r.place <= 4 ? 'p' + r.place : (r.catId === finale ? 'm' : '');
+      el.textContent = ordinal(r.place);
+      el.title = CAT_BY_ID[r.catId].name;
+      strip.appendChild(el);
+    }
   }
-  $('resTitle').textContent = rec.place <= 3 ? ['Winner!', 'Second place', 'Third place'][rec.place - 1] : 'Result';
-  $('resSub').textContent = `${CAT_BY_ID[rec.catId].name} · ${Math.round(rec.length)} m · finished ${ordinal(rec.place)} of ${FIELD} · ${clockText(rec.hour == null ? 12 : rec.hour)}`;
-  $('resTot').innerHTML =
-    `<div><div class="k">points</div><div class="v">+${rec.points}</div></div>` +
-    `<div><div class="k">gold</div><div class="v">+${rec.points}</div></div>` +
-    `<div><div class="k">season total</div><div class="v">${state.pts}</div></div>` +
-    `<div><div class="k">rank</div><div class="v">${ordinal(rankOf(state.rating))}</div></div>` +
-    `<div><div class="k">rating</div><div class="v">${state.rating}</div></div>`;
+  $('resTitle').textContent = rec.duel
+    ? (rec.won ? 'The Adversary is beaten' : 'They are still there')
+    : (rec.place <= 3 ? ['Winner!', 'Second place', 'Third place'][rec.place - 1] : 'Result');
+  $('resSub').textContent = `${CAT_BY_ID[rec.catId].name} · ${Math.round(rec.length)} m · `
+    + (rec.duel
+      ? `${rec.won ? 'beaten' : 'lost to'} The Adversary · ${clockText(rec.hour == null ? 12 : rec.hour)}`
+      : `finished ${ordinal(rec.place)} of ${FIELD} · ${clockText(rec.hour == null ? 12 : rec.hour)}`);
+  /**
+   * **And the five boxes are a duel's three, not a race's five.**
+   *
+   * A duel writes no season ledger at all - no `state.pts`, no `state.races`, no
+   * season total - so a "season total" and a "points" row on the same screen as a
+   * hundred gold would be two numbers for one thing. What a duel has is a purse, a
+   * rating and what it unlocked, and the third is the only one of the three the
+   * player did not have a number for.
+   */
+  $('resTot').innerHTML = rec.duel
+    ? `<div><div class="k">gold</div><div class="v">+${rec.points}</div></div>` +
+      `<div><div class="k">rating</div><div class="v">${state.rating}</div></div>` +
+      `<div><div class="k">rank</div><div class="v">${ordinal(rankOf(state.rating))}</div></div>` +
+      `<div><div class="k">${rec.won ? 'unlocked' : 'next time'}</div>` +
+      `<div class="v" style="font-size:13px">${rec.won ? 'their face, their horns' : 'they do not move'}</div></div>`
+    : `<div><div class="k">points</div><div class="v">+${rec.points}</div></div>` +
+      `<div><div class="k">gold</div><div class="v">+${rec.points}</div></div>` +
+      `<div><div class="k">season total</div><div class="v">${state.pts}</div></div>` +
+      `<div><div class="k">rank</div><div class="v">${ordinal(rankOf(state.rating))}</div></div>` +
+      `<div><div class="k">rating</div><div class="v">${state.rating}</div></div>`;
   const allDone = race.racers.every((r) => r.finished);
   $('resStay').style.display = allDone ? 'none' : '';
   $('resStay').onclick = () => { race.waitAll = true; $('results').classList.remove('on'); };
@@ -1784,7 +2387,12 @@ function joinSeason(id) {
 function wipeSave() {
   try { localStorage.removeItem(SAVE_KEY); } catch (e) { void e; }
   // the course still on the scene is torn down by the next startRace
-  Object.assign(race, { catId: null, tr: null, racers: [], player: null, t: 0, phase: 'idle', result: null, waitAll: false });
+  // **and `duel: null` is on that line** because this function hand-lists every
+  // field it is clearing and a field that is not on the list survives a delete -
+  // the same argument as the wardrobe two lines below. It was the third thing
+  // `race.duel` was wrong about; the other two were fixed by reading it off the
+  // course rather than off this object.
+  Object.assign(race, { catId: null, tr: null, racers: [], player: null, t: 0, phase: 'idle', result: null, waitAll: false, duel: null });
   $('results').classList.remove('on');
   $('summary').classList.remove('on');
   closeSeasons();
@@ -1792,7 +2400,12 @@ function wipeSave() {
   state.season = 1;
   state.name = 'Wilma';
   state.gold = START_GOLD;
-  state.body = 0xe0b183; state.shell = 0xc8a05a; state.style = 'bands';
+  state.body = 0xe0b183; state.shell = 0xc8a05a;
+  // **And the wardrobe**, which is here for the reason the two colour lines are:
+  // this function hand-lists every appearance field the game owns, and a field
+  // that is not on the list survives a delete. A fresh game would come up with
+  // the previous player's horns still unlocked and still on the plinth.
+  state.face = 'plain'; state.hat = 'none'; state.owned = []; state.beatAdversary = false;
   state.stats = freshSnail();
   state.results = [];
   state.rating = START_RATING; state.races = 0; state.pts = 0; state.wins = 0;
@@ -1832,6 +2445,7 @@ addEventListener('keyup', (e) => { if (e.code === 'Space' && mode === 'race') su
 addEventListener('keydown', (e) => {
   if (e.code !== 'Escape') return;
   if (optionsOpen) { e.preventDefault(); closeOptions(); }
+  else if (wardrobeOpen) { e.preventDefault(); closeWardrobe(); }
   else if (ladderOpen) { e.preventDefault(); closeLadder(); }
 });
 const surgeBtn = $('surge');
@@ -1847,15 +2461,14 @@ $('snailName').addEventListener('input', (e) => {
 });
 $('bodyColor').addEventListener('input', (e) => { state.body = parseInt(e.target.value.slice(1), 16); applyLook(); save(); });
 $('shellColor').addEventListener('input', (e) => { state.shell = parseInt(e.target.value.slice(1), 16); applyLook(); save(); });
-for (const el of document.querySelectorAll('#styles button')) {
-  el.addEventListener('click', () => { state.style = el.dataset.s; applyLook(); save(); });
-}
 $('newSeason').addEventListener('click', openSeasons);
 $('pickSeason').addEventListener('click', openSeasons);
 $('seasClose').addEventListener('click', closeSeasons);
 $('sumNew').addEventListener('click', openSeasons);
 $('openLadder').addEventListener('click', openLadder);
 $('ladderClose').addEventListener('click', closeLadder);
+$('openWardrobe').addEventListener('click', openWardrobe);
+$('wdClose').addEventListener('click', closeWardrobe);
 // And the free camera on the stable, which is the same camera a course gets and
 // the same keys; the button is a shortcut into it, and everything else about the
 // place carries on exactly as the orbit left it.
@@ -1931,8 +2544,29 @@ let simSurge = false;
 
 window.__snail = {
   state, race, get stage() { return stageOf(); },
-  get gfx() { return { ...gfx, composerUp: chainUp(), needsComposer: needsComposer(), probes: courseProbes.length }; },
+  // **And the queue beside the count**, because the count alone cannot see a probe
+  // being rebuilt every frame: a queue that is refilled above the pump and never
+  // empties has the same four probes standing as one that has finished. The
+  // inspector's readout is the other end of the same question - `pProbe` prints
+  // `probes/queued` off these two numbers.
+  get gfx() {
+    return { ...gfx, composerUp: chainUp(), needsComposer: needsComposer(),
+      probes: courseProbes.length, queued: probeQueue.length };
+  },
   setGfx: (k, n) => { setRow(k, n); gfxSave(); markStageDirty(k); renderOptions(); return applyGraphics(); },
+  // **The six switches, on their own setter.** `setGfx` reaches them by accident -
+  // `setRow()` clamps against a row it cannot find, so an FX key lands on 6 steps
+  // instead of the row's own count and every value between 0 and 6 is accepted - and
+  // an accidental route to a setting is not a route to ship in a test hook. **The
+  // bloom is half of what puts the compositor up**, so a spec that cannot switch it
+  // cannot check the border on the one term that is a pass rather than a resample.
+  setFx: (k, n) => { setToggle(k, n); gfxSave(); renderOptions(); return applyGraphics(); },
+  // **The modal, opened from the test hook rather than by clicking the opt bar.** The
+  // compositor border is the only part of the settings panel with a visible state that
+  // is not a lit cell, so it is the only part a browser can be asked about - and a
+  // `renderOptions()` that quietly stopped drawing the frame would leave every other
+  // spec green.
+  openOptions,
   
     /**
    * What the renderer is actually doing, which is the only honest way to check
@@ -1948,14 +2582,38 @@ window.__snail = {
     // **Read off the buffer rather than off the setting**, because those two
     // disagree exactly when the interesting thing has happened: a target's sample
     // count is baked into its framebuffer when that framebuffer is built, so
-    // `msaa` saying x4 and this saying 0 is a machine whose setting did not land.
+    // `msaa` saying x4 and this saying 4 is the row landing, and **the two
+    // disagreeing with no chain up is not a fault** - it is the row naming a
+    // buffer the frame never had. See `aa` below for what happens on that path.
     samples: composer ? composer.renderTarget1.samples : 0,
+    // **The context's own anti-aliasing flag, and the only thing in the frame that
+    // says whether the default framebuffer is multisampled.** `getContextAttributes()`
+    // reads the attributes the context was *created* with, which is the whole point:
+    // this is a boolean no call can change afterwards, and it is why the anti-aliasing
+    // row cannot promise a count for the direct path. **It is a flag and not a count
+    // because WebGL does not expose the count** - the driver picked it and there is
+    // no call that asks. A spec asserting `aa` is the one mechanism a restart is
+    // needed to change, and asserting it does *not* move when the row does.
+    aa: renderer.getContext().getContextAttributes().antialias,
     // **The chain's own buffer beside the canvas's**, because they are two
     // resolutions that are *meant* to differ and are not allowed to: the canvas is
     // native and the chain is a share of it, and the ratio between them is the
     // render row. Read them against each other, not against the setting.
     rt: composer ? [composer.renderTarget1.width, composer.renderTarget1.height] : null,
     canvas: [renderer.domElement.width, renderer.domElement.height],
+    // **How many point lights the renderer is being handed this frame**, counted
+    // off the scene it is about to draw and not off `env.lamps`, which is sixteen
+    // whatever it is bound to. This is the number three writes `NUM_POINT_LIGHTS`
+    // out of and puts in the key of every program in the county, so **the one
+    // thing a walk may not change is this one** - and it is here rather than in
+    // `lamps()` because a light the camera cannot see is still in the scene's
+    // list, so the count a test can see is the count a shader is compiled with and
+    // the number of slots with a lamp on them is not.
+    pointLights: (() => {
+      let n = 0;
+      renderScene().traverseVisible((o) => { if (o.isPointLight) n++; });
+      return n;
+    })(),
     // **A black frame has two causes and they need opposite fixes** - a scene that
     // is genuinely black, or a program that did not compile - and only the second is
     // silent about it. three keeps the log on the program wrapper when
@@ -1965,11 +2623,52 @@ window.__snail = {
     // with every line above it correct, because the fragment closed `main()` a line
     // early and put the tail at global scope.
     glError: renderer.getContext().getError(),
+    // **The program count, and it is here because it is the one counter that can
+    // catch a material's leak and `targets` cannot.** `renderer.info.memory.textures`
+    // goes up when a render target's texture is first bound and never comes back
+    // down: `deallocateRenderTarget()` deletes the GL object and removes it from
+    // three's property map, and decrements nothing. So a buffer that outlives its
+    // reader is invisible in it. **A program is released by `material.dispose()`**,
+    // so a material that outlives its pass is a number that only climbs - and the
+    // county's own override material, with two injections on it, is exactly the
+    // thing a settings row builds and drops.
+    programs: (renderer.info.programs || []).length,
     badProgram: (renderer.info.programs || [])
       .filter((p) => p.diagnostics && !p.diagnostics.runnable)
       .map((p) => `${p.name}: ${(p.diagnostics.fragmentShader || {}).log || p.diagnostics.programLog}`.trim())
       .slice(0, 3),
   }),
+  /**
+   * **Every buffer in the chain that is not the window's size**, read off the
+   * resources themselves and not off the row: the G-buffer, the bounce's flat
+   * colour and the reflection mask, beside the county's own resolution.
+   *
+   * This is the assertion the occlusion ladder change rests on. The ladder used
+   * to have a half-resolution cell on it, so the answer was `half` or `not half`
+   * depending on which step was set, and a **traced reflection marched against
+   * half-res depth breaks against silhouettes** - on a pool the silhouette that
+   * matters is the shoreline. A test that asked "is the chain up" would have
+   * stayed green through the whole of that. So the question is now a number per
+   * buffer, read off the target, and **every cell of the row has to answer the
+   * same one**: the first structural regression test in the suite.
+   */
+  gbuffers: () => {
+    const [w, h] = gbuffers();
+    const one = (t) => (t ? [t.width, t.height] : null);
+    return {
+      pixels: [w, h],
+      gtao: gtaoPass ? one(gtaoPass.normalRenderTarget) : null,
+      flat: flatSize(), mask: maskSize(), maskDepth: maskDepthSize(),
+    };
+  },
+  /**
+   * What is reflecting on the standing course - **the register and not a
+   * derivation**: `reflectKinds()` is the set the pool builder adds to, so a dry
+   * course answers "no water on this course" and a wet one says `pools`. The
+   * menu's tooltip prints exactly this string, so a spec can assert the report
+   * and the panel from one answer.
+   */
+  reflect: () => reflectReport(),
   get mode() { return mode; },
   /** The last frame, as numbers. `grab() - grab()` is two frames of the same
    *  path; `grab()` on either side of a tier change is the two paths. */
@@ -1983,6 +2682,41 @@ window.__snail = {
     raceHills: backdrop.visible, stageHills: stageBackdrop.visible,
     passScene: chainScene() === world.scene ? 'race' : (chainScene() ? 'stage' : null),
     mode,
+  }),
+  /**
+   * The sixteen real lights, and the course's lamps they may be standing on, as
+   * **the binding and not a re-derivation of it**: `bound` is read off each lamp's
+   * own record, which is where `litLamps()` wrote the slot it was given, so a test
+   * that watches a lamp across a walk is watching the state and not a second
+   * sorting of the same list arriving at the same answer.
+   *
+   * `at` is `null` on a slot that is off rather than the place it last stood, and
+   * that is the whole of why it is `null`: a light that has given its lamp up keeps
+   * its last position, so the number is exactly the stale one the glow was drawn
+   * at.
+   *
+   * `on` is the **binding** and `power` is the **light**, and they are two fields
+   * because they are two facts: a lamp keeps its slot under a dark hour and stands
+   * dark, so a slot can read `on` with a `power` of `0` and that is the hour, not
+   * a broken binding. What may not happen is a glow without either - `syncGlow()`
+   * asks for both.
+   *
+   * `posts` is the register's length and it is here because "is every light
+   * standing on a lamp" is unanswerable without it - and because the answer was
+   * once no: the always-dark spare was one more record at `(0, -999, 0)` and the
+   * ranking could not see the nine hundred and ninety-nine metres, so it took a
+   * real light slot and stood a kilometre under the county with a glow on it.
+   */
+  lamps: () => ({
+    posts: lampPosts.length,
+    bound: lampPosts.filter((l) => l.slot !== undefined)
+      .map((l) => ({ slot: l.slot, colour: l.colour, at: l.p.toArray().map((v) => +v.toFixed(2)) })),
+    slots: env.lamps.map((l, i) => ({
+      i, on: !!env.lampOn[i], glow: env.lampGlow[i].visible,
+      at: env.lampOn[i] ? l.position.toArray().map((v) => +v.toFixed(2)) : null,
+      colour: l.color.getHexString(), reach: l.distance,
+      power: +l.intensity.toFixed(3),
+    })),
   }),
   plan: (id) => planTrack(id, trackSeed(id, state.season), seasonScale(state.tier)),
   track: (id) => buildTrack(id, trackSeed(id, state.season), seasonScale(state.tier)),
@@ -1999,6 +2733,99 @@ window.__snail = {
   // `groundDrawnAt()`, and the scenery's `standing()` and `mills()` - the last
   // two of which are the functions the register was emptied and read through.
   groundColumns, groundDrawnAt, standing: standingReport, mills,
+  /**
+   * What the green bower put on the last course built, and `null` when there was
+   * none. **A bower is a section and not a register entry**, so it does not move
+   * `standing()` and would otherwise have no observable at all - and a feature
+   * with no observable is a feature with no gate. `tools/e2e/biome.spec.js` asks
+   * this for a bower on the two courses that build one and for `null` on the
+   * other eight, **and the eight are the half worth having**: `null` there is the
+   * assertion that says the biome is doing the work and not the pool.
+   */
+  bower: bowerReport,
+  /**
+   * The condition table, read off the page, **and that is the whole reason it is
+   * here.** `COND[cond].attr` goes straight into `r.sn.eff[attr]` at `race.js`
+   * with nothing between them, so a condition whose `attr` is not a stat gives
+   * `NaN` on the first frame of its section and every snail on the course stops
+   * dead in the same place with nothing in the console - and **a gate cannot
+   * import `src/core.js` to ask about it**, because Playwright's own loader reads
+   * a project with no `"type": "module"` as CommonJS and `core.js` has a
+   * top-level `await` in it. `tools/plan-test.mjs` can, because node runs it.
+   *
+   * So the table comes off the page a second way, which is also the better way:
+   * **the game is the subject and `core.js` is the thing under test.** One name,
+   * beside `bower` and `setsOf`, both of which are the same kind of question.
+   */
+  cond: () => COND.map((c) => ({ key: c.key, name: c.name, attr: c.attr, base: +c.base.toFixed(3) })),
+  /**
+   * The set names a set-wearing material is actually running, in order.
+   *
+   * **`triplanarSets()` drops a set whose map file is missing** - `sets.filter((s)
+   * => s && s.map)` - so a surface that declares four sets and gets three files
+   * comes up as a three-set material, and `customProgramCacheKey` answers with a
+   * key **another material in the county already owns**: `mat.road` losing its
+   * third set answers `triplanarSets2Uv`, which is `mat.ledge`'s key, and the
+   * road draws with the flank's program, no setts, and nothing anywhere red. The
+   * warning the loader now prints is the first half; this is the assertion, and
+   * **a set of two on the road is the whole failure in one number.**
+   *
+   * **It reads the material and not the biome's table**, because the table is
+   * what was asked for and this is what was built.
+   */
+  setsOf: (which) => setsOf(which),
+  setHeightsOf: (which) => setHeightsOf(which),
+
+  /**
+   * **The biome that is standing, and the four things that went into standing
+   * it.** It is here and not on `race` because it is not a race's: a course built
+   * for the inspector never set a race, and the biome is whatever was built last.
+   *
+   * `sets` is the one worth having, because **the whole of a biome's effect on a
+   * surface is which program three built and not the one it had cached** - and the
+   * failure that causes is a wrong picture rather than a broken one: the key is
+   * `triplanarSets3Uv:ashlands`, so a cache that ignored the biome would hand the
+   * meadow's program to the ashlands ground and it would come back with the
+   * meadow's grain at the meadow's gain. Reading the three keys is the only way a
+   * test can tell that apart from a surface that is simply grey.
+   */
+  biome: () => {
+    const b = biomeNow();
+    return {
+      name: b.name,
+      roles: Object.keys(b.surface).map((r) => `${r}=${b.surface[r].key}`),
+      // **The sixteen as the object itself and not as a list of `key=name`
+      //  strings.** The first version of this hook reported them that way, and a
+      //  spec that asked "what colour is `grassA` in the ashlands" got the string
+      //  `'grassA=grassA'` and passed it straight into `hex()` — which is the
+      //  quiet failure with a stack trace on it, and the reason this is a map.
+      pal: b.pal,
+      props: b.props,
+      far: b.far,
+      fog: b.fog,
+      barren: !!b.barren,
+      sets: {
+        course: mat.course.customProgramCacheKey(),
+        road: mat.road.customProgramCacheKey(),
+        ledge: mat.ledge.customProgramCacheKey(),
+      },
+      // **and the sixteen, as the numbers the surfaces are actually baking**, which
+      // is the only way to catch a `pal` entry naming a colour that is not there:
+      // the key would be `undefined` and a warn would have fired at boot, and a
+      // missing name is a sixteenth key still holding the last biome's value.
+      palNow: Object.keys(PAL_FOR_TEST).reduce((o, k) => {
+        o[k] = PAL_FOR_TEST[k].getHexString();
+        return o;
+      }, {}),
+      // and the fog the race env is actually wearing, which is `TOD.fog` times the
+      // biome's haze and is the only place in the county a fog is tinted
+      fogNow: env.scene.fog.color.getHexString(),
+      hills: { near: mat.hillNear.color.getHexString(), far: mat.hillFar.color.getHexString() },
+    };
+  },
+  /** And the hour key a course is raced in, so a test can ask what a duel reads
+   *  rather than reading the clock and guessing. */
+  raceHourKey: (catId) => raceHourKeyOf(catId),
 
   get cam() {    // `want` is where the race camera is heading, and there is no race on the
     // stable or in the inspector - and a debug getter that throws is a debug
@@ -2038,7 +2865,36 @@ window.__snail = {
     freeCam.look = false;
     return true;
   },
+  /**
+   * A course, opened to be walked, and **the same entry point the season card's
+   * button uses** - so a test walks it the way a player does, off the same
+   * `openInspector()`, and a shortcut that only set `mode` would sit a frame
+   * short of the code that costs the probes.
+   */
+  inspect: (catId) => openInspector(catId),
   start: (id) => { startRace(id || nextRaceId() || seasonFinaleId(state.tier)); showRace(); },
+  /**
+   * A duel, and **the whole of it is the two calls below**: the same entry point
+   * the field card's button uses, so a test and a player run the identical path
+   * rather than a test-only shortcut that would pass while the button is broken.
+   */
+  challenge: () => challengeAdversary(),
+  /**
+   * The wardrobe, opened: `openWardrobe()` and not `renderWardrobe()`, because the
+   * test wants the buttons in the document the way a player finds them and a
+   * `#wdFaces button` that was never appended is not the shop.
+   */
+  openWardrobe: () => openWardrobe(),
+  /**
+   * What the plinth snail is wearing, read off its own face mesh rather than off
+   * `state.face` — which is the half of the wardrobe that can be wrong without
+   * anything throwing: the state is right, the save is right, and the snail on the
+   * plinth is wearing last season's hat.
+   */
+  plinth: () => {
+    const st = stageOf();
+    return st && st.snail ? (st.snail.def.face || null) : null;
+  },
   /** run a whole race with the clock, for checking balance without watching it */
   sim: (secs, dt) => {
     dt = dt || 0.04;

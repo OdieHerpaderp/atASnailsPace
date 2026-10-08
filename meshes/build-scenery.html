@@ -55,11 +55,19 @@
 <h2>the lanterns</h2>
 <button id="lantern-pole">write lantern-pole</button>
 <button id="lantern-arch">write lantern-arch</button>
+<button id="candle-lantern">write candle-lantern</button>
+
+<h2>the green bower</h2>
+<button id="bower-arch">write bower-arch</button>
+<button id="bower-foliage">write bower-foliage</button>
+<button id="bower-litter">write bower-litter</button>
 
 <h2>the mushrooms</h2>
 <button id="mushroom-giant">write mushroom-giant</button>
 <button id="mushroom-pale">write mushroom-pale</button>
 <button id="mushroom-rooted">write mushroom-rooted</button>
+<button id="mushroom-red">write mushroom-red</button>
+<button id="mushroom-brown">write mushroom-brown</button>
 
 <h2>the farmstead</h2>
 <button id="hut">write hut</button>
@@ -78,15 +86,43 @@
 <button id="conifer">write conifer</button>
 <button id="evergreen">write evergreen</button>
 <button id="broadleaf">write broadleaf</button>
+<button id="pine">write pine</button>
+<!-- **And the blossom tree, in the land and not in the ashlands, because it stands
+     in both biomes** and the section above is where the county's trees are. The
+     buttons are hand-written and the failure for getting one wrong is a `null
+     .onclick` that throws before the export hook is injected at the last
+     `</script>`, so a page on which no piece can be written at all. -->
+<button id="cherry-tree">write cherry-tree</button>
 <button id="fountain">write fountain</button>
 
 <h2>the stones</h2>
 <button id="rock">write rock</button>
 <button id="mossy-rock">write mossy-rock</button>
 <button id="bush">write bush</button>
+<button id="cactus">write cactus</button>
+<button id="cactus-barrel">write cactus-barrel</button>
 
 <h2>the half-way</h2>
 <button id="watchtower">write watchtower</button>
+
+<!-- **And the ashlands' eight, and the section is the biome's `props` list.** The
+     buttons are hand-written rather than generated because the whole page is, and
+     a name in `PIECES` with no button here is a piece you cannot write from this
+     page - which is exactly what happened to the first five of these when they
+     were added, and the failure is a `null.onclick` a long way down the module
+     that takes the export hook with it: the hook is injected at the last
+     `</script>`, so anything that throws before it means a page on which
+     `window.__sceneryExport` does not exist and no piece in the county can be
+     written. -->
+<h2>the ashlands</h2>
+<button id="ash-tree">write ash-tree</button>
+<button id="basalt-column">write basalt-column</button>
+<button id="ash-tuft">write ash-tuft</button>
+<button id="vent">write vent</button>
+<button id="obsidian-shard">write obsidian-shard</button>
+<button id="ash-scrub">write ash-scrub</button>
+<button id="ash-fallen">write ash-fallen</button>
+<button id="snag">write snag</button>
 <button id="all">write them all</button>
 <button id="prev">preview</button>
 <pre id="log"></pre>
@@ -153,6 +189,8 @@ function shaded(g, lo, hi, c) {
 }
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const lerp = (a, b, t) => a + (b - a) * t;
+/** The world's up, as a vector, for the places that cross a direction with it. */
+const UP = new THREE.Vector3(0, 1, 0);
 
 /**
  * three's own primitives come indexed and the shapes here are built by hand
@@ -285,14 +323,9 @@ function partAt(geo, m, c, tile) {
  * nearly always visible in that.
  */
 function merge(parts, who) {
-  // Every part into a merge has to carry the same attributes, and the one that
-  // differs is almost always the uv: three's own primitives arrive with one
-  // whether or not the piece wants it, and a piece written out of position and
-  // colour buffers by hand arrives with none. So a part that has no uv gets a
-  // box projection on the way in, and a part that has one - the moss on a
-  // stone, which copies the stone's - keeps it.
   for (const g of parts) if (g && !g.attributes.uv) boxUV(g);
-  const g = parts.length === 1 ? parts[0] : _mergeGeometries(parts);
+  const flatParts = parts.map(g => g && g.index ? g.toNonIndexed() : g);
+  const g = flatParts.length === 1 ? flatParts[0] : _mergeGeometries(flatParts);
   if (!g) {
     const sets = [...new Set(parts.map((p) => (p ? Object.keys(p.attributes).sort().join('+') : 'null')))];
     throw new Error(`mergeGeometries returned null${who ? ' in ' + who : ''}:`
@@ -677,7 +710,7 @@ function radiusAt(profile, y) {
 function mushroomCap(R, rise, under, seg, opts) {
   const { top, gill, rimc, plate = C.gill, scallop = 0, lobes = 9, ribs = 20, flecks = 7,
     smooth = false, domeSteps = 0, rimSteps = 0, fleckR = 0.13, gillSides = 4, fleckSides = 6,
-    bump = null, into = null, uvs = null, lift = 0 } = opts;
+    gillR = 0.042, bump = null, into = null, uvs = null, lift = 0 } = opts;
   const wobble = capWobble(R, scallop, lobes);
   // The height of the gill plate at a fraction `t` of the radius, from the
   // profile below. Both the plate and the gills cut into it are built off this
@@ -776,7 +809,7 @@ function mushroomCap(R, rise, under, seg, opts) {
       const rr = R * t * wobble(a, R * t);
       const p = new THREE.Vector3(dx * rr, plateY(t) - 0.02 + lift, dz * rr);
       if (prev) {
-        const g = cyl(0.042, 0.038, 1, gillSides);
+        const g = cyl(gillR, gillR * 0.9, 1, gillSides);
         Q('gills', g, along(prev, p), gill);
       }
       prev = p;
@@ -1211,7 +1244,7 @@ function mushroomRooted() {
     stalk.push(sgrad(strut(from, to, 0.1, 0.22, 6), M(), 0, 1, C.stem));
   }
   for (const st of strands(R, 0.85, 10, 3.2, C.stem, 3, true)) stalk.push(smove(st, M(0, H, 0), true));
-  return {
+return {
     '': crease(stalk, 'mushroom-rooted', 64),
     cap: crease(into.cap, 'mushroom-rooted-cap', 64),
     gills: crease(into.gills, 'mushroom-rooted-gills', 64),
@@ -1219,11 +1252,69 @@ function mushroomRooted() {
 }
 
 /**
+ * The small ones: a red cap and a brown one, in the grass at the side of the
+ * lane. They are the mushrooms of the open ground, and they are the only two in
+ * the county that are **one surface of revolution and nothing else** - a cap and
+ * a stem, no gill plate under it, no skirt, no flecks, no strands.
+ *
+ * They are built the same way the three big ones are built, and for the same
+ * reason: smooth shaded, so the dome is a curve and not a set of facets, and
+ * split into the same three surfaces - the stalk, the outside of the cap and
+ * the inside of it - because those are three surfaces and the map that suits
+ * one is wrong on the other two. The pale one's argument, in miniature: a cap
+ * that has been out in the weather is the same cap at ten centimetres across
+ * as it is at six metres, which is the whole reason one map serves all five.
+ *
+ * There is no gill plate here. A mushroom this small has no dish under its cap
+ * - the cap comes straight down to the stem - so the underside is the rim's
+ * own roll and the inside of the dome, and `mushroomCap()` builds that for
+ * them: the `under` it is given is the roll's own depth, the gill plate it
+ * would otherwise have is the dome turned back to the rim at the same zero
+ * the dome lands on, and the gills themselves are the blades lying in it. The
+ * two are the same call, at two sizes, and the maps are the same three.
+ *
+ * `plain` is the shipped face and these two are the shipped mushrooms: the
+ * geometry is the thing, and the colour is in the vertices, in the jar.
+ */
+function smallMushroom(R, H, capC, stemC) {
+  const stalk = [];
+  // a stem that swells in the middle and comes back to the foot, which is what
+  // a thing that has been standing in the grass looks like: the top of it is
+  // the same width as the cap's own roll meets it
+  const stem = [[0, 0], [0.036, 0.03], [0.030, 0.09], [0.025, 0.13], [0.027, 0.16], [0.024, H]];
+  stalk.push(sgrad(slathe(resample(stem, 20), 24, null, null, STEM_UV), M(0, 0, 0), 0, H, stemC, true));
+  // the cap, and the same three surfaces the big ones get
+  const into = { cap: [], gills: [] };
+  mushroomCap(R, R * 0.55, R * 0.16, 36, {
+    top: capC, gill: stemC, rimc: capC, ribs: 14, flecks: 3, fleckR: 0.05,
+    gillR: 0.042 * R / 3, gillSides: 4, fleckSides: 6,
+    smooth: true, domeSteps: 12, rimSteps: 5,
+    bump: (x, y, z) => fbm(x * 1.4, y * 1.4, z * 1.4, 41, 2) * 0.006
+      + fbm(x * 3.7, y * 3.7, z * 3.7, 47, 1) * 0.003,
+    into, uvs: CAP_UV, lift: H,
+  });
+  return {
+    '': crease(stalk, '', 64),
+    cap: crease(into.cap, '-cap', 64),
+    gills: crease(into.gills, '-gills', 64),
+  };
+}
+
+/** The red one, in the clump where they turn up. */
+function mushroomRed() {
+  return smallMushroom(0.11, 0.175, C.mushroomRed, C.stem);
+}
+/** The brown one, scattered through the grass. */
+function mushroomBrown() {
+  return smallMushroom(0.105, 0.165, C.mushroomBrown, C.stem);
+}
+
+/**
  * A house: rough posts, plank walls and a deep thatch, all of it standing off
  * the ground with a deck out the front.
  *
- * The roof is two half-slabs meeting at the ridge, and that is what reads as a
- * roof rather than a box - the old four slopes came out a cross - and the
+ * The roof is two half-slabs meeting at the ridge, and that is what reads as
+ * a roof rather than a box - the old four slopes came out a cross - and the
  * chimney is the one thing on it that is not thatch. The posts are each a
  * slightly different length and a slightly different lean, because nobody cut
  * them to order, and the thatch is frayed along the eaves.
@@ -1974,6 +2065,234 @@ function lanternArch() {
   return { frame: merge(frame), paper: move(lant.paper, M(0, H - 1.7, 0)) };
 }
 
+/**
+ * A hurricane lantern on an iron stake: four panes of glass in a square frame,
+ * a candle burning behind them, and a ring to carry it by. Three parts and three
+ * surfaces, which is the whole of what this piece is.
+ *
+ * **The stake is not in the photograph and it is the reason the piece is here.**
+ * A lantern of this size stands about a quarter of a metre on the ground, and a
+ * quarter of a metre of glowing glass in the grass at the edge of a course is a
+ * lit weed: the verge is two metres of meadow deep, a tuft is a third of a metre
+ * across, and the reference's own base would have been under one. It is on an
+ * 86 cm stake so the panes sit between a metre and a quarter up, which is where
+ * `placeLamps()` puts every other light on the course and where the one it
+ * matters is - the verge it lights.
+ *
+ * So the whole of the geometry is a hand lantern and the stake is one extra rod,
+ * and the sizes below are the hand lantern's: the panes are 240 mm across and
+ * 300 mm tall, which is the proportion the photographs have and the reason the
+ * piece is not a cube with a roof on it.
+ */
+function candleLantern() {
+  const STAKE = 0.86;              // the ground to the foot of the base plate
+  const BOX = 0.24, BOX_H = 0.30; // the glass box, outside, square in plan
+  const POST = 0.016;              // a corner post is a flat bar and not a rod
+  const BASE_T = 0.020, CAP_H = 0.062, RING_R = 0.052, RING_T = 0.0065;
+  const CANDLE_H = 0.15, CANDLE_R = 0.047;
+  // The four heights everything else is read off. The base is **two plates and
+  // not one**, a foot and a deck, because the reference has a lip round it and a
+  // single slab with a bevel on it reads as the plinth a building stands on
+  // rather than as something a hand picked up and carried away with.
+  const FOOT = STAKE, DECK = STAKE + 0.010, GLASS = STAKE + BASE_T + 0.004;
+  const TOP = GLASS + BOX_H, BRIM = TOP + 0.014, RIDGE = BRIM + CAP_H;
+  const HX = BOX / 2 - POST / 2;    // a post's own centre, half a bar in from the face
+  // The metal tile is **30 centimetres and not the county's third of a metre**,
+  // and the first version of this piece had it at **fourteen**, on the reasoning
+  // that a sixteen-millimetre corner post wants a small tile or `metal-rgh`'s
+  // whole range lands on one leg of it. That is the rule **backwards**, and the
+  // render says so: a tile is how many *metres* one copy of the map covers, so a
+  // smaller tile is more map per metre, which is a *higher* frequency, which is
+  // more speckle on a small member rather than less. At 14 cm the whole frame came
+  // up as **grey granite** - the oxide blotches in `metal-albedo` are half a tile
+  // across and the members were five blotches wide, and a dark iron bar that is
+  // blotched is a cobble, not a bar.
+  //
+  // So the tile goes **up**, and the two ends of it are what fixes it. The
+  // members want the highest frequency the frame can carry without aliasing, and
+  // the plates - 270 mm across, seventeen times the width of a post - want the
+  // county's own third of a metre so that one plate reads as one weathered
+  // sheet rather than as nine. **Thirty centimetres is the number both ends can
+  // live with**: a post is a fifth of a tile and shades as a bar, and a base plate
+  // is most of one.
+  const TILE = 0.30;
+  // **And the creases at 34 degrees**, which is the third time that number has
+  // been the answer to a piece made of both. Below it a ten-sided rod shades as
+  // one curve and a box keeps its corners; above it the cap's four slopes round
+  // into each other and a lantern's roof comes out as a dome, which is the one
+  // shape this piece must not be. The pyramid is a `cone()` of **four** segments
+  // and its facets are 90 degrees apart, so it is hard on purpose.
+  const CREASE = 34;
+  const frame = [];
+  /* ---- the stake, and the two plates it stands the lantern on ---------- *
+   * The stake is a flat bar and not a spike, and it is **tapered**, because a
+   * spike driven into a verge is a thing you trip over and a bar reads as a made
+   * object from thirty metres where a spike reads as a shadow.                 */
+  frame.push(grad(cyl(0.017, 0.026, STAKE, 12), M(0, STAKE / 2, 0), 0, STAKE, C.ironDark, TILE));
+  frame.push(part(cyl(0.062, 0.030, 0.055, 12), M(0, 0.026, 0), C.ironDark, TILE));
+  frame.push(grad(box(BOX + 0.058, 0.010, BOX + 0.058), M(0, FOOT + 0.005, 0), FOOT, DECK, C.ironDark, TILE));
+  frame.push(grad(box(BOX + 0.036, BASE_T - 0.010, BOX + 0.036),
+    M(0, DECK + (BASE_T - 0.010) / 2, 0), FOOT, GLASS, C.ironBody, TILE));
+
+  /* ---- four corner posts, which is what holds the panes ------------------ */
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    frame.push(grad(box(POST, BOX_H, POST), M(sx * HX, GLASS + BOX_H / 2, sz * HX),
+      GLASS, TOP, C.ironBody, TILE));
+  }
+
+  /* ---- one flat strap across each face, on the face ---------------------- *
+   * **A strap lies in the plane of the pane it crosses and not through the
+   * middle of the box**, and the first version of this piece put every one of
+   * them through the middle: the bearing was turned *outside* the offset, so
+   * `makeRotationY(k * PI/2).multiply(atGlass)` spun the strap about the
+   * lantern's own origin and only then carried it to the middle of the glass -
+   * which is the middle of the box, on the axis, **where the candle is**. Two of
+   * the four came out in the plane `x = 0` and two in `z = 0`, and the second
+   * pair were the first pair turned through half a circle, so what the piece
+   * actually had was **two bars crossing in an X straight through the wax** and
+   * not one strap on any face at all.
+   *
+   * The candle came out **sawn in half by its own frame**, and nothing said so:
+   * the glb loads, the four parts all carry their attributes, the inspector's
+   * bounding boxes are right, and the four numbers that place the light - which
+   * are read off the flame and the wax and not off the frame - never moved. The
+   * tell is a bar drawn over the one thing in the piece that is meant to be the
+   * brightest, with **the frame's own members nowhere near it**: a diagonal that
+   * does not meet a corner post is not a brace, it is a mistake.
+   *
+   * So the order is **bearing, then offset, then lean**, which is the only order
+   * in which the last of those is about the face rather than about the lantern.
+   * A strap's lean is a turn about the axis of the pane it lies on; the face's
+   * bearing is a turn about the axis the lantern stands on. Compose them in one
+   * matrix and the lean is carried by the bearing as well, which is a pinwheel on
+   * two faces and a butterfly on the other two. It is also the order that puts
+   * the strap **6.5 centimetres out** from the wax's 4.7, which is the whole of
+   * what "on the face" means.
+   *
+   * **And the strap is built along its own `y` and not along its `z`**, which is
+   * the second half of the same mistake and cost another round. A box's long
+   * axis is `z` by habit, and the turn that tips a `z` up into the face plane is
+   * about `x` - but the turn that tips a `y` is about `z`, and it is the only one
+   * of the two that **leaves the thickness on the axis the pane is square to**.
+   * `makeRotationZ` does not move `z` at all, so a strap built the other way
+   * round came out leaning across the face *and* standing off it by its own
+   * width: 70 millimetres from the candle's axis where a face plane is at 112,
+   * which is not on a face and not in the middle either. The tell is the number:
+   * **a brace whose distance from the axis is not the half-width is not on the
+   * pane**, whatever order the matrices went in.                              */
+  const span = BOX - POST, rise = BOX_H - 0.012, strap = Math.hypot(span, rise);
+  const tilt = Math.atan2(span, rise);          // how far it leans off the upright
+  const midY = GLASS + BOX_H / 2;
+  const onFace = new THREE.Matrix4().makeTranslation(0, midY, HX);
+  for (let k = 0; k < 4; k++) {
+    frame.push(grad(box(0.012, strap, 0.0055),
+      new THREE.Matrix4().makeRotationY(k * Math.PI / 2)
+        .multiply(onFace)
+        .multiply(new THREE.Matrix4().makeRotationZ(k % 2 ? tilt : -tilt)),
+      GLASS, TOP, C.ironDark, TILE));
+  }
+
+  /* ---- the cap: a brim and a four-sided pyramid, and the ring on it -------
+   * A `cone()` of four radial segments puts its **corners on the axes**, so it is
+   * a diamond and not a square: built straight off one it overhangs the panes on
+   * two sides and stands inside them on the other two. A quarter turn and
+   * `hw * 1.4142` is what makes it a square. The brim is the other half and is
+   * there whatever the pyramid does, because it is what hides the tops of the
+   * four posts and the reference's cap is two pieces.                          */
+  const brimHW = (BOX + 0.030) / 2;
+  frame.push(grad(box(brimHW * 2, 0.014, brimHW * 2), M(0, TOP + 0.007, 0), TOP, BRIM, C.ironBody, TILE));
+  frame.push(grad(cone(brimHW * 1.4142, CAP_H, 4), M(0, BRIM + CAP_H / 2, 0, 1, 1, 1, 0, Math.PI / 4, 0),
+    BRIM, RIDGE, C.ironBody, TILE));
+  // and the finial the ring hangs on, which is the county's one bronze at two
+  // centimetres across, on the argument `push-crate` set for its rivet heads
+  frame.push(part(ball(0.011, 12), M(0, RIDGE + 0.004, 0), C.brass, TILE));
+  // The ring is the whole of the piece's silhouette from above the hedge, so it
+  // gets the section's full count and the turn's is trimmed: **eight sides on
+  // the tube and not twelve**, and it is faceted on purpose, because a ring
+  // somebody forged by hand is faceted and a smooth one is a tube of pipe. The
+  // sixteen round the turn are under the crease angle and shade as a curve.
+  frame.push(grad(new THREE.TorusGeometry(RING_R, RING_T, 8, 16),
+    M(0, RIDGE + 0.011 + RING_R, 0), RIDGE, RIDGE + RING_R * 2, C.ironBody, TILE));
+
+  /* ---- the saucer the candle stands on ---------------------------------- */
+  frame.push(grad(cyl(0.078, 0.084, 0.010, 14), M(0, GLASS + 0.006, 0), GLASS, GLASS + 0.020, C.ironDark, TILE));
+
+  /* ---- the panes, as four quads, and nothing else ------------------------ *
+   * They are **unwelded**, which is what four panes of glass in a frame are:
+   * welded into one box the far pane hides behind the near one and the candle is
+   * only visible through the front of the lantern. A pane has no thickness worth
+   * modelling at this size, so a quad is the whole of it.
+   *
+   * And a pane **carries a colour and not nothing**, which is a rule rather than
+   * a choice: every part of a prop wears one, and a part with no `color`
+   * attribute comes up in three as the default attribute value - white - so a
+   * pane that forgot it would be a pane of pure white glass, and the tint that
+   * is the whole point of the piece would be multiplying one. `glassPane` is a
+   * cool 0.74 for the reason the palette gives.                               */
+  const pane = [];
+  for (const [px, pz, ry] of [[HX, 0, Math.PI / 2], [-HX, 0, -Math.PI / 2], [0, HX, 0], [0, -HX, Math.PI]]) {
+    pane.push(spart(new THREE.PlaneGeometry(BOX - POST, BOX_H - 0.006),
+      M(px, GLASS + BOX_H / 2, pz, 1, 1, 1, 0, ry, 0), C.glassPane, false, TILE));
+  }
+
+  /* ---- the wax, and the flame standing off it --------------------------- *
+   * `paperWarm` is over one **because it is the same wax a paper lantern is**,
+   * and that is the argument for both: a value below one cannot be the inside of
+   * something that is burning.
+   *
+   * **The flame is a part of its own and that is the whole of what the split is
+   * for**, because the light in this lantern is read off one geometry's bounding
+   * box and a merged part's box is a box. Put the wax and the flame in one piece
+   * and the box runs from **0.896** at the foot of the wax to **1.130** at the tip
+   * of the flame, and its middle is **1.013** - which is fifty-seven millimetres
+   * below the top of a hundred-and-fifty-millimetre wax, that is, **inside it**. A
+   * point light inside the wax gives it no diffuse light at all, because every
+   * face of the wax has its normal turned away from it, and what a candle's wax
+   * then has left is its albedo under the moon: a red lantern's candle comes out
+   * grey. The flame on its own is a box whose middle is the flame - **1.101** - so
+   * the light lands on the flame and the wax is lit from above by it - the top of
+   * the candle hot, the sides barely, the foot dark, which is the thing a
+   * photograph of a lit candle is.
+   *
+   * And it is also why the flame carries the tint and the wax carries one too.
+   * **A material's emissive is not multiplied by its vertex colour**, so the one
+   * surface in this lantern whose brightness is its own is the one that reads
+   * warm whatever colour the lantern is - which is correct, because a flame's
+   * core is paler than everything around it, and which is the same argument the
+   * paper lanterns have always had for the same reason.
+   *
+   * Both lathes are **smooth**, which is the whole difference between a candle
+   * and a stack of discs: `slathe()` shares its vertices round the turn, so
+   * twelve segments shade as one curve, and `crease()` puts the hard edge back
+   * where the wax meets its own wick. Every part here is `spart` and not `part`,
+   * because one of them flattened would put an indexed and a non-indexed
+   * geometry in the same `merge()` and `mergeGeometries` answers that with null. */
+  const waxY = GLASS + 0.012;
+  const wax = slathe(resample([
+    [0, 0], [CANDLE_R, 0], [CANDLE_R - 0.003, CANDLE_H * 0.68], [0.030, CANDLE_H], [0, CANDLE_H + 0.002],
+  ], 9), 12);
+  // the wick, which is what the gap between the wax and the flame is: the
+  // reference has a flame standing clear of the top of its candle, and a flame
+  // sitting on the wax does not
+  const candle = crease([
+    spart(wax, M(0, waxY, 0), C.paperWarm, false, TILE),
+    spart(cyl(0.0016, 0.0016, 0.026, 4), M(0, waxY + CANDLE_H + 0.011, 0), C.dark, false, TILE),
+  ], 'candle-lantern-candle', CREASE);
+  // and `flameHot`, hotter and paler than the wax, because a flame's core is the
+  // one place in the county the light comes from rather than goes to
+  const flame = slathe(resample([
+    [0, 0], [0.013, 0.004], [0.0145, 0.013], [0.0128, 0.025],
+    [0.0088, 0.038], [0.0032, 0.050], [0, 0.058],
+  ], 9), 8);
+
+  return {
+    frame: crease(frame, 'candle-lantern-frame', CREASE),
+    candle,
+    pane: merge(pane, 'candle-lantern-pane'),
+    flame: spart(flame, M(0, waxY + CANDLE_H + 0.026, 0), C.flameHot, false, TILE),
+  };
+}
+
 /* ---------------------------------------------------------------- the lilies */
 
 /**
@@ -2521,6 +2840,367 @@ function mossyRock() {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * The green bower. A wrought-iron hoop and the leaf that has grown over
+ * it, and the two are in this file because the county's only way into
+ * `meshes/` is a page of three.js.
+ * ------------------------------------------------------------------ */
+
+/** The bower's own three numbers, and they are **shared with the placement** and
+ *  written down here for the same reason `candleLantern`'s `STAKE` is: the game
+ *  has to know where the feet are to ask the ground under them, and a number read
+ *  out of a `.glb` at placement time is a number the model can change under.
+ *  `src/scenery.js`'s `BOWER_SPAN` and `BOWER_H` are these two. */
+/**
+ * **Five point nine and not four point six**, and the number is the placement's:
+ * a hoop's feet stand at ±2.95 and the ribbon's edge is at `sm.w` = 2.8, so the
+ * feet are a hand's width **outside** the cobbles. At 4.6 they stood at ±2.3,
+ * which is half a metre inside the road's own edge, and the iron came up through
+ * the setts.
+ */
+const BOW_SPAN = 5.9, BOW_H = 4.3;
+/**
+ * Which way round the arch the sun is, **in the model's own frame** - and it is a
+ * number rather than a light because the game tints and rotates each instance and
+ * none of the two is a thing this file can see. What it buys is a **spread**:
+ * strands on the lit side reach out from the arch and strands on the shaded side
+ * hang straight down, and without it every strand on both sides of every hoop
+ * hangs parallel and the canopy is a fringe of vertical lines.
+ */
+const BOW_SUN_SIDE = 0.55;
+
+/**
+ * A light open hoop across the lane, and **it is thin and it is mostly hidden**,
+ * and both of those are the reference.
+ *
+ * `references/tunnel3.jpg`'s lower half is the frame on the day before it was
+ * planted: a half-barrel of **willow rods a centimetre and a half across**, you
+ * can see the grass and the daylight straight through it, and the man standing in
+ * it is visible from the hip up through the crown. **The first version of this was
+ * a sixty-millimetre wrought-iron arch with two concentric rings and seven heavy
+ * spokes, and twenty-six of them down a lane was a black ladder lying over the
+ * road** - which is the exact thing the reference is not, and the exact thing the
+ * road could not be seen through.
+ *
+ * So every member here is **12 to 18 millimetres**, the whole trellis is **one
+ * arch and four struts**, and the count of rods is what makes it read as made
+ * rather than as bent pipe. The reason it is a hoop and not the reference's
+ * half-barrel of longitudinal ribs is the placement: `standBower()` drops one of
+ * these every `BOWER_PITCH` metres square to the lane, and **a barrel of ribs
+ * running the length of a tunnel is one geometry standing once** - twenty-six
+ * instances of a two-metre hoop give the reference's *rhythm* without its
+ * structure, and the vegetation is what closes the gaps the rhythm leaves.
+ *
+ * **The arc is not a semicircle either**, and that is unchanged: `sin^0.82`
+ * flattens the crown and swells the springing, which is both what a garden arch
+ * looks like and what leaves the racing camera's eye - about `g.y + 2.4` and two to
+ * four and a half metres out - room to pass underneath. Span along **local X**,
+ * because the placement squares the hoop to the lane and that only crosses the road
+ * if the span is on X.
+ */
+function bowerArch() {
+  const parts = [];
+  const RX = BOW_SPAN / 2;
+  const MAIN = 0.017, THIN = 0.009;   // 34 mm for the arch, 18 mm for everything else
+  /** The arc itself, as a path of points the `tube()` below can sweep. */
+  const arcPts = [], arcRad = [];
+  const N = 30;
+  for (let i = 0; i <= N; i++) {
+    const th = Math.PI * (i / N);
+    const y = BOW_H * Math.pow(Math.sin(th), 0.82);
+    arcPts.push(new THREE.Vector3(-Math.cos(th) * RX, y, 0));
+    arcRad.push(MAIN);
+  }
+  parts.push(grad(tube(arcPts, arcRad, 6, [1, 6]), M(), 0, BOW_H, C.ironBody));
+  /** A point on the arc by angle - every member is read off this one curve, so
+   *  nothing here can drift off the arc it is on. */
+  const on = (th) => new THREE.Vector3(
+    -Math.cos(th) * RX, BOW_H * Math.pow(Math.sin(th), 0.82), 0);
+  /** The radial member between two angles, and it is **one strut** because a
+   *  cylinder that has to point somewhere by hand is silently wrong. */
+  const spoke = (a, b) => parts.push(rib(a, b, THIN, THIN, C.ironDark, 4));
+  // **Four struts and no rings.** The reference has no rings: a ring reads as a
+  // circle drawn on the green and a circle is the shape the eye reads first, and
+  // the whole of this piece wants the eye to read leaves. Four struts across the
+  // crown give the trellis its depth and leave the rest to the foliage.
+  for (const a of [0.22, 0.42, 0.58, 0.78]) spoke(on(Math.PI * a), on(Math.PI * (a + 0.10)));
+  // and two uprights at the springing, which is what a willow hoop is pegged to
+  for (const sx of [-1, 1]) {
+    const footX = sx * RX;
+    parts.push(grad(cyl(0.020, 0.026, 0.34, 6), M(footX, 0.17, 0), 0, 0.34, C.ironDark));
+    // a short peg into the ground and not a base plate: a plate is a paving
+    // slab and this is a rod in a lawn
+    parts.push(grad(cyl(0.013, 0.013, 0.22, 5), M(footX, -0.05, 0), -0.16, 0.05, C.ironDark));
+    // and a tie back along the hoop, which is what stops it standing out of plumb
+    parts.push(rib(new THREE.Vector3(footX, 0.30, 0), on(Math.PI * (sx < 0 ? 0.06 : 0.94)),
+      THIN, THIN, C.ironDark, 4));
+  }
+  // a little slack in it, so twenty-six of them down a lane are twenty-six arches
+  // and not one arch repeated: **a smooth function of where a vertex stands and
+  // not a draw per vertex.** A per-vertex random on a six-sided tube is a bent rod
+  // at best and a knitted one at worst - the sides stop sharing a position and the
+  // shading bands come out in stripes. This is two sines of the vertex's own place,
+  // which puts the same displacement on both ends of every edge.
+  const sway = (g) => {
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      const up = clamp01(y / BOW_H);
+      const mid = clamp01(1 - Math.abs(x) / RX);
+      p.setZ(i, z + (Math.sin(x * 1.7 + y * 0.9) * 0.014 + Math.sin(y * 2.3) * 0.018) * up * mid);
+      p.setY(i, y + Math.sin(x * 2.1) * 0.016 * up * mid);
+    }
+    g.computeVertexNormals();
+  };
+  const out = merge(parts, 'bower-arch');
+  sway(out);
+  return out;
+}
+
+/**
+ * One hanging strand of vine, and **this is the unit the bower is made of** - not
+ * a mass of leaves.
+ *
+ * Three cuts of this piece came before it and all three were masses, and the
+ * picture is what settled it. `references/tunnel4.jpeg` is the close reference
+ * and it is a pergola of **wisteria or a vine of some sort**, and what it shows is
+ * unmistakable and none of the three:
+ *
+ *  - **Long runners, one to two metres, hanging free.** They cross each other and
+ *    they dangle; the eye reads the *line* first and the leaves off it second.
+ *  - **Air between them.** Light comes straight through the canopy in the
+ *    photograph in a dozen places, which is the opposite of a closed mass and the
+ *    whole reason the reference reads as living growth.
+ *  - **Individual leaves on short stalks, alternating up the strand**, sized
+ *    against each other - a big one, a small one, a big one - so no two steps of a
+ *    runner are the same.
+ *
+ * A **mass cannot do any of that.** Three masses in a row is three clouds, and
+ * twenty-six arches' worth of clouds is the "green fluffy cloud" the first cut was.
+ *
+ * **And the stem is here on purpose**, which is the sentence the second cut would
+ * have got backwards: the pale cobweb twigs were wrong because `spray()` draws its
+ * stems in `C.stem` - a bleached straw - at a twelfth of a metre thick, in every
+ * direction. **A strand wants a visible stem.** This one is **6 mm and dark green**,
+ * the colour of a runner in leaf, and it is the line the leaves hang from.
+ *
+ * The wander is **the whole of it**: a strand that runs dead straight is a wire,
+ * and a strand that wanders is a shoot. It is two sines of distance along it, held
+ * to a few centimetres, so a strand is recognisably the same shape twice without
+ * being the same shape twice.
+ */
+function vineStrand(from, dir, len, leaves, seed, r) {
+  const parts = [];
+  const path = [from.clone()];
+  const RAD = 0.0032;
+  /** A unit vector, wandering: two sines of the distance along, so the strand has
+   *  a bend in it and the bend is the same bend all the way down. */
+  const side = new THREE.Vector3(-dir.z, 0, dir.x).normalize();
+  const front = new THREE.Vector3().crossVectors(dir, side).normalize();
+  const SEGS = Math.max(4, Math.round(len / 0.22));
+  const ph = r() * 6.3, ph2 = r() * 6.3;
+  const amp = 0.055 + r() * 0.05;
+  for (let i = 1; i <= SEGS; i++) {
+    const t = i / SEGS;
+    const p = from.clone().addScaledVector(dir, len * t)
+      .addScaledVector(side, Math.sin(t * 3.1 + ph) * amp * t)
+      .addScaledVector(front, Math.sin(t * 2.3 + ph2) * amp * 0.7 * t);
+    path.push(p);
+  }
+  // the runner itself, tapering, and in the dark green of a shoot
+  parts.push(grad(tube(path, path.map((_, i) => RAD * (1 - 0.45 * (i / SEGS))), 4, [1, 6]),
+    M(from.x, from.y, from.z), 0, len, C.leafDark));
+  /* **And the leaves, alternating up it**, and the alternation is what makes a
+   * strand a plant rather than a bottle brush: a runner with leaves only on two
+   * sides has a seam down it and one with them all round has a stripe. Each leaf
+   * is also **its own size** - a big one, a small one, a big one - because a
+   * strand of identical leaves is a comb. */
+  for (let i = 0; i < leaves; i++) {
+    const t = 0.12 + 0.86 * (i + (r() < 0.5 ? 0 : 0.5)) / leaves;
+    if (t > 1.02) continue;
+    const at = from.clone().addScaledVector(dir, len * t)
+      .addScaledVector(side, Math.sin(t * 3.1 + ph) * amp * t)
+      .addScaledVector(front, Math.sin(t * 2.3 + ph2) * amp * 0.7 * t);
+    const side2 = i % 2 ? 1 : -1;
+    // **out to the side and down**, because a leaf on a hanging runner hangs
+    const d = new THREE.Vector3()
+      .addScaledVector(side, side2 * (0.55 + r() * 0.4))
+      .addScaledVector(dir, -0.28 - r() * 0.3)
+      .addScaledVector(front, (r() - 0.5) * 0.5)
+      .normalize();
+    const L = len * (0.13 + r() * 0.10);
+    const lf = vineLeaf(L, 0.10 + r() * 0.09, 0.05 + r() * 0.10, r() * 0.5 - 0.25);
+    // **the leaf's own long axis runs out along `d`**, laid on a basis so its
+    // face is turned up and outward rather than edge-on, which is the difference
+    // between a leaf and a green line
+    const face = new THREE.Vector3(0, 1, 0).cross(d);
+    if (face.lengthSq() < 1e-6) face.set(1, 0, 0);
+    face.normalize();
+    const up = new THREE.Vector3().crossVectors(face, d).normalize();
+    lf.applyMatrix4(new THREE.Matrix4().makeBasis(d, up, face));
+    /* **The leaf's colour, and it is a pair of the jar's greens and not one.**
+     * A strand of identically-coloured leaves is a cut-out, and the reference has
+     * two greens on every runner - a lit leaf and one a hand's breadth further
+     * into the shade of the leaf in front of it. So each leaf picks one of
+     * `leafDark` and `leaf` and is scaled by its own value, and **the pair is
+     * stepped rather than blended**, because a blend of two greens is a third
+     * green and a strand wants two.
+     *
+     * (This also caught the builder's own `tint(g, c)`: it takes a **triple**,
+     * and the first cut passed a scalar, which is `undefined` on every channel
+     * and a black leaf on every one of the seven strands.) */
+    const v = 0.82 + r() * 0.40;
+    const base = r() < 0.45 ? C.leafDark : C.leaf;
+    parts.push(part(lf, M(at.x, at.y, at.z),
+      [base[0] * v, base[1] * v, base[2] * v]));
+  }
+  return parts;
+}
+
+/**
+ * The bower's greenery, in **two meshes in one file** - because they are the two
+ * lengths of strand the plant makes and `partList()` is the county's mechanism
+ * for that. `bower-foliage-mass` is the body of the growth and
+ * `bower-foliage-spray` is the long danglers that hang free of it.
+ *
+ * **Nothing here wears a map, and that is a decision rather than an omission**:
+ * `meshes/maps.js` declares `bower-foliage: { mass: [], spray: [] }`, so the prop
+ * stays unconverted, `propMatFor` has nothing for it, and the placement falls
+ * through to `mat.foliage` - which is **on `WIND_MATS`**, so the canopy bends in
+ * the wind and in the occlusion buffer with it. A converted prop's own material is
+ * not on that set, and a bower that does not move is a green pipe.
+ */
+function bowerFoliage() {
+  /**
+   * One cluster, and it is **several strands and not one**, because a single
+   * strand is a piece of string and three is a plant. **They all hang**, and the
+   * fanning is about as wide as they are long: the reference's growth is a fringe
+   * hanging off an arch and not a ball wrapped round one.
+   *
+   * `size` is the whole cluster. The body is a metre and the danglers a metre and
+   * a half, and **the danglers are fewer and thinner-leaved** - a runner with a
+   * big leaf on it every ten centimetres is a rope of leaves and not a runner.
+   */
+  const cluster = (size, count, len, leaves, seed, sag) => {
+    const r = makeR(seed);
+    const parts = [];
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + r() * 0.8;
+      const out = size * (0.10 + r() * 0.22);
+      /** **The root, spread on a small ring** rather than at the middle, so the
+       *  strands come off one place and not out of a ball. */
+      const from = new THREE.Vector3(
+        Math.cos(a) * out,
+        size * (0.46 + r() * 0.14),
+        Math.sin(a) * out);
+      /** **And they hang**, with the sun's share of each one deciding how far out
+       *  it falls: a strand on the shaded inside of the arch hangs straight and a
+       *  strand on the lit outside reaches away from it, and that spread is most
+       *  of what stops a canopy being a fringe of parallel lines.
+       *
+       *  **And the sun's share is a quarter of what it was, which is a picture and
+       *   not a hedge trim.** The reach ran `0.20 + lit * 0.42` and the extra sag
+       *  `0.18`, so the lit flank reached **0.62 and the shaded one 0.20 - three to
+       *   one**, and three to one on a shape the camera reads from one side at a
+       *   time is a bower that is thick on the sunward flank and thin on the other.
+       *   It was the wrong way round from the reference too: `tunnel.jpg` has the
+       *   growth heaviest **where it is least lit**, because that is where it has
+       *   had longest to grow undisturbed, and the whole point of a shaded side is
+       *   that nothing is pruning it.
+       *
+       *  **So the sun still reads** - it is one `cos(a)` against the arch's own
+       *  sun side, and a canopy in which both flanks grow out identically is a
+       *  green pipe - **at half the difference.** The two numbers are the reach's
+       *  spread and the extra sag, and they are together the shape of this
+       *  argument: the picture was decided by a constant that was three times
+       *  larger than the effect it was standing for. */
+      const lit = clamp01(0.5 + 0.5 * Math.cos(a) * BOW_SUN_SIDE);
+      const d = new THREE.Vector3(
+        Math.cos(a) * (0.30 + lit * 0.26),
+        -(sag + (1 - lit) * 0.11),
+        Math.sin(a) * (0.30 + lit * 0.26)).normalize();
+      parts.push(...vineStrand(from, d, len * (0.72 + r() * 0.55),
+        leaves + ((r() * 3) | 0), seed + i * 131, r));
+    }
+    return parts;
+  };
+  return {
+    // **the body**: seven strands a metre long, each with about nine leaves on it
+    // - **fifty leaves in a cluster**, against the seven of a `leafMass()` unit,
+    // and that is the reason this reads as foliage and that did not.
+    mass: merge(cluster(1.00, 7, 1.00, 9, 6101, 0.72), 'bower-foliage-mass'),
+    // **the danglers**: three strands a metre and a half long with six leaves each,
+    // and **six and not nine is the whole of the difference between a runner and a
+    // rope of leaves** - a strand's leaves have to be far enough apart that you
+    // see the runner between them.
+    spray: merge(cluster(1.35, 3, 1.55, 6, 8827, 0.80), 'bower-foliage-spray'),
+  };
+}
+
+/**
+ * **What falls off it**, and it is a model of its own and not a third part of the
+ * foliage, because it takes a different material and **a material is part of what
+ * a mesh is here** - green leaves in `mat.foliage` so they bend in the wind, brown
+ * dead leaves in `mat.vcol` so they do not, because **a leaf lying on the ground
+ * that sways is a leaf in the air.** That is the whole of the split, and it is why
+ * this is a second file rather than a third mesh.
+ *
+ * **A drift of dead leaves along both verges and almost none in the middle of the
+ * road**, which is what `references/tunnel.jpg` shows and what a bower without it
+ * does not have. A bower with green hanging over it and bare ground beneath it is a
+ * pergola over a path, and the drift is also the one thing in the picture that says
+ * the growth is old: nothing else carries that.
+ *
+ * **And the twigs are the second half of the same sentence.** Four snapped rods
+ * per clump, thin and dark, lying across one another - a drift of leaves with no
+ * sticks in it is a swept floor, and a bower's floor is not swept. They also read
+ * as the arch's own material fallen off it, which is the cheapest thing in the
+ * county and the least wrong at a glance.
+ *
+ * **Every piece is flat and lying down**, which is the whole of the model: a leaf
+ * stood on edge is a plant and a leaf laid over is litter, and at the ten centimetres
+ * of a dead leaf that is the whole difference between the two.
+ */
+function bowerLitter() {
+  const r = makeR(3391);
+  const parts = [];
+  /* **And the drift is a patch and not a stipple**, because the reference's drift
+   * has a centre and a scatter of leaves laid evenly is a rash. So the leaves are
+   * drawn off a radius that falls off as a square, which puts most of them in the
+   * middle of the clump and a couple out at its edge. */
+  for (let i = 0; i < 26; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.62;
+    const px = Math.cos(a) * d, pz = Math.sin(a) * d * 0.8;
+    /* **Three browns out of the jar and not one brown**, because a drift of one
+     * colour is a paint spill: `earthDark` for a leaf still in it, `dirtB` for a
+     * faded one and `clayDeep` for the blackened one that has been down a
+     * fortnight. The three are stepped rather than blended, because a blend of
+     * two browns is a third brown and a drift needs three. */
+    const pick = r();
+    const base = pick < 0.45 ? C.earthDark : (pick < 0.75 ? C.dirtB : C.clayDeep);
+    const v = 0.78 + r() * 0.46;
+    const L = 0.055 + r() * 0.075;
+    const lf = vineLeaf(L, 0.02, 0.05 + r() * 0.08, r() * 0.7 - 0.35);
+    lf.applyMatrix4(new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0),
+      -(Math.PI / 2) + (r() - 0.5) * 0.5));
+    lf.applyMatrix4(new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 1, 0), r() * 6.3));
+    lf.applyMatrix4(new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), (r() - 0.5) * 0.35));
+    lf.applyMatrix4(M(px, 0.006 + r() * 0.012, pz));
+    parts.push(part(lf, M(), [base[0] * v, base[1] * v, base[2] * v]));
+  }
+  // **the twigs**, four of them, each lying at its own angle across the clump
+  for (let i = 0; i < 4; i++) {
+    const a = r() * Math.PI * 2;
+    const len = 0.24 + r() * 0.30;
+    const x0 = Math.cos(a) * 0.22, z0 = Math.sin(a) * 0.18;
+    const x1 = x0 + Math.cos(a + 1.3) * len, z1 = z0 + Math.sin(a + 1.3) * len;
+    parts.push(rib(new THREE.Vector3(x0, 0.010, z0), new THREE.Vector3(x1, 0.014, z1),
+      0.0055, 0.0035, C.barkPaleDark, 4));
+  }
+  return merge(parts, 'bower-litter');
+}
+
+
 /** A little repeatable shuffle, so a bush is the same bush on every build. */
 function makeR(seed) {
   let s = (seed | 0) || 1;
@@ -2719,9 +3399,25 @@ const rib = (a, b, ra, rb, c, sides = 5) => part(strut(a, b, ra, rb, sides), M()
  */
 const NEEDLE = [C.needleDeep, C.needleDark, C.needle, C.needleLight, C.needleTip];
 function needleAt(t) {
-  const x = clamp01(t) * (NEEDLE.length - 1);
-  const i = Math.min(NEEDLE.length - 2, Math.floor(x)), f = x - i;
-  const a = NEEDLE[i], b = NEEDLE[i + 1];
+  return rampAt(NEEDLE, t);
+}
+
+/**
+ * The pine's own five, and the same walk along them. A second ramp rather than a
+ * stretch of the conifer's is the whole of what tells the two apart at thirty
+ * metres - the county's spruce is blue where it is dark and this pine is teal,
+ * and it is a yellow-green in the sun where the spruce is grey-olive - so it is
+ * five more keys in the jar rather than a fudge factor in the tree. See the entry
+ * in `meshes/palette.js`; the numbers are the argument and this is the walk.
+ */
+const PINE_NEEDLE = [C.pineNeedleDeep, C.pineNeedleDark, C.pineNeedle, C.pineNeedleLight, C.pineNeedleTip];
+const pineNeedleAt = (t) => rampAt(PINE_NEEDLE, t);
+
+/** Along a five-key ramp, in the ramp's own linear space. */
+function rampAt(ramp, t) {
+  const x = clamp01(t) * (ramp.length - 1);
+  const i = Math.min(ramp.length - 2, Math.floor(x)), f = x - i;
+  const a = ramp[i], b = ramp[i + 1];
   return [lerp(a[0], b[0], f), lerp(a[1], b[1], f), lerp(a[2], b[2], f)];
 }
 
@@ -2991,6 +3687,365 @@ function conifer() {
 }
 
 /**
+ * A tuft of needles: `n` of them off one point, each a **thin closed wedge** - a
+ * face and the same face a millimetre behind it, which is two triangles and is the
+ * whole reason a needle reads as a needle.
+ *
+ * This is the piece the pine is built out of, and it is deliberately **nothing
+ * like `solidFan()`**, which is what the conifer's branches are. A fan is a broad
+ * scalloped plate lying in a plane; a fascicle is fourteen separate spikes off a
+ * point, and the difference is the whole of what separates the county's two
+ * conifers. A plate makes a smooth scalloped edge and a skirt, and a tuft makes a
+ * fuzzy one and a brush - and the reference is blunt about which pine it drew:
+ * every silhouette in it is broken into points, and a silhouette of scallops is
+ * the conifer.
+ *
+ * **The wedge is what makes it solid, and the two faces are why it needs no rim.**
+ * A single triangle is culled from half of the bearings in the county, because the
+ * foliage material is the call site's and is shared with every other plant in it -
+ * making it two-sided for one tree makes it two-sided for all of them, which is the
+ * argument `solidFan()` writes at length. Two faces cost two triangles rather than
+ * four and there is no seam of sky anywhere in the tuft. **No rim at all**, because
+ * every needle's blunt base is buried at the one point they all leave from, and the
+ * gap a rim would close is a two-centimetre hole in the middle of a spray with the
+ * branch running through it.
+ *
+ * Local frame: +x is out along the branch, +y is up. The needles lean down on their
+ * own, because a fascicle hangs and a hemisphere of spikes is a burr.
+ */
+function needleSpray(len, wid, n, thick, sun, r) {
+  const pos = [], col = [];
+  const d = new THREE.Vector3(), side = new THREE.Vector3(), nrm = new THREE.Vector3();
+  const tip = new THREE.Vector3(), p0 = new THREE.Vector3(), p1 = new THREE.Vector3();
+  // and the golden angle rather than an even division, so fourteen needles do not
+  // stand in seven rows and a tuft of them is not a grid
+  const GA = 2.39996323;
+  for (let i = 0; i < n; i++) {
+    const th = lerp(0.22, 1.88, (i + r() * 0.8) / n);
+    d.set(Math.cos(th), Math.sin(th) * Math.cos(i * GA + r() * 0.5),
+      Math.sin(th) * Math.sin(i * GA + r() * 0.5));
+    side.crossVectors(d, UP);
+    if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
+    side.normalize();
+    nrm.crossVectors(side, d).normalize();
+    // **A fascicle leans the way the branch leans, and this is how much.** What
+    // points out along the wood is the long needle and what lies back over the top
+    // of the tuft is a little over half of it - a spray is a leaning teardrop and
+    // not a burr. Equal lengths give a burr, and a crown of burrs is a thistle; a
+    // steep teardrop is the other failure and it cost an attempt: **a tuft whose
+    // needles only go one way is half the width it looks like it is**, so thirteen
+    // of them a hand's width apart leave a hand's width of sky between every pair
+    // and the crown is a rack of stars rather than a mass. Fifty-six hundredths is
+    // where the tuft is round enough to close that gap and still leans.
+    const L = len * (0.56 + 0.44 * Math.cos(th)) * (0.78 + r() * 0.38);
+    const hw = wid * (0.65 + r() * 0.6) * 0.5;
+    tip.copy(d).multiplyScalar(L);
+    // And the light. A needle that points up at the sky is a step lighter than one
+    // hanging under its own tuft, **inside every single spray** - which is the whole
+    // of what makes the reference read as foliage and not as green paper, and it is
+    // per-needle rather than per-tier because the reference has the pale on the top
+    // of a *tuft*, not on the top of a *tier*: at thirty metres a tuft is the
+    // smallest thing on the tree that still has a light and a shade side.
+    const sh = clamp01(sun + d.y * 0.22 - 0.05 + (r() - 0.5) * 0.14);
+    const c0 = pineNeedleAt(sh), c1 = pineNeedleAt(clamp01(sh + 0.24));
+    p0.copy(side).multiplyScalar(-hw);
+    p1.copy(side).multiplyScalar(hw);
+    const put = (v, c, back) => {
+      pos.push(v.x + (back ? -thick * nrm.x : 0), v.y + (back ? -thick * nrm.y : 0),
+        v.z + (back ? -thick * nrm.z : 0));
+      col.push(c[0], c[1], c[2]);
+    };
+    put(p0, c0, false); put(p1, c0, false); put(tip, c1, false);
+    put(p0, c0, true); put(tip, c1, true); put(p1, c0, true);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * A pine: the county's long-needled pine, and the second of its two conifers.
+ *
+ * **It used to be the conifer with the fan swapped for a hanging blade, and that
+ * was a third tree rather than a second.** Five rings of clusters around a trunk,
+ * every cluster a cone of needles standing *straight down* out of its own tier -
+ * so the ring's `reach`, which is a distance along the branch in every other tree
+ * in this file, was being spent on how far a blade fell, and the crown came out
+ * **0.60 m across on a 3.80 m tree**: six and a third times as tall as it was wide,
+ * against the reference's two and a half, and against a conifer in the same county
+ * at one and a half. `tools/inspect.html` has both numbers and they are the whole
+ * of the fault. A curtain of blades hanging off the axis is not a narrow crown, it
+ * is a bare pole with a skirt of string round it.
+ *
+ * So the arrangement is the conifer's one thing it is not, and it is the reference's:
+ * **branches that reach out and hang.** Each whorl's branch leaves the trunk almost
+ * level and finishes twenty-five centimetres below where it left, and the foliage
+ * rides on the branch rather than standing on the tier. That droop is not
+ * decoration and it is where the density comes from - a pine's crown is opaque
+ * because every branch fills the vertical gap under the one above it, and a
+ * whorl-on-a-dish cannot fill a gap it is not in. With eight whorls at 37 cm and a
+ * droop of 40, the tufts of one whorl stand inside the wood of the next, and the
+ * interior of the crown closes.
+ *
+ * The four things that fall out of that, all of them from the reference:
+ *
+ *   - a **bare trunk** for the bottom third, red-brown, five buttress roots. The
+ *     eye reads the trunk before the crown, and the first two attempts in this
+ *     county both started their foliage at a tenth of the way up.
+ *   - **eight whorls**, each turned against the one below, each branch's own height
+ *     jittered so a whorl is eight branches rather than a ring of eight at one
+ *     height. A whorl is a set of branches, not a disc.
+ *   - **fascicles** for the foliage, four along each branch and growing towards the
+ *     tip, because a pine builds its needles out at the end of a limb and the
+ *     inside of its crown is the shadowed middle of the tree.
+ *   - and a **leader**: three tufts and a spike, because a tree that ends in a ring
+ *     of tufts at the top of a ring of tufts ends in a brush.
+ *
+ * **And the bare stubs.** One branch in three carries a bare strut out past its own
+ * foliage with nothing on it, which is the cheapest silhouette in the county and
+ * the one the reference leans on hardest: every tree in it has a limb or two that
+ * has lost its needles, and an old pine is read off exactly that and not off its
+ * age. It is one strut per branch and it does more for the outline than the leader.
+ *
+ * The greens are the pine's own five in the jar rather than the conifer's, and the
+ * reasoning is in `meshes/palette.js`: a spruce is blue-green and this is
+ * yellow-green over teal, and at thirty metres that is the difference between two
+ * species and one tree twice.
+ */
+function pine() {
+  const r = makeR(7531);
+  const wood = [];
+  const needles = [];
+  const H = 4.25;
+  const SEGS = 10;
+  // How thick a needle is. It is a millimetre and it is here so the tuft has two
+  // faces rather than one - the number is not for shading, it is for not being
+  // culled, and `needleSpray()` is where it is spent.
+  const THICK = 0.0016;
+
+  // ---- the trunk, and the five roots it stands on
+  const spine = [new THREE.Vector3(0, 0, 0)];
+  const rads = [0.098];
+  let lx = (r() - 0.5) * 0.03, lz = (r() - 0.5) * 0.03;
+  for (let i = 1; i <= SEGS; i++) {
+    lx += (r() - 0.5) * 0.03;
+    lz += (r() - 0.5) * 0.03;
+    const next = spine[i - 1].clone()
+      .addScaledVector(new THREE.Vector3(lx, 1, lz).normalize(), H / SEGS);
+    // A pine is a slim bole, and this is slimmer than the conifer's at every
+    // section: the reference's trunks are a fifth of the tree's height across and
+    // the conifer's are nearer a quarter, which at four metres is the difference
+    // between a tree and a pole with foliage hung on it.
+    const rad = i === 1 ? 0.098 : i === 2 ? 0.076
+      : lerp(0.068, 0.009, Math.pow((i - 2) / (SEGS - 2), 0.8));
+    wood.push(part(cyl(rad * 0.92, rad * 1.05, 1, 8), along(spine[i - 1], next),
+      i % 2 ? C.barkRedLit : C.barkRed));
+    spine.push(next);
+    rads.push(rad);
+  }
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + r() * 0.4;
+    const out = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    wood.push(rib(new THREE.Vector3(0, 0.24, 0), out.multiplyScalar(0.21).setY(0.004),
+      0.050, 0.013, i % 2 ? C.barkRedDark : C.barkRed, 5));
+  }
+  const spineAt = (t) => {
+    const x = clamp01(t) * SEGS, i = Math.min(SEGS - 1, Math.floor(x));
+    return spine[i].clone().lerp(spine[i + 1], x - i);
+  };
+  const radsAt = (t) => {
+    const x = clamp01(t) * SEGS, i = Math.min(SEGS - 1, Math.floor(x));
+    return lerp(rads[i], rads[i + 1], x - i);
+  };
+
+  // ---- the whorls
+  // The lowest one at a bit over a third of the way up and the highest short of the
+  // leader, and the reach falling away between them on a **square root** rather than
+  // the conifer's three-quarter power. That exponent is the difference in the crown
+  // between the county's two conifers and it is worth the sentence: a spruce tapers
+  // fast and a pine holds its width much further up its own height, so a pine's
+  // crown is a column with a conical top and a spruce's is a cone.
+  const WHORLS = 7;
+  // **The reference's own proportion, and it is the one number that makes a pine a
+  // pine and not a narrower conifer**: its tallest tree is two and a half times as
+  // tall as it is wide and its second is nearly three, where a spruce in the same
+  // county stands at one and a half. `REACH` at 0.68 puts this one at about two
+  // and two tenths, and everything else in the crown is density bought with the
+  // width that gives - which is the trade the whole piece is: a crown this narrow
+  // has to be opaque, and opacity is triangles and not centimetres.
+  const REACH = 0.68;
+  for (let k = 0; k < WHORLS; k++) {
+    const rise = 1 - k / (WHORLS - 1);
+    const t = 0.42 + (k / (WHORLS - 1)) * 0.51;
+    const reach = REACH * Math.pow(rise, 0.60) + 0.10;
+    // and the count off the reach, so the bottom whorl is a ring of thirteen and
+    // the leader is a ring of six
+    const n = Math.max(6, Math.round(6 + reach * 10));
+    // each whorl turned against the one below it, or seven rings of spokes line up
+    // into seven long ribs up the tree
+    const spin = k * 1.7 + r() * 0.4;
+    // and the sun on this whorl. Low down and inside is dark, up top and out is
+    // not, which is a range of about half the ramp - the pine five is brighter at
+    // every step than the conifer's, so half of it is what keeps the two from both
+    // coming out as one green.
+    const sun = clamp01(0.22 + rise * 0.30 + (r() - 0.45) * 0.20);
+
+    for (let j = 0; j < n; j++) {
+      const a = spin + (j / n) * Math.PI * 2 + (r() - 0.5) * 0.34;
+      const out = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+      // **The branch's own height, jittered off the whorl's.** A whorl is a set of
+      // branches and not a disc, and the cheapest way to stop eight of them
+      // standing at one height - which reads as a plate on a pole - is a
+      // six-centimetre wobble per branch.
+      const base = spineAt(t).setY(spineAt(t).y + (r() - 0.5) * 0.07);
+      const L = reach * (0.82 + r() * 0.36);
+      // Two struts, and the elbow between them is the droop: a pine's limb is in
+      // tension where it leaves the trunk and slack at the tip, so the first half
+      // runs out almost level and the second half falls away. Three sides on both,
+      // because a two-centimetre stick is half a pixel at thirty metres and the
+      // segments are the part of this tree the triangle budget is spent on.
+      const elbow = base.clone()
+        .addScaledVector(out, L * 0.46)
+        .setY(base.y - L * 0.09 + (r() - 0.5) * 0.04);
+      const tipW = base.clone()
+        .addScaledVector(out, L)
+        .setY(base.y - L * (0.44 + r() * 0.16) + (r() - 0.5) * 0.05);
+      // Both struts in `barkRedShade` - the wood in the crown's own shadow, and
+      // the reason the crown is a crown and not a wheel with thirteen spokes a
+      // whorl. **A hundred and eighty limbs are inside this tree's foliage and the
+      // sun is on all of them**, so at `barkRedDark` the whole arrangement shows
+      // through its own leaves, which is exactly what the second cut of this tree
+      // was. It is a colour and not a thinner strut: a strut thin enough to stop
+      // reading as a spoke is thin enough to disappear, and the branch still has to
+      // be there for the two or three that come out past the foliage to be
+      // branches rather than lines. The number beside it is the reference's - a limb
+      // is a twentieth of the tree's height through, which at four metres is two
+      // centimetres.
+      const ra = radsAt(t) * 0.34 + 0.007;
+      wood.push(rib(base, elbow, ra, ra * 0.6, C.barkRedShade, 3));
+      wood.push(rib(elbow, tipW, ra * 0.6, ra * 0.22, C.barkRedShade, 3));
+      /** Where the branch is at a fraction of its own run out from the trunk. */
+      const branchAt = (u) => u < 0.46
+        ? base.clone().lerp(elbow, u / 0.46)
+        : elbow.clone().lerp(tipW, (u - 0.46) / 0.54);
+
+      // And the tufts: seven along the branch, from **where it leaves the trunk to
+      // a little past where it ends**, each further out, each bigger, and each
+      // standing off the branch's own line to one side or the other.
+      //
+      // **They start at the trunk, and that is the number that closes the crown.**
+      // A run of tufts that begins a third of the way along the limb leaves the
+      // inner half of every branch bare, and a bare inner half is a spoke with a
+      // bush on the end of it - so a pine built that way is a wheel with thirteen
+      // bushes on it, which is what the second cut of this tree was and what no
+      // amount of tufts further out will fix. **The run also goes past the tip**,
+      // because a pine's foliage hangs off the end of its limbs rather than
+      // stopping at them, and that overhang is the fringe on the silhouette.
+      const SPOTS = 6;
+      for (let s = 0; s < SPOTS; s++) {
+        const u = 0.06 + (s / (SPOTS - 1)) * 1.06;
+        const at = branchAt(Math.min(u, 1));
+        const sway = (j % 2 ? 1 : -1) * L * 0.11 * (0.3 + u);
+        at.x += -out.z * sway + (r() - 0.5) * 0.04;
+        at.z += out.x * sway + (r() - 0.5) * 0.04;
+        at.y += (r() - 0.5) * 0.05 - Math.max(0, u - 1) * L * 0.30;
+        // **The needle is broad and not a spine**, at about three to one, and this
+        // is the number that decides whether the crown is opaque. A needle drawn at
+        // eight to one is under a pixel wide at thirty metres, so four thousand of
+        // them are a shimmering haze and the tree looks thin whatever count they
+        // are at; at three to one a needle is four pixels across, a tuft is a mass
+        // you can see is made of leaves, and the crown closes on the triangles
+        // already spent. It is also what the reference drew - its pine carries
+        // **leaves** with points on them, and a county of pines drawn as eight-to-one
+        // needles is a county of bottle brushes.
+        /* **The needle's size is the one number on this tree that is a fight, and
+         * the fight is between the reference's own two measurements.**
+         *
+         * Its tallest tree draws its leaf blades at about three and a half per cent
+         * of its own height - fifteen centimetres on four metres - and it draws
+         * three thousand of them. Those two numbers cannot both be had at this
+         * triangle budget: **a needle covers its own length squared, so matching
+         * fifteen-centimetre blades wants about seventy needles to every tuft that
+         * thirty-eight-centimetre ones want with thirteen.** At thirteen per tuft
+         * and thirty-eight centimetres the crown is opaque and reads as the
+         * reference; at fourteen and nineteen it is a thinner tree than anything in
+         * the picture, and the trunk comes through. So the blades are the coarse
+         * size and the count buys what the size gave up, and the branch count below
+         * carries the rest.
+         *
+         * It is the same trade as everywhere else in this file: **the triangles go
+         * on the needle and not on the wood.** Two hundred and seventy of the
+         * struts in this tree are inside its own crown and two hundred and seventy
+         * of its fourteen thousand triangles are not. */
+        const size = L * (0.28 + u * 0.13);
+        const g = needleSpray(size, size * 0.30, 13, THICK, sun + u * 0.08, r);
+        // and the roll leans **down**, because a fascicle hangs and a tuft rolled
+        // evenly either way is a burr on a stick
+        g.applyMatrix4(M(at.x, at.y, at.z, 1, 1, 1, 0, a, -0.1 + (r() - 0.5) * 0.45));
+        needles.push(boxUV(g));
+      }
+
+      // And one more tuft, on the axis itself, in the dark. This is the cheapest
+      // thing in the whole tree and it is what stops there being a hole straight
+      // down the middle of the crown - **a pine whose limbs all start at the trunk
+      // and carry their foliage out along themselves has a clear shaft up its
+      // axis**, and a clear shaft is the one thing that reads as a mistake rather
+      // than as a drawing. It goes on every branch, so it is really one tuft per
+      // branch standing in for the foliage the branch left behind, and it is at the
+      // bottom of the ramp because nothing in there has ever seen the sun.
+      const inner = needleSpray(L * 0.30, L * 0.10, 12, THICK, sun - 0.34, r);
+      inner.applyMatrix4(M(base.x, base.y - 0.02, base.z, 1, 1, 1, 0, a, -0.2));
+      needles.push(boxUV(inner));
+
+      // And the bare stub on a third of them. One strut, reaching out past the
+      // foliage with nothing on it, and it is the cheapest silhouette in the
+      // county: every tree in the reference has a limb that has lost its needles,
+      // and an old pine is read off that and not off its age.
+      if (j % 3 === 1) {
+        const away = tipW.clone()
+          .addScaledVector(out, 0.13 + r() * 0.17)
+          .setY(tipW.y - 0.05 - r() * 0.07);
+        wood.push(rib(tipW, away, ra * 0.24, ra * 0.06, C.barkRedDark, 3));
+      }
+    }
+  }
+
+  // ---- the leader
+  // Five tufts and a spike, turned off one another so the top of the tree is a
+  // point with a brush on it and not a brush with a point on it. **Five and not
+  // three** because the leader is where the crown has narrowed to nothing and the
+  // reference's spire is the densest thing on the whole tree: three tufts leave a
+  // bare pole with a tuft on it, which is a lamp post.
+  const top = spine[SEGS];
+  for (let i = 0; i < 5; i++) {
+    // **The five of them go down the leader and not round one point on it.** All
+    // five at the same height is a brush on a pole, with a hand's width of bare
+    // stick under it, and the eye reads the stick every time - the first cut of the
+    // leader was one tuft on a spike and it was the last bare thing left on the
+    // tree after the crown had closed. Four stations up half a metre of trunk, each
+    // a third smaller than the one below, is a spire that tapers.
+    const u = 0.86 + (i / 4) * 0.13;
+    const leadAt = spineAt(u);
+    const size = 0.30 * (1 - (u - 0.86) / 0.13 * 0.52);
+    const a = (i / 5) * Math.PI * 2 + 0.7;
+    const g = needleSpray(size, size * 0.30, 11, THICK, 0.80 + i * 0.04, r);
+    g.applyMatrix4(M(leadAt.x, leadAt.y, leadAt.z, 1, 1, 1, 0, a, -0.45 + r() * 0.4));
+    needles.push(boxUV(g));
+  }
+  // And the leader in the shade wood and not in `barkRedLit`, which is a fifth of a
+  // metre of pale bark standing above the crown with nothing on it - the one pale
+  // thing on the whole tree, and the eye goes to it every time.
+  wood.push(part(cyl(0.004, 0.014, 1, 5), along(spine[SEGS - 1], top), C.barkRedDark));
+
+  return {
+    '': merge(wood, 'pine-trunk'),
+    'leaves': merge(needles, 'pine-leaves'),
+  };
+}
+
+/**
  * A compact evergreen: the county's rounded tree, shorter and broader than the
  * conifer, with tiered cloud-like canopies instead of a single cone.
  *
@@ -3159,6 +4214,130 @@ const MAPLE_HALF = [
  * Local frame: +x runs out along the leaf from the stalk, +z is across it, +y
  * is its up.
  */
+/**
+ * A **vine** leaf - heart-shaped, entire-edged, and about four centimetres wider
+ * than it is long along the stalk - which is the leaf of the plant in
+ * `references/tunnel4.jpeg` and **not** the leaf of anything else in this county.
+ *
+ * **It is written in `mapleLeaf()`'s own table format and shares its builder**,
+ * because a leaf here is a ring of `[angle, radius]` points dished by a cup and a
+ * curl, and writing that twice is a second copy of the geometry that the county
+ * changes in one place. What differs is the table:
+ *
+ *  - **No sinuses.** A maple's sinuses are the whole difference between a maple
+ *    leaf and a spade; a vine leaf has none, and giving it some would make the
+ *    strands read as the maples they are not.
+ *  - **The widest point is at the base**, not at the middle. That is what makes it
+ *    a heart, and it is the whole of the difference between a leaf hanging off a
+ *    strand and a maple leaf that happens to be near one.
+ *  - **A deep notch at the stalk** - 0.34 rather than the maple's 0.22 - because a
+ *    heart's notch is deeper than a maple's, and at ten metres it is the notch
+ *    that says which plant this is.
+ *  - **A blunt tip.** A vine leaf's point is a point a finger could find and
+ *    forget; the maple's is the first thing you see.
+ *
+ * **And it is five numbers and not six, which is the whole of the decimation** -
+ * and the five are **the six with one deleted and nothing else moved**, so the
+ * leaf is the shape it was with one sample out of it.
+ *
+ * That was measured and it was the most expensive piece in the county by a long way.
+ * The bower's `mass` is **seven strands of about ten leaves**, so the canopy is
+ * **1,190,688 unique triangles and 3,572,064 unique vertices** across its 628
+ * instances at High preset, and the scene is rasterised about four times a frame -
+ * beauty, the occlusion pass's normals, the indirect-light pass and the shadow map -
+ * so **that 1.39 M unique became 6.7 M of per-frame work, a quarter of the whole
+ * frame's 27.1 M**, for a leaf **three to fifteen centimetres long** read from
+ * twenty metres and up.
+ *
+ * **And the decimation is worth much less than that arithmetic says**, which is the
+ * half of it nobody would have guessed. Cutting the outline to four points took
+ * **1.6 M triangles a frame off the course and bought 1.0 fps**, and the fifth
+ * point costs about 0.6 fps to keep. **A triangle count predicts work and not
+ * time**, and the bower's remaining cost is fill - see the placement's own note in
+ * `scenery.js` for where the pixels actually go.
+ *
+ * **So the shape won the trade, and it won it on the table rather than on a
+ *  measurement - because the measurement cannot do it.** Cameras parked in the
+ *  tunnel on the bower's own arc range, mean pixel difference from this leaf over
+ *  the canopy, **with the placement and the cluster count held at the original's**,
+ *  so that only the outline differs:
+ *
+ * | leaf | road level | from the verge | the mouth | the long approach | mean |
+ * |---|---|---|---|---|---|
+ * | three points | 8.3 | 14.8 | 12.1 | 0.4 | 8.9 |
+ * | four points | 4.3 | 10.2 | 6.6 | 0.2 | 5.3 |
+ * | five points | 7.2 | 14.4 | 10.8 | 0.3 | 8.2 |
+ *
+ * **And that is not an ordering: five points is the original's shape with one row
+ *  deleted and it cannot be further from the original than four points is.** The
+ *  metric is measuring **which pixels a leaf's edge lands on**, and inside six
+ *  hundred and twenty-eight overlapping clusters that is most of the frame - so it
+ *  ranks tessellations by their sampling noise and it read a win for the four-point
+ *  leaf that the pictures do not agree with. **A number that ranks a shape change
+ *  backwards is not a small number; it is a number about nothing**, and the honest
+ *  move was to drop it and argue from the table, which is a row of the original
+ *  with one line out of it and every other number where it was.
+ *
+ * **Which leaves the eye, and the eye is the right instrument here.** At four
+ *  points the leaf's lower edge is a straight line where the curve was and it reads
+ *  visibly angular; at five it is the original's curve. Side by side at
+ *  `/tools/compare.html?a=tools/backup/bower-foliage.glb&b=meshes/bower-foliage.glb`.
+ *
+ * **The leaf count came down instead, which is the other half of it** - see
+ * `BOWER_MASS` in `scenery.js`, where twenty clusters a rib carry the picture that
+ * twenty-four used to and the triangle total ends up level with the four-point
+ * leaf had been.
+ *
+ * `tools/backup/bower-foliage.glb` and `tools/backup/bower-litter.glb` are the
+ * untouched six-point leaf.
+ *
+ * **And `bowerLitter()`'s dead leaves are this same leaf**, so the litter on the
+ * verges came down with it - which is the right way round, because a leaf lying
+ * flat is seen edge-on from further away than a leaf hanging in the air.
+ */
+const VINE_HALF = [
+  [0.00, 0.52],   // the blunt tip
+  [0.66, 0.98],   // **the widest, low on the leaf and near the base - the heart**
+  [1.04, 0.86],
+  [1.38, 0.60],
+  [1.52, 0.34],   // and down into the notch
+];
+
+/** `mapleLeaf()`'s builder over `VINE_HALF`, and the notch is the one number the
+ *  table does not carry. `thick` is a millimetre and a half rather than the
+ *  maple's two, because a vine leaf is soft and a thick one is a card. */
+function vineLeaf(len, cup, curl, roll) {
+  const out = [];
+  for (const [a, rad] of VINE_HALF) out.push([a, rad]);
+  out.push([Math.PI / 2, 0.34]);                  // the notch the stalk sits in
+  for (let i = VINE_HALF.length - 1; i >= 1; i--) {
+    out.push([Math.PI - VINE_HALF[i][0], VINE_HALF[i][1]]);
+  }
+  const n = out.length, ring = [];
+  for (const [a, rad] of out) {
+    const R = rad * len, t = R / len;
+    // the roll first, so the dish is turned about the leaf's own length and not
+    // about the plant's, and then the cup and the curl - same as the maple's,
+    // because it is the same builder and the same three numbers mean the same
+    // three things
+    const y0 = cup * (Math.abs(a) / (Math.PI / 2)) * t - curl * t * t;
+    ring.push([R * Math.cos(a), y0, R * Math.sin(a) * Math.cos(roll) + y0 * Math.sin(roll)]);
+  }
+  const h = 0.00075, pos = [], idx = [];
+  for (const p of ring) pos.push(p[0], p[1] + h, p[2]);
+  pos.push(0, h, 0);
+  for (let i = 1; i <= n; i++) idx.push(n, (i - 1) % n, i % n);
+  const b = n + 1;
+  for (const p of ring) pos.push(p[0], p[1] - h, p[2]);
+  pos.push(0, -h, 0);
+  for (let i = 1; i <= n; i++) idx.push(b + n, b + (i - 1) % n, b + i % n);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 function mapleLeaf(len, thick, cup, curl, roll) {
   const out = [];
   for (const [a, rad] of MAPLE_HALF) out.push([a, rad]);
@@ -3546,6 +4725,157 @@ function palm() {
             lerp(C.leafDark[2], C.leafOlive[2], shade)];
         parts.push(frondLeaf(at, dir, face, (r() - 0.5) * 0.4, len, 0.16 + (1 - t) * 0.06, c));
       }
+    }
+  }
+  return merge(parts);
+}
+
+/**
+ * A ribbed cactus: a tall green trunk with deep vertical ridges and a few
+ * arms branching off, standing on sand. Sized in world units - about 3-4
+ * metres tall, so it reads at race distance. Uses vertex colours from the
+ * county palette, no maps needed.
+ *
+ * The shape is a **lathe** with a profile that has real ridges: the radius
+ * varies along the height with a sine wave, and the turn is what gives it
+ * the ribs. A cylinder has no ribs; this one has them, and they are deep
+ * enough to read at thirty metres.
+ *
+ * The arms curve **upward** like the reference - they leave the trunk
+ * horizontally and then bend up, which is what a saguaro arm does. The
+ * spines are **cones** rather than balls, because a ball reads as a dot
+ * and a cone reads as a thorn.
+ */
+function cactus() {
+  const r = makeR(5123);
+  const parts = [];
+  const H = 3.2 + r() * 1.0;
+  const trunkRad = 0.22 + r() * 0.08;
+  // main trunk - a lathe with deep ribs
+  const nRibs = 8;
+  const profile = [];
+  for (let i = 0; i <= nRibs; i++) {
+    const t = i / nRibs;
+    // deep ribs: the radius varies by 25% of the trunk radius
+    const rib = trunkRad * 0.25 * Math.sin(t * Math.PI * nRibs);
+    profile.push([trunkRad + rib, t * H]);
+  }
+  // the cap - slightly rounded and indented
+  profile.push([trunkRad * 0.55, H]);
+  parts.push(grad(slathe(profile, 24), M(0, 0, 0), 0, H, C.leafDark));
+  // arms - 2 to 4 arms at different heights, curving upward
+  const nArms = 2 + Math.floor(r() * 3);
+  for (let i = 0; i < nArms; i++) {
+    const armH = H * (0.35 + r() * 0.45);
+    const armLen = 0.7 + r() * 1.0;
+    const armRad = trunkRad * (0.45 + r() * 0.25);
+    const az = r() * Math.PI * 2;
+    // the arm leaves horizontally and curves up
+    const start = new THREE.Vector3(0, armH, 0);
+    const outDir = new THREE.Vector3(Math.cos(az), 0, Math.sin(az));
+    // the arm goes out and then up - a parabola
+    const end = new THREE.Vector3(
+      outDir.x * armLen * 0.85,
+      armH + armLen * 0.55,
+      outDir.z * armLen * 0.85
+    );
+    // build the arm as a swept tube along the curve, not a rotated lathe
+    const armPath = [];
+    const armRadii = [];
+    for (let j = 0; j <= 8; j++) {
+      const s = j / 8;
+      // parabola: out and up
+      const x = outDir.x * armLen * s;
+      const y = armH + armLen * s * s * 0.55;
+      const z = outDir.z * armLen * s;
+      armPath.push(new THREE.Vector3(x, y, z));
+      // the radius tapers along the arm
+      armRadii.push(armRad * (1 - s * 0.35));
+    }
+    const armGeo = tube(armPath, armRadii, 10);
+    parts.push(grad(armGeo, M(), 0, armLen, C.leafDark));
+    // small nub at the end of the arm
+    parts.push(part(ball(armRad * 0.5, 8), M(end.x, end.y, end.z), C.leaf));
+  }
+  // spines - cones along the ribs, like the reference
+  for (let i = 0; i < nRibs; i++) {
+    const a = (i / nRibs) * Math.PI * 2;
+    for (let j = 0; j < 5; j++) {
+      const h = H * (0.12 + j * 0.18);
+      const rad = trunkRad + 0.04;
+      // a cone pointing outward, slightly upward
+      const spineGeo = cone(0.012, 0.09, 5);
+      const spineDir = new THREE.Vector3(
+        Math.cos(a) * 0.7,
+        0.3,
+        Math.sin(a) * 0.7
+      ).normalize();
+      const q = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0), spineDir
+      );
+      const m = new THREE.Matrix4().compose(
+        new THREE.Vector3(Math.cos(a) * rad, h, Math.sin(a) * rad),
+        q,
+        new THREE.Vector3(1, 1, 1)
+      );
+      parts.push(part(spineGeo, m, C.leafLight));
+    }
+  }
+  return merge(parts);
+}
+
+/**
+ * A barrel cactus: a round, ribbed ball with no arms, standing on sand.
+ * Sized in world units - about 1-2 metres across, so it reads at race
+ * distance as a small round thing on the sand. Uses vertex colours from
+ * the county palette, no maps needed.
+ *
+ * The shape is a **lathe** with deep ribs - the radius varies along the
+ * height with a sine wave, and the turn is what gives it the ribs. The
+ * spines are **cones** rather than balls.
+ */
+function cactusBarrel() {
+  const r = makeR(5124);
+  const parts = [];
+  const R = 0.7 + r() * 0.3;
+  const nRibs = 10;
+  // the body is a lathe with deep ribs, barrel-shaped
+  const profile = [];
+  for (let i = 0; i <= nRibs; i++) {
+    const t = i / nRibs;
+    // a barrel shape: wider in the middle, narrower at top and bottom
+    const rad = R * (0.65 + 0.35 * Math.sin(t * Math.PI));
+    // deep ribs - 20% of the radius
+    const rib = rad * 0.20 * Math.sin(t * Math.PI * nRibs);
+    profile.push([rad + rib, t * R * 1.5]);
+  }
+  // the top cap - slightly indented
+  profile.push([R * 0.45, R * 1.5]);
+  parts.push(grad(slathe(profile, 24), M(0, 0, 0), 0, R * 1.5, C.leafDark));
+  // spines - cones along the ribs
+  for (let i = 0; i < nRibs; i++) {
+    const a = (i / nRibs) * Math.PI * 2;
+    for (let j = 0; j < 6; j++) {
+      const h = R * 1.5 * (0.1 + j * 0.16);
+      // the radius at this height
+      const t = h / (R * 1.5);
+      const rad = R * (0.65 + 0.35 * Math.sin(t * Math.PI)) + 0.04;
+      // a cone pointing outward, slightly upward
+      const spineGeo = cone(0.010, 0.07, 5);
+      const spineDir = new THREE.Vector3(
+        Math.cos(a) * 0.7,
+        0.3,
+        Math.sin(a) * 0.7
+      ).normalize();
+      const q = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0), spineDir
+      );
+      const m = new THREE.Matrix4().compose(
+        new THREE.Vector3(Math.cos(a) * rad, h, Math.sin(a) * rad),
+        q,
+        new THREE.Vector3(1, 1, 1)
+      );
+      parts.push(part(spineGeo, m, C.leafLight));
     }
   }
   return merge(parts);
@@ -3987,15 +5317,1263 @@ function watchtower() {
   };
 }
 
+/* ---------------------------------------------------- the blossom, and its tree */
+
+/**
+ * The blossom's ramp, in the jar and read off `references/cherry.jpeg`, and it is
+ * four and not a colour for the reason the conifer's five and the maple's five are
+ * ramps: a cherry in flower is a dark hole with pale flowers over the top of it,
+ * and one pink cannot say both ends of that at once.
+ */
+const BLOSSOM = [C.blossomDeep, C.blossom, C.blossomLit, C.blossomPale];
+function blossomAt(t) {
+  const x = clamp01(t) * (BLOSSOM.length - 1);
+  const i = Math.min(BLOSSOM.length - 2, Math.floor(x)), f = x - i;
+  const a = BLOSSOM[i], b = BLOSSOM[i + 1];
+  return [lerp(a[0], b[0], f), lerp(a[1], b[1], f), lerp(a[2], b[2], f)];
+}
+
+/**
+ * One cherry flower, and **it is six triangles a petal and not four**.
+ *
+ * The petal's outline is six points and a spine, and the spine is what makes it a
+ * petal: `blade()`'s argument is that a leaf is a folded lozenge for the same
+ * reason, and a cherry petal is a dished round one - so the middle of the petal is
+ * lifted a sixth of its own width out of its plane and the two sides fall away
+ * from it. **The notch at the tip is the sixth triangle's whole job**, and it is
+ * the reason this is not `mapleLeaf()` over a rounded table: a notched tip on a
+ * five-fold outline is what separates a cherry from a quince blossom, and it is
+ * four millimetres across on a flower four centimetres wide.
+ *
+ * The colour runs **outward and not upward** - pale at the flower's own middle,
+ * rose at the tip - because that is what the close-up has: `references/cherry.webp`
+ * is a spray of five-petal flowers whose bases are cream and whose outer halves
+ * are a deep pink, and a flower of one pink reads as a starfish.
+ *
+ * `R` is the flower across, in metres, so a four-centimetre cherry blossom is
+ * `cherryFlower(0.04)`. Local frame: the flower lies in XY and faces +Z, and the
+ * caller turns it into the world.
+ */
+function cherryFlower(R) {
+  const pos = [], col = [];
+  const P = (x, y, z) => [x * R, y * R, z * R];
+  const b = P(0, 0.16, 0), l = P(-0.46, 0.56, 0), tl = P(-0.40, 0.90, 0);
+  const n = P(0, 0.80, 0), tr = P(0.40, 0.90, 0), q = P(0.46, 0.56, 0);
+  const s = P(0, 0.44, 0.17);
+  // and the three the petal is coloured in: the throat, the waist and the point
+  const cPale = C.blossomPale, cLit = C.blossomLit, cRose = C.blossom;
+  const tri = (p0, p1, p2, c0, c1, c2) => {
+    pos.push(...p0, ...p1, ...p2);
+    col.push(...c0, ...c1, ...c2);
+  };
+  for (let k = 0; k < 5; k++) {
+    // **The whorl, and the petals are turned as well as spaced**, because five
+    // coplanar petals on one plane is a star and a flower is a dish: each one is
+    // laid back by the same small angle, so the bloom is a shallow cup whose
+    // throat is the `blossomEye` disc under them.
+    const a = (k / 5) * Math.PI * 2 + 0.31;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    // **the dish is a lean about the flower's own X**, so every petal tips back by
+    // the same amount whatever it is called, and it is applied to the laid-back
+    // coordinates rather than to the flower's
+    const lay = 0.30, cl = Math.cos(lay), sl = Math.sin(lay);
+    /** One outline point turned into the whorl's own plane: first the lean, then
+     *  the turn, and **a point and not a point and its colour** - an array of four
+     *  where three belong is a position buffer with the wrong stride, and the
+     *  flowers come out as half a metre of pink spines. */
+    const W = (p) => {
+      const y = p[1] * cl - p[2] * sl;
+      return [p[0] * ca - y * sa, p[0] * sa + y * ca, p[1] * sl + p[2] * cl];
+    };
+    const B = W(b), L = W(l), TL = W(tl), N = W(n), TR = W(tr), Q = W(q), S = W(s);
+    // **and the winding is six explicit triples**, because the notch is reflex and
+    // a fan round it turns the wrong way over the two triangles that make it -
+    // which is a petal with a hole in it rather than a petal with a notch, and
+    // from underneath the hole is the whole of what you see.
+    tri(B, S, L, cPale, cPale, cLit);
+    tri(B, Q, S, cPale, cLit, cPale);
+    tri(L, S, TL, cLit, cPale, cRose);
+    tri(S, N, TL, cPale, cPale, cRose);
+    tri(N, TR, S, cPale, cRose, cPale);
+    tri(Q, TR, S, cLit, cRose, cPale);
+  }
+  // the eye: five triangles round a point, and it is the dot that makes five
+  // petals read as a flower. Without it the whorl is a starfish, and the whole of
+  // what says cherry rather than clematis is two millimetres of dark rose.
+  for (let k = 0; k < 5; k++) {
+    const a0 = (k / 5) * Math.PI * 2, a1 = ((k + 1) / 5) * Math.PI * 2;
+    pos.push(0, 0, 0.06 * R,
+      Math.cos(a0) * 0.15 * R, Math.sin(a0) * 0.15 * R, 0.14 * R,
+      Math.cos(a1) * 0.15 * R, Math.sin(a1) * 0.15 * R, 0.14 * R);
+    col.push(...C.blossomEye, ...C.blossomEye, ...C.blossomEye);
+  }
+  // and the stamens: one triangle each, standing up out of the eye, because
+  // `references/cherry.webp` is a picture of them - a fringe of cream round a dark
+  // centre is the whole of the flower's character at arm's length.
+  for (let k = 0; k < 5; k++) {
+    const a = (k / 5) * Math.PI * 2 + 0.9;
+    const cx = Math.cos(a), cy = Math.sin(a);
+    const w = 0.075 * R, h = 0.46 * R;
+    pos.push(cx * 0.09 * R - cy * w, cy * 0.09 * R + cx * w, 0.13 * R,
+      cx * 0.09 * R + cy * w, cy * 0.09 * R - cx * w, 0.13 * R,
+      cx * h, cy * h, 0.30 * R);
+    col.push(...C.blossomStamen, ...C.blossomStamen, ...C.blossomPale);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  g.computeVertexNormals();
+  return boxUV(g);
+}
+
+/**
+ * A bud, and it is `bud()`'s shape at a hundredth of the size, and it is written
+ * out rather than called because **`bud()`'s stalk radii are 9 and 13 millimetres
+ * whatever it is passed** - a cherry bud is five millimetres on a six-millimetre
+ * stalk, and reusing the county's bud at that size is a stalk with a bead on it.
+ *
+ * Two of the three parts are `blossomEye`, which is not a tint of the ramp: a shut
+ * bud is the deep rose all the way up, because there is no open face for the light
+ * to come off, and a bud in `blossomPale` is a bud with a hole in it.
+ */
+function cherryBud(R, stalk) {
+  return merge([
+    part(cyl(stalk * 0.34, stalk * 0.48, stalk, 5), M(0, stalk / 2, 0), C.cherryBarkLit),
+    grad(cyl(R * 0.52, R, R * 1.5, 5), M(0, stalk + R * 0.72, 0), stalk, stalk + R * 1.4, C.blossomEye),
+    part(cone(R * 0.52, R * 1.2, 5), M(0, stalk + R * 1.9, 0), C.blossom),
+  ], 'cherry-bud');
+}
+
+/**
+ * A clump of blossom, and it is **`leafMass()`'s three arguments with a hanging
+ * skirt on the outside and a count the caller chooses**, which is the whole of what
+ * the two are for.
+ *
+ * **The lump is the mass and the flowers are the edge**, and that is the same
+ * argument `leafMass()` makes about a maple's leaves, unchanged: at thirty metres
+ * a four-centimetre blossom is half a pixel, so a blossom cannot be the readable
+ * unit and six hundred of them on a ball is a burr. What the eye reads is the
+ * cloud, and its silhouette and its shading. **So the flowers are on the outside
+ * and not distributed through it** - ten sunk into the surface of the lump, of
+ * which about half stand a flower-radius proud of it, which is what breaks the
+ * edge into petals instead of leaving it a curve.
+ *
+ * **And the clump's edge is not broken by the flowers alone**, which is the second
+ * half of the argument and the one that took a look at `references/cherry.jpeg` to
+ * find: at 5% of the lump's radius a flower cannot break a lump's silhouette at
+ * thirty metres, and the reference's crown is broken by **many small clouds**
+ * overlapping each other rather than by the petals on any one of them. So a cloud
+ * is drawn large - half a metre to eighty centimetres - the high-frequency term of
+ * its displacement is the heaviest in this file, and `flowers` is a *count the
+ * caller passes* rather than a number this function owns: the crown's interior
+ * clumps are never looked at from arm's length and are on five flowers, and the
+ * ones on the fringe are on ten.
+ *
+ * **And the skirt is what makes it a cherry and not a pink maple.** Every one of
+ * the three references has the same thing in it and it is not in the ramp at all:
+ * strands of blossom hanging *down* out of the crown's underside, so the crown's
+ * lower edge is a fringe of pendants and the space under the tree is full of
+ * falling petals rather than empty. A weeping cherry and an upright one are the
+ * same tree with and without those strands, which is why `weeps` is an argument
+ * here and not a second prop: it is hung on the caller's own count of clumps and
+ * their place in the crown.
+ *
+ * **`sun` is the clump's own share of the light and the caller works it out from
+ * where the clump is**, because a crown's value is a field over the crown and not a
+ * property of a cloud: the fringe is dark because it is under the crown and the top
+ * is pale because nothing is over it, and a cloud that picked its own value would
+ * have the crown's two ends the same.
+ */
+function blossomCloud(at, size, sun, roll, r, weeps, flowers) {
+  const parts = [];
+  const nFlowers = flowers === undefined ? 10 : flowers;
+  // ---- the lump, and it is `leafMass()`'s lump with a different ramp
+  //
+  // **Ten segments, and the displacement's three octaves are moved down with it**
+  // rather than left where they were. The rule this file already has about the
+  // frequency and the tile moving together applies to a cloud as much as to a map:
+  // a sphere with ten divisions cannot carry a frequency of 10.4, and at a
+  // **sixteen** it could - and sixteen put the county's lamp walk over its ceiling
+  // (see `cherryTree()`'s note), so the octaves came down to 2.2 / 4.6 / 8.8 and the
+  // **tell is a crown made of pink crystals**: fifty facets on a two-metre ball is a
+  // facet the size of a hand, and it was only the number of clouds that hid it.
+  const g = ball(size * 0.9, 10);
+  const p = g.attributes.position;
+  const seed = (r() * 1e4) | 0;
+  // **and it is wider than it is deep**, because a weeping crown's clumps are
+  // skirts and not balls: the flat of the crown is what the limbs make and the
+  // clumps hang under it.
+  const sx = 0.98 + r() * 0.40, sy = 0.58 + r() * 0.32, sz = 0.98 + r() * 0.40;
+  for (let i = 0; i < p.count; i++) {
+    const d = new THREE.Vector3(p.getX(i), p.getY(i), p.getZ(i)).normalize();
+    // **and the high-frequency term is the heaviest in this file**, which is the
+    // price of the lump being four times the maple's: a metre cloud displaced
+    // gently is a balloon, and it is the third octave at 0.34 that gives it the
+    // shoulders and hollows a canopy has.
+    const k = 0.58 + fbm(d.x * 2.2, d.y * 2.2, d.z * 2.2, seed, 2) * 0.62
+      + fbm(d.x * 4.6, d.y * 4.6, d.z * 4.6, seed + 3, 1) * 0.36
+      + fbm(d.x * 8.8, d.y * 8.8, d.z * 8.8, seed + 7, 1) * 0.34;
+    p.setXYZ(i, d.x * size * k * sx, d.y * size * k * sy, d.z * size * k * sz);
+  }
+  g.applyMatrix4(M(at.x, at.y, at.z));
+  g.computeVertexNormals();
+  {
+    const fp = flat(g);
+    const cols = [];
+    for (let t = 0; t < fp.attributes.position.count; t += 3) {
+      const d = new THREE.Vector3(
+        fp.attributes.position.getX(t) - at.x,
+        fp.attributes.position.getY(t) - at.y,
+        fp.attributes.position.getZ(t) - at.z).normalize();
+      const up = clamp01(0.5 + d.y * 0.7);
+      // and the noise per facet, so no two neighbours of a cloud match: the
+      // reference's canopy is a thousand different pinks and not four of them in
+      // patches, and a cloud in three values reads as a piece of cotton wool.
+      const mix = fbm(d.x * 4.8, d.y * 4.8, d.z * 4.8, seed + 19, 2) * 0.5 + 0.5;
+      // **and the weight is on the noise and not on `sun`**, which is the last
+      // correction this ramp needed and it is the opposite of what the first cut
+      // did: `references/cherry.jpeg` is a **pale** canopy with a dark interior, not
+      // a mid pink one with a paler top, so the term that decided the value was
+      // `sun * 0.5` and the whole crown came out a stop below the reference. At
+      // 0.30 with the noise at 0.36 the *lit* mass of the crown is `blossomLit` and
+      // `blossomPale` and the fringe is `blossomDeep`, and the two ends are six
+      // times one another in luminance, which is the reference's own spread.
+      cols.push(blossomAt(clamp01(sun * 0.30 + Math.pow(up, 1.15) * 0.78 - 0.16 + mix * 0.36)));
+    }
+    parts.push(boxUV(faceted(fp, cols)));
+  }
+  // ---- the flowers on the edge of it
+  //
+  // On a golden-angle spiral so no two of them are neighbours, and each one **turned
+  // to face away from the middle of the lump** with a roll of its own - because a
+  // flower lying flat on the surface of a cloud is a stamp, and the reference's
+  // flowers all face out into the air.
+  //
+  // **The size is 5.6 centimetres and a cherry's flower is 3.5**, which is the one
+  // number in this piece that is not true, and it is true for the reason the first
+  // two thirds of this comment gives: at 3.5 cm the fringe - the whole of what
+  // makes a weeping cherry a weeping cherry - is half a pixel at thirty metres. The
+  // error is against the flower and not against the tree: it is 5.6% of the clump's
+  // radius rather than 3.5% of a metre, and nothing else in the piece is a
+  // percentage of anything.
+  const FR = 0.028 * (0.86 + r() * 0.30);
+  const GA = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < nFlowers; i++) {
+    const u = (i + 0.5) / nFlowers;
+    const el = 1.25 - u * 1.55 + (r() - 0.5) * 0.26;
+    const az = i * GA + roll + (r() - 0.5) * 0.3;
+    const up = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az));
+    // and the flower's own frame: laid into the surface with its face out along
+    // `up`, spun about it, and **hung rather than squared** - a blossom on a
+    // weeping tree is mostly looking at the ground
+    const out = up.clone().lerp(new THREE.Vector3(0, -1, 0), 0.22 + r() * 0.3).normalize();
+    const dir = new THREE.Vector3(-Math.sin(az), 0, Math.cos(az))
+      .applyAxisAngle(out, i * 2.399 + r() * 1.2).normalize();
+    const across = new THREE.Vector3().crossVectors(dir, out).normalize();
+    const b = at.clone().add(new THREE.Vector3(up.x * size * sx, up.y * size * sy, up.z * size * sz)
+      .multiplyScalar(0.44 + r() * 0.12));
+    const f = cherryFlower(FR);
+    f.applyMatrix4(new THREE.Matrix4().makeBasis(dir, out, across));
+    f.applyMatrix4(M(b.x, b.y, b.z));
+    // and its own value off the same ramp the lump is on, **a shade paler than the
+    // lump's mean**, which is what the reference has and what keeps a fringe of
+    // flowers from disappearing into the cloud it is standing in
+    parts.push(faceted(f, [blossomAt(clamp01(0.50 + sun * 0.40 + (r() - 0.4) * 0.3))]));
+  }
+  // ---- and a bud, because a canopy with no buds in it is a canopy at its peak.
+  // **On the clouds that carry flowers and on nothing else**, because a bud buried
+  // between three other clouds is three hundred bytes of blossom nobody can see.
+  if (nFlowers) {
+    const a = roll + r() * 2.4;
+    const el = -0.5 - r() * 0.7;
+    const b = at.clone().add(new THREE.Vector3(
+      Math.cos(el) * Math.cos(a) * size * sx,
+      Math.sin(el) * size * sy,
+      Math.cos(el) * Math.sin(a) * size * sz).multiplyScalar(0.5));
+    const bd = cherryBud(FR * 0.30, FR * 0.42);
+    bd.applyMatrix4(M(b.x, b.y, b.z, 1, 1, 1, 0.5 + r() * 0.7, a, 0.2 - r() * 0.4));
+    parts.push(bd);
+  }
+  // ---- and the skirt, when the caller says this clump is on the outside of the
+  // crown. Three strands off the underside, each one a swept tube and **not a chain
+  // of cylinders**: a chain is a kink at every joint and reads as three sticks that
+  // happened to be near one another, and a pendant of blossom is the one place in
+  // this tree where a kink would be seen - it is a centimetre across and there is
+  // nothing else on it.
+  //
+  // **The strand is `cherryBark` and not `cherryBarkPale`, and that is the reverse
+  // of the limb's own rule**: a limb's fine wood is pale because the sun is on it,
+  // and a thread hanging under a cloud is in the cloud's shadow, so a pale strand
+  // is a grey wire hanging in the dark - which is exactly what the first cut of
+  // this piece drew, twelve of them, reading as the strings of an instrument.
+  if (weeps) {
+    // **Two strands of two flowers**, and they are short - a third of a metre to
+    // two thirds, and a flower every eleven centimetres along it. That is the
+    // reference's pendant and not a thread with something on the end of it:
+    // `references/cherry.jpeg` hangs its fringes in curtains a metre wide, and a
+    // curtain is blossoms at eleven centimetres and not a line with three beads on
+    // it. The first cut of this was three strands a metre long with their flowers
+    // in the bottom third, and it drew twelve spider legs under the tree - **which
+    // is the tell**: a fringe reads as a fringe when you cannot count the strands,
+    // and you can count anything that has three centimetres of bare wood on it.
+    const strands = [[0.32, 0.64], [0.28, 0.54]];
+    for (let i = 0; i < strands.length; i++) {
+      const a = roll + i * 2.094 + (r() - 0.5) * 0.7;
+      const len = strands[i][0] + r() * (strands[i][1] - strands[i][0]);
+      const nF = 2;
+      const start = at.clone().add(new THREE.Vector3(
+        Math.cos(a) * size * sx * 0.44, -size * sy * 0.44, Math.sin(a) * size * sz * 0.44));
+      const path = [], rad = [];
+      for (let k = 0; k <= 3; k++) {
+        const t = k / 3;
+        path.push(new THREE.Vector3(
+          start.x + Math.cos(a) * (0.06 + t * 0.12),
+          start.y - len * Math.pow(t, 0.86),
+          start.z + Math.sin(a) * (0.06 + t * 0.12)));
+        rad.push(lerp(0.011, 0.004, Math.pow(t, 0.6)));
+      }
+      parts.push(part(tube(path, rad, 3), M(), C.cherryBark));
+      // and the blossoms, from under the cloud down to the end
+      for (let k = 0; k < nF; k++) {
+        const t = 0.34 + k * 0.44;
+        const p = new THREE.Vector3(
+          start.x + Math.cos(a) * (0.06 + t * 0.12) + (r() - 0.5) * 0.09,
+          start.y - len * Math.pow(t, 0.86),
+          start.z + Math.sin(a) * (0.06 + t * 0.12) + (r() - 0.5) * 0.09);
+        const f = cherryFlower(FR * (0.74 + r() * 0.3));
+        f.applyMatrix4(M(p.x, p.y, p.z, 1, 1, 1,
+          1.1 + r() * 0.7, r() * Math.PI * 2, (r() - 0.5) * 0.8));
+        parts.push(faceted(f, [blossomAt(0.48 + sun * 0.34 + r() * 0.3)]));
+      }
+    }
+  }
+  return merge(parts, 'blossom-cloud');
+}
+
+/**
+ * The cherry, and **it is the largest thing in the county that is a tree**, at five
+ * and a half metres to the top of the blossom and six and a half across, which is
+ * what `references/cherry.jpeg` is. The county's tallest tree is a five-metre ash
+ * and its broadest a three-metre maple, so this is a **specimen** rather than a
+ * wood: it is meant to be the one tree on a course you can find twice.
+ *
+ * Four things in it, and each one is in the reference and is not in the maple:
+ *
+ *   - **A trunk that braids.** The reference's bole is three stems wound round
+ *     each other, and that is the whole silhouette of a weeping cherry - the pink
+ *     above is a hat on a black rope. Two extra swept tubes standing four fifths of
+ *     the main one's radius out, phase-turning up the trunk, does it. **And it is a
+ *     close-range read and not a distant one**, which is the honest limit of it: at
+ *     thirty metres a braid on a 42 cm trunk is five pixels wide, and what reads
+ *     there is the *value* - the trunk is the darkest thing in the county, and the
+ *     black showing through the pink is what keeps a pink tree from reading as
+ *     cotton wool.
+ *   - **A trunk that leans and swings.** A maple's bole is a straight taper and
+ *     this one is an S of two swings across its own height, tightening towards the
+ *     fork, and the amplitude is a third of the trunk's height. A straight bole
+ *     with a pink hat on it is the county's maple with the wrong crown.
+ *   - **Limbs that come back down.** Every one of the six reaches out and up to a
+ *     peak at 62% of its length and then *falls*, 30% of the rise over the last
+ *     third, and the weeping fringe hangs off that last third. The fall is the
+ *     difference between this and a pink dome.
+ *   - and **surface roots**, seven of them out to two metres, lying on the ground
+ *     by a third of their length. A cherry of this age stands on a raft of roots
+ *     and every one of the county's other four trees stands on a flare.
+ *
+ * One surface and **no maps at all**, for the maple's reason: a grain across a
+ * pink blossom and a black trunk is a lie about both, and `cherryBarkPale` on the
+ * outer third of each limb is doing the work a bark map would otherwise do - the
+ * fine wood at the edge of a crown really is a lighter grey than the mass of it,
+ * and that is visible from thirty metres in a way three millimetres of lenticels
+ * are not.
+ *
+ * **And it is 41,226 vertices against the broadleaf's 35,256, which is the number
+ * this piece was cut down to and it is worth saying what it was.** The first cut was
+ * **134,178** - a hundred and thirty-four thousand vertices of blossom on a tree the
+ * game stands eight of on a course - and eight of those put the county's lamp walk in
+ * `tools/e2e/smoke.spec.js` **over its five-minute ceiling**, on a spec that walks
+ * two circles of the inspector's eye in 121 steps each on a software rasteriser and
+ * has **a two per cent margin between a pass and a timeout** measured on this
+ * machine. So the crown kept all forty-six of its clouds and lost two thirds of its
+ * flowers, and **a cloud costs its tessellation and not its size** is the whole of how
+ * that was possible: forty-six clouds at ten segments is 13,800 vertices and
+ * forty-six at sixteen is 35,300. **The tell that a piece is too heavy for the
+ * county is not a number in this file and it is not a frame time either** - it is
+ * one gate, on a spec that was already at 98% of its ceiling before the piece
+ * existed, going red for no reason anybody could name.
+ */
+function cherryTree() {
+  const r = makeR(8842);
+  const wood = [], crown = [];
+  const FORK = 1.62;                       // where the bole stops and the crown starts
+  const SPINE = 9;
+  const ROOTS = 7;
+  const LIMBS = 6;
+  /** The crown's own light, and it is **a field over the crown and not a number**:
+   *  a blossom cloud's value is where it is, the fringe is dark because the crown
+   *  is over it and the top is pale because nothing is over that. It reads the
+   *  clump's height between the fork and the top of the crown, so a clump placed by
+   *  eye comes out right without the caller having to think about the sun again. */
+  const sunAt = (y) => clamp01(0.14 + (y - FORK - 0.5) / 2.5 * 0.86 + (r() - 0.5) * 0.20);
+
+  // ---- the bole, and the S is in the path rather than in a matrix
+  const path = [], rad = [];
+  for (let i = 0; i <= SPINE; i++) {
+    const t = i / SPINE;
+    // **and the lean on top of the S**, so the tree is not standing up straight in
+    // the middle of its own swing: a fourth of a metre of drift across the bole,
+    // which at 5.5 m tall reads as a tree that has grown towards the light.
+    path.push(new THREE.Vector3(
+      Math.sin(t * 4.1 + 0.6) * 0.34 * (1 - t * 0.5) + t * 0.28,
+      FORK * t,
+      Math.cos(t * 3.2 - 0.4) * 0.25 * (1 - t * 0.5)));
+    // **42 centimetres across at the foot and one to fourteen at the fork**, which
+    // is a ratio of thirteen to the tree's height and is the reference's own: the
+    // first cut of this at 33 came up as a stick with a pink hat on it, and 33 is
+    // a bole for a five-metre tree and not for a five-and-a-half-metre one.
+    rad.push(lerp(0.210, 0.074, Math.pow(t, 0.58)));
+  }
+  wood.push(grad(tube(path, rad, 7), M(), 0, FORK, C.cherryBark));
+  // ---- and the two strands wound round it, which is the read
+  //
+  // The offset is four fifths of the main radius *out*, so each strand stands proud
+  // of the surface and the pair of them read as two more stems; and it rotates 5.6
+  // radians over the bole's length, which is under one full turn - a full turn and
+  // a half is a corkscrew and this is a braid.
+  for (let k = 0; k < 2; k++) {
+    const bp = [], br = [];
+    for (let i = 0; i <= SPINE; i++) {
+      const t = i / SPINE, base = path[i], m = rad[i];
+      const ph = t * 5.6 + k * Math.PI + 0.4;
+      const off = m * 0.80 * (1 - Math.pow(t, 3.2));
+      bp.push(new THREE.Vector3(
+        base.x + Math.cos(ph) * off, base.y - 0.02, base.z + Math.sin(ph) * off));
+      br.push(m * 0.44 * (1 - Math.pow(t, 2.6)));
+    }
+    // **and `cherryBarkLit` and not the bole's own colour**, because the braid is
+    // only a braid if the two of them are different woods, and one dark mass wound
+    // three times about another dark mass is a rope.
+    wood.push(grad(tube(bp, br, 6), M(), 0, FORK, C.cherryBarkLit));
+  }
+
+  // ---- the roots, and they are a raft and not a flare
+  for (let i = 0; i < ROOTS; i++) {
+    const a = (i / ROOTS) * Math.PI * 2 + (r() - 0.5) * 0.44;
+    const out = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    const len = 1.30 + r() * 0.95;
+    let at = out.clone().multiplyScalar(0.05).setY(0.24);
+    // **and 26 centimetres through where it leaves the flare**, which is what the
+    // reference's are and what the first cut's 17 was not: at 17 a root is a wire
+    // lying on the grass, and the raft of roots is the second half of this tree's
+    // read after the braided bole.
+    let rr = 0.130 + r() * 0.036;
+    for (let k = 1; k <= 3; k++) {
+      const t = k / 3;
+      // **and it comes down onto the ground early**, which is what a surface root
+      // does and what a buttress does not: a buttress is a wedge standing up
+      // against the trunk and a root is a rope lying on the earth, and the two
+      // read as different animals at thirty metres.
+      const p = out.clone().multiplyScalar(len * Math.pow(t, 0.80)).setY(lerp(0.24, 0.010, Math.pow(t, 0.36)));
+      const nr = lerp(rr, 0.018, Math.pow(t, 0.58));
+      wood.push(grad(strut(at, p, rr, nr, 5), M(), 0, 0.3, C.cherryBark));
+      at = p; rr = nr;
+    }
+    // and two rootlets off the last joint, because a root that stops at a
+    // thickness is a spoke
+    for (let k = 0; k < 2; k++) {
+      const a2 = a + (k ? 0.6 : -0.55) + (r() - 0.5) * 0.4;
+      const o2 = new THREE.Vector3(Math.cos(a2), 0, Math.sin(a2));
+      wood.push(grad(strut(at, at.clone().addScaledVector(o2, 0.36 + r() * 0.28).setY(0.008),
+        rr, 0.006, 3), M(), 0, 0.3, C.cherryBark));
+    }
+  }
+
+  // ---- the limbs, and the six are turned a fifth of a turn apart and no more
+  //
+  // `2.399` is the maple's and the conifer's and it is a fifth of a turn short of
+  // two fifths, which is the angle that never repeats: five limbs on six spokes
+  // come out lopsided, and a lopsided crown is a tree that has lost a limb, which
+  // is a different piece entirely.
+  const fork = path[SPINE];
+  for (let b = 0; b < LIMBS; b++) {
+    const a = b * 2.399 + 0.4;
+    const out = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    const side = new THREE.Vector3(-out.z, 0, out.x);
+    const LEN = 3.05 * (0.88 + r() * 0.24);
+    const REACH = 2.55 * (0.9 + r() * 0.2);
+    const SEG = 8;
+    const lp = [], lr = [];
+    for (let k = 0; k <= SEG; k++) {
+      const t = k / SEG;
+      // **up to 62% of its length and then down**, and the down is 30% of the
+      // rise rather than all of it: a limb that ends level with its own fork is a
+      // hat brim and one that ends below it is a willow. Thirty per cent is the
+      // fringe's hanger.
+      const up = t < 0.62
+        ? Math.pow(t / 0.62, 0.86)
+        : 1 - 0.30 * Math.pow((t - 0.62) / 0.38, 1.5);
+      // **and it comes off the bole at its own height**, four of them low and two
+      // high, because six limbs off one point is a candelabra and a candelabra is
+      // the conifer's shape.
+      const y0 = fork.y - 0.50 * (b / LIMBS) - 0.12;
+      lp.push(new THREE.Vector3(
+        fork.x + out.x * REACH * Math.pow(t, 1.12) + side.x * (r() - 0.5) * 0.10,
+        y0 + LEN * up,
+        fork.z + out.z * REACH * Math.pow(t, 1.12) + side.z * (r() - 0.5) * 0.10));
+      // **and a limb is thick where it leaves the bole**: 17 centimetres at the
+      // fork against the bole's 42, which is the proportion of the reference's
+      // limbs and is what makes the fork read as six stems rather than as six
+      // wires. The first cut had 11 and the crown came away from the trunk.
+      lr.push(lerp(0.086, 0.010, Math.pow(t, 0.66)));
+    }
+    // **and the wood changes colour at 62% of its length**, which is exactly where
+    // the limb stops going up: the outer third of a weeping cherry's limb is the
+    // pale new wood the fringe hangs off and the inner two thirds is the black
+    // trunk, and a limb of one colour reads as a line drawn in one pen.
+    for (let k = 0; k < SEG; k++) {
+      const pale = k >= 4;
+      wood.push(grad(strut(lp[k], lp[k + 1], lr[k], lr[k + 1], 5), M(),
+        0, FORK + LEN, pale ? C.cherryBarkPale : C.cherryBark));
+    }
+
+    // ---- the clumps on it: six along the limb's outer two thirds, pushed off the
+    // limb's own line so they do not stack up in a spoke
+    //
+    // **Six on a cloud budget of ten segments, and the two numbers are one
+    // decision.** The crown in `cherry.jpeg` is one mass and you cannot see a single
+    // cloud in it, and a cloud costs its **tessellation and not its size** - which is
+    // the lever the county's own `leafMass()` note points at and which the first
+    // two cuts of this piece both missed. **Forty-six clouds at ten segments is
+    // thirteen thousand vertices and forty-six at sixteen is thirty-five** - a
+    // crown of forty-six clouds, which is what the reference has and what reads,
+    // for **a third of the tessellation**. And ten segments against an eighth
+    // octave at 8.8 is the frequency and the tile moved together, which is the
+    // county's own rule about that pair applied to a cloud instead of to a map;
+    // the tell when it is wrong is a crown of pink crystals.
+    //
+    // **And the last two are put a third of a metre *below* the limb's own line**,
+    // which is the crown being a dome and not a plate: the reference's fringe comes
+    // down further at the outside than anywhere else, and a crown whose outermost
+    // clouds are its highest ones is a table with flowers on it - the underside
+    // opens straight through to the sky between the limbs and the tree reads as a
+    // parasol. `sunAt()` then gives those two the darkest light in the tree, which
+    // is right: they are under everything.
+    const TS = [0.34, 0.48, 0.62, 0.74, 0.86, 0.96];
+    const SZ = [0.60, 0.68, 0.72, 0.74, 0.70, 0.62];
+    for (let m = 0; m < TS.length; m++) {
+      const i = Math.round(TS[m] * SEG);
+      // **and the offsets alternate in sign and grow**, so consecutive clouds sit
+      // on opposite sides of the limb and the last is nearly two metres off the
+      // first's side: a fixed offset put every cloud in a plane and the crown came
+      // out with two flat faces on it
+      const off = (b % 2 ? 1 : -1) * (m % 2 ? 1 : -1) * (0.16 + m * 0.20);
+      const at = lp[i].clone().addScaledVector(side, off);
+      at.y += [0.26, 0.06, 0.16, 0.02, -0.26, -0.46][m] - (m > 2 ? 0.18 : 0);
+      // **and only the outermost two carry flowers.** The other four are buried
+      // inside the crown: five blossoms and a bud and two hanging strands on a cloud
+      // nothing can see is a thousand vertices of blossom in a dark hole, and the
+      // crown's whole argument is that its edge is the part that is looked at. This
+      // is the one place in this piece where the count is not what the reference
+      // has, and it is the only honest answer to a vertex budget.
+      const edge = m >= 4;
+      crown.push(blossomCloud(at, SZ[m] * (0.88 + r() * 0.26),
+        sunAt(at.y), r() * 6.3, r, edge, edge ? 5 : 0));
+    }
+
+    // ---- and one twig off the outer third, out and down
+    //
+    // **One and not two**, at joint 6 of the eight segments: two twigs on every one
+    // of six limbs is twelve pendant clouds round the outer edge where six would do,
+    // and a fringe with twice as many strands in it as it needs is a fringe whose
+    // strands can be counted. The tell for that is not how it looks and it is that
+    // it looks like **the same strand twice**.
+    {
+      const from = lp[6].clone();
+      const away = new THREE.Vector3(
+        Math.cos(a - 1.25 + (r() - 0.5) * 0.7),
+        -0.44 - r() * 0.4,
+        Math.sin(a - 1.25 + (r() - 0.5) * 0.7)).normalize();
+      const tp = [from.clone()], tr = [0.016];
+      for (let j = 1; j <= 3; j++) {
+        const q = tp[j - 1].clone().addScaledVector(away, 0.38 + r() * 0.18);
+        q.y -= j * 0.08;
+        tp.push(q); tr.push(lerp(0.016, 0.005, j / 3));
+      }
+      wood.push(grad(tube(tp, tr, 4), M(), 0, FORK + LEN, C.cherryBarkPale));
+      // **and a cloud on it, which is what stops the crown being six ribs of
+      // blossom with gaps between them**: the reference's fringe is continuous
+      // along the whole outer edge and not six bunches on six sticks. It hangs a
+      // fifth lower again, because a twig points down and its cloud goes where the
+      // twig does.
+      const at = tp[3].clone();
+      at.y -= 0.26;
+      crown.push(blossomCloud(at, 0.62 * (0.86 + r() * 0.28),
+        sunAt(at.y), r() * 6.3, r, true, 5));
+    }
+  }
+
+  // ---- and four over the fork, which is what stops there being a hole in the
+  // middle of the crown when it is looked at from underneath - and **they are the
+  // darkest four in the tree and they carry no flowers at all**, because `sunAt()`
+  // is a field and the fork is the bottom of the crown. A ring of pale clouds over
+  // the trunk is a lampshade, and a ring of flowered clouds down there is two
+  // thousand vertices nobody will ever stand under.
+  for (let k = 0; k < 4; k++) {
+    const a = k * 2.399 + 1.2;
+    const at = fork.clone().add(new THREE.Vector3(
+      Math.cos(a) * 0.50, 0.30 + (k % 3) * 0.22, Math.sin(a) * 0.50));
+    crown.push(blossomCloud(at, 0.58 * (0.86 + r() * 0.28), sunAt(at.y), r() * 6.3, r, false, 0));
+  }
+
+  return merge(wood.concat(crown), 'cherry-tree');
+}
+
+/* ---------------------------------------------------------------- the ashlands */
+
+/**
+ * A dead tree, and **it is bare on purpose** - there is no leaf to model and no
+ * leaf to draw, which is the whole difference between this piece and the county's
+ * four trees and the reason it can be four hundred triangles instead of two
+ * thousand. What a burnt tree is is a trunk that forks once or twice and then
+ * stops, and the fork is the read: a bare tree is a line drawing, and the lines
+ * are what you see at four hundred metres.
+ *
+ * **It is built as a taper rather than a cylinder** because a burnt trunk is
+ * narrower at the top than at the foot and a cylinder standing on end is a post,
+ * and a post with branches on it is a piece of plumbing. The taper is steep at the
+ * foot and shallow at the top, which is what a tree that has lost its crown looks
+ * like: the taper was the crown's, and the crown is gone.
+ *
+ * **And the pale end is the break, not the light.** A snapped limb shows the wood
+ * inside it and the wood inside a burnt tree is a pale grey, so the top quarter
+ * of every branch is `ashBarkPale` and the rest is `ashBark`. **That is two lathes
+ * standing on one matrix and not one lathe with a gradient**, and the reason is in
+ * the jar's `ashBark` note: a burnt tree has no bark left to shade, so anything between
+ * the two values is a smooth grey pole, and `sgrad` can only make a gradient. The
+ * two profiles meet at the same radius because they are the same numbers either
+ * side of one height.
+ *
+ * One part, and therefore one material and one map (there are none - see
+ * the manifest's `ash-tree` entry, which lists no maps), drawn in `mat.foliage`
+ * with a per-instance tint like every
+ * other tree in the county, **because a biome is a palette and a palette is not a
+ * new material per piece.**
+ */
+function ashTree() {
+  const parts = [];
+  const H = 3.9 + 0.9 * ((5 * 7) % 3) / 2;
+  const rootR = 0.20 + ((5 * 3) % 3) * 0.045;
+  /** One branch's profile between two heights, so the dark and the pale halves of
+   *  it agree about the radius where they meet. `t` is the height as a fraction of
+   *  the branch. */
+  const limb = (r0, t0, t1, n) => Array.from({ length: n + 1 }, (_, k) => {
+    const t = t0 + (t1 - t0) * (k / n);
+    return [r0 * (1 - t * 0.78), t];
+  });
+  // the trunk, and it is a lathe so the wobble is a wobble round it rather than a
+  // scale: a burnt trunk is not straight but it is not elliptical either
+  const prof = [[rootR, 0], [rootR * 0.62, H * 0.42], [rootR * 0.30, H * 0.72], [rootR * 0.16, H]];
+  parts.push(sgrad(slathe(prof, 9, (a) => 1 + 0.14 * Math.sin(a * 3 + 1.1)),
+    M(0, 0, 0, 1, 1, 1, 0.04, 0.7, 0.03), 0, H, C.ashBark));
+  // **and the fork, which is the whole read.** Four branches, each standing on the
+  // trunk at its own height and its own bearing, and each shorter and thinner than
+  // the one below it, so the silhouette is a staircase and not a starburst.
+  for (let i = 0; i < 4; i++) {
+    const a = i * 2.399 + 0.4;
+    const y = H * (0.46 + i * 0.13);
+    const len = H * (0.44 - i * 0.075) * (0.9 + ((i * 5) % 3) * 0.09);
+    const r0 = rootR * (0.46 - i * 0.07);
+    const lean = 0.5 + i * 0.16;
+    const m = M(Math.cos(a) * r0 * 1.4, y, Math.sin(a) * r0 * 1.4, 1, 1, 1, 0, 0, lean);
+    parts.push(sgrad(slathe(limb(r0, 0, 0.74, 5), 6, (aa) => 1 + 0.09 * Math.sin(aa * 4)),
+      m, 0, len * 0.74, C.ashBark));
+    // **and the break**, the same lathe at the same matrix for the top quarter,
+    // so the two meet exactly and the pale is a step and not a fade
+    parts.push(sgrad(slathe(limb(r0, 0.74, 1, 2), 6, (aa) => 1 + 0.09 * Math.sin(aa * 4)),
+      m, len * 0.74, len, C.ashBarkPale));
+  }
+  // and two stubs low down, snapped off at the trunk: a burnt tree keeps the
+  // wounds of the branches it lost, and a wound is the same pale a break is
+  for (let i = 0; i < 2; i++) {
+    const a = i * 3.1 + 1.7;
+    const y = H * (0.24 + i * 0.1);
+    parts.push(spart(cyl(rootR * 0.34, rootR * 0.24, 0.32, 6),
+      M(Math.cos(a) * rootR * 0.7, y, Math.sin(a) * rootR * 0.7, 1, 1, 1, 0, 0, 1.32),
+      C.ashBarkPale));
+  }
+  // **and the root flare**, which is the one thing that stops a lathe reading as a
+  // pipe pushed into the ground: three low buttresses, and a tree with no flare is
+  // a post with branches on it
+  for (let i = 0; i < 3; i++) {
+    const a = i * 2.1 + 0.4;
+    parts.push(sgrad(slathe([[rootR * 0.9, 0], [rootR * 0.55, 0.26], [rootR * 0.3, 0.5]], 5,
+      (aa) => 1 + 0.18 * Math.sin(aa * 3)),
+      M(Math.cos(a) * rootR * 0.8, 0, Math.sin(a) * rootR * 0.8, 1, 1, 1, 0, a, 0.24),
+      0, 0.5, C.ashBark));
+  }
+  return crease(parts, 'ash-tree', 26);
+}
+
+/**
+ * A column of basalt, and **it is a hexagonal prism and not a noisy cylinder**,
+ * for the reason the whole `basalt` field is written the way it is. Columnar
+ * basalt is a fracture that has propagated; a column is a prism with flat faces
+ * meeting at hard edges, and a lathe with enough segments reads as a *drum* - a
+ * barrel is a smooth taper and a column is not. Six sides it is, and the six are
+ * the six of the map's groove lattice, so a column standing in the country and
+ * the ground behind it are the same six.
+ *
+ * **And it is built indexed and creased rather than flattened**, which is the
+ * other half of being a prism: `mergeGeometries()` returns null when two of its
+ * inputs differ in whether they carry an index, and a lathe is hand-built and
+ * unindexed while `CylinderGeometry` is indexed, so **every piece of this one is
+ * `slathe`/`spart` and never `part`/`move`.** `crease()` at 22 degrees is what
+ * keeps the six vertical edges hard and smooths the turn inside each face, which
+ * is the whole of what the surface is: six planes and no rounds.
+ *
+ * **The top is flat and slightly dished.** A column whose top is domed is a
+ * boulder and a column whose top is a point is a spike; columnar basalt breaks
+ * across the columns and leaves every one of them capped at about the same
+ * height, so the cap is the shape that says *this is one of many*. The dish is
+ * the lathe's profile turning inward at the top, and it is shaded for free -
+ * `sgrad` reads the height, so a dished cap is pale in the middle and dark at the
+ * rim without a second colour.
+ *
+ * **And it tapers, very slightly.** A real column narrows a little towards the
+ * top because cooling draws in on itself, and the reason it matters here is that a
+ * **prism of one width is a post**: the taper is what makes six faces read as six
+ * faces, because a face you can see the whole of and a face you can see half of
+ * are lit differently.
+ *
+ * It is one part wearing the cliff's own three maps - `basalt-column` in
+ * the manifest's `basalt-column` entry - and **the piece is the reason the map has
+ * to be right**,
+ * because a thing you can walk round and a thing you can only see edge-on have to
+ * agree about where the joints are.
+ */
+function basaltColumn() {
+  const parts = [];
+  const H = 2.9 + ((7 * 3) % 4) * 0.42;
+  const r0 = 0.38 + ((7 * 5) % 3) * 0.09;
+  const r1 = r0 * 0.88;
+  const capR = r1 * 0.93;
+  // six sides, and the profile turns inward at the top: that turn *is* the dish
+  const prof = [
+    [r0, 0], [r0 * 0.99, H * 0.30], [r1 * 1.0, H * 0.78], [capR, H],
+    [capR * 0.62, H - 0.045], [capR * 0.24, H - 0.06],
+  ];
+  parts.push(sgrad(slathe(prof, 6, (a) => 1 + 0.035 * Math.sin(a * 6)), M(0, 0, 0), 0, H,
+    C.basaltCol));
+  // **The columnar jointing, as four vertical scores and not as grooves cut round
+  // it**: a groove round the outside of a prism is a band, and a band is not a
+  // joint. Each is a thin prism set into a face, so what it does is catch the
+  // light on one edge - which is all a joint is.
+  for (let i = 0; i < 4; i++) {
+    const a = i * (Math.PI / 3) + 0.22;
+    const y = H * (0.06 + (i % 3) * 0.12);
+    const hh = H * (0.62 + ((i * 7) % 3) * 0.11);
+    parts.push(spart(cyl(0.026, 0.034, hh, 5),
+      M(Math.cos(a) * r0 * 0.97, y, Math.sin(a) * r0 * 0.97, 1, 1, 1, 0, 0, 0.06),
+      C.basaltColDark));
+  }
+  // and the chips at its foot, **as `ball()` and not as `chip()`**, for the merge's
+  // sake: `chip()` is hand-built and unindexed and would take the whole piece with
+  // it. A six-sided ball scaled flat and turned is a chip.
+  for (let i = 0; i < 3; i++) {
+    const a = i * 2.1 + 0.9, r = r0 * (1.25 + (i % 2) * 0.4);
+    parts.push(spart(ball(0.075 + (i % 2) * 0.04, 6),
+      M(Math.cos(a) * r, 0.03, Math.sin(a) * r, 1.1, 0.42, 1, 0.2, a, 0.1),
+      C.basaltColDark));
+  }
+  return crease(parts, 'basalt-column', 22);
+}
+
+/**
+ * A clump of ash grass, and **it is the meadow's `tuft()` with the blades lying
+ * down rather than standing up**, which is the one thing that makes it read as ash
+ * rather than as a green tuft that has been recoloured. A tuft is a lot of blades
+ * curving *away* from the centre, and it is the standing-up that says grass; ash is
+ * flat-lying grit with the ghost of a blade in it, so the lean here is nearly flat
+ * and there are **two ranks** of them rather than one - the outer rank lying at
+ * half a radian off the vertical and the inner one at a fifth, which gives the
+ * clump a heart and a skirt instead of a halo.
+ *
+ * The blades run `ashStem` to `ashStemTip` rather than a dark green to a light
+ * one, **and the material's own colour is a pale grey rather than the ashlands'
+ * `ashMid`** - see `mat.ashFoliage` in the material jar for why the two multiply
+ * and what the product comes to. That is the whole reason a biome wants a second
+ * foliage material and not a tint on the first.
+ *
+ * **No map**, for the reason `tuft()` has none: a tuft has no uv and nowhere to
+ * put one on six thousand of them, so `mat.ashFoliage` is a `triplanarDetail()`
+ * and the grain is projected. It **is** on the wind list - `gfxSurfaceTargets()` -
+ * so a field of them leans the way the meadow's does, and the geometry carries
+ * `windMark()` for the occlusion buffer.
+ *
+ * **And it is built flat where the four other props are creased**, which is not an
+ * inconsistency: a blade is two triangles and creasing six thousand of them buys
+ * nothing, and `move()`/`part()` flatten on the way in - which is also what lets
+ * `chip()`'s unindexed crust be in the same merge as a blade.
+ */
+function ashTuft() {
+  const parts = [];
+  const N = 14;
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2 + 0.35 + ((i * 7) % 5) * 0.13;
+    const lean = (i % 3 === 0 ? 0.2 : 0.55) + ((i * 3) % 4) * 0.09;
+    const len = 0.19 + ((i * 11) % 5) * 0.028;
+    const wid = 0.011 + ((i * 2) % 3) * 0.003;
+    const r0 = 0.022 + ((i * 13) % 4) * 0.012;
+    parts.push(move(blade(len, wid, {
+      rows: 5, curve: 0.55, cup: 0.14, base: C.ashStem, tip: C.ashStemTip,
+    }), M(Math.sin(a) * r0, 0, Math.cos(a) * r0)
+      .multiply(new THREE.Matrix4().makeRotationY(a))
+      .multiply(new THREE.Matrix4().makeRotationX(lean))));
+  }
+  for (let i = 0; i < 4; i++) {
+    const a = i * 1.26 + 0.5;
+    parts.push(move(blade(0.12 + (i % 3) * 0.025, 0.010, {
+      rows: 4, curve: 0.7, cup: 0.12, base: C.ashStem, tip: C.ashStemTip, mid: C.ashStemTip,
+    }), new THREE.Matrix4().makeRotationY(a)
+      .multiply(new THREE.Matrix4().makeRotationX(0.24 + (i % 2) * 0.16))));
+  }
+  // **and three pieces of the crust standing out of it**, because a tuft in a dead
+  // valley is a tuft with gravel in it, and a clump with nothing under it stands on
+  // nothing at three hundred metres. **`move()` and not `part()`**, because
+  // `chip()` is handed its colour by its own third argument and has already tinted
+  // itself - `part()` would tint it a second time from an `undefined`.
+  for (let i = 0; i < 3; i++) {
+    const a = i * 2.7 + 1.9, r = 0.05 + (i % 2) * 0.05;
+    parts.push(move(chip(0.022 + (i % 2) * 0.012, 73 + i, C.cinderStone),
+      M(Math.cos(a) * r, 0.012, Math.sin(a) * r, 1, 0.42, 0.9, 0.1, a, 0.05)));
+  }
+  return merge(parts, 'ash-tuft');
+}
+
+/**
+ * A fumarole, and **it is the one piece in the ashlands that is not grey**, which
+ * is the whole of what it is for. The county's rule is *nothing outside the jar
+ * invents a colour*, and this is that rule being used rather than merely obeyed: a
+ * dead valley with no hue in it at all is a photograph in greyscale, and a vent is
+ * the one place on a course where a person would expect to see a colour, so it is
+ * where the one goes.
+ *
+ * **It is a cracked cone with a dark throat, and the warmth is on the *rim* and
+ * not in the hole.** A vent is a crack in cold rock with hot rock at the edge of
+ * it; the middle is the part you cannot see into. `ventRim` is a dull warm brown
+ * and `ventThroat` is the darkest value in the block **without being black**,
+ * because a hole reads by the contrast against its rim and a black on a black cone
+ * is a shape with nothing inside it - which is the same argument `obsidian` makes
+ * about its own value, and it is why `obsidian` is 0.018 and not 0.
+ *
+ * The cone is **low and squat** - fifty-six centimetres on a metre of foot, which
+ * is a broad shallow funnel - and it is placed eight metres off the verge, so it is
+ * something to walk towards rather than something the player is asked to race past.
+ * **And the throat is a lathe rather than an inverted cylinder**, because a negative
+ * scale turns the winding inside out and `toCreasedNormals()` cannot see it: the
+ * profile simply runs *down*, and `slathe` reads the direction and flips the
+ * triangles itself, which is what the `up` argument in it is for.
+ */
+function vent() {
+  const parts = [];
+  const prof = [[0.46, 0], [0.34, 0.14], [0.22, 0.34], [0.135, 0.5], [0.10, 0.56]];
+  // the wobble is two terms on purpose: a vent that is a smooth funnel is a piece
+  // of plumbing, and a cone with one lobe on it is a flower
+  parts.push(sgrad(slathe(prof, 11,
+    (a) => 1 + 0.10 * Math.sin(a * 3 + 0.7) + 0.05 * Math.sin(a * 7)),
+    M(0, 0, 0), 0, 0.56, C.ventRim));
+  // **and the throat, going down from just inside the rim**, shaded by the height it
+  // really occupies so the dark is at the bottom of it and not at the bottom of a
+  // range it never reached
+  parts.push(sgrad(slathe([[0.10, 0], [0.078, 0.10], [0.048, 0.20], [0.02, 0.30]], 11),
+    M(0, 0.13, 0), 0.13, 0.43, C.ventThroat));
+  // the cracks out of it, four of them, running down the outside and fading before
+  // they reach the foot: a cone with four lines all the way down is a fluted pot
+  for (let i = 0; i < 4; i++) {
+    const a = i * 1.9 + 0.5;
+    const len = 0.16 + ((i * 7) % 3) * 0.07;
+    const y = 0.40 - ((i * 3) % 3) * 0.05;
+    const rr = 0.16 + ((i * 5) % 3) * 0.05;
+    parts.push(spart(cyl(0.016, 0.026, len, 5),
+      M(Math.cos(a) * rr, y, Math.sin(a) * rr, 1, 1, 1, 0, 0, 1.05 + (i % 2) * 0.2),
+      C.ventThroat));
+  }
+  // and the ash round it: a low collar in the pale crust, so it is standing on the
+  // ground rather than in it - and **it is the widest thing in the piece**, which
+  // is what a vent's apron is.
+  parts.push(sgrad(slathe([[0.62, 0], [0.52, 0.05], [0.44, 0.1]], 11,
+    (a) => 1 + 0.13 * Math.sin(a * 4 + 1.9)), M(0, 0, 0), 0, 0.1, C.ashStem));
+  return crease(parts, 'vent', 24);
+}
+
+/**
+ * An obsidian shard, and **it is the one shiny thing in the county.**
+ *
+ * That is why it is the piece that gets a `roughnessMap` and a low value: a
+ * `roughnessMap` is the only way a surface can vary its own finish across its own
+ * face, and obsidian is two finishes - a dull conchoidal skin over the outside of
+ * a fracture and a glassy one inside it - which one material number cannot say.
+ *
+ * **Each splinter is a half-shell and there is no flat face anywhere**, and that is
+ * what makes it glass: a flat face on an obsidian piece is a cut, and a cut piece is
+ * a bead. So the splinters are tapered cylinders with almost nothing on their top
+ * face and a **thin edge** at the bottom, standing at five different angles - and
+ * the thin edge is the read, because a shard seen against the sky is mostly edge.
+ *
+ * **Five different lengths**, because a cluster of five identical splinters is a
+ * crown and a crown is jewellery.
+ *
+ * The colour is the jar's `obsidian` at 0.018 and the piece is drawn in `mat.rock`,
+ * **which is the county's stone material: it is not metal and does not want to
+ * be.** three.js here has no transmission, so obsidian is a dielectric at a low
+ * base roughness with a `roughnessMap` over it, and **the sky is what makes it read
+ * as glass** - the dome, the cube probe on a pool, and nothing else. A
+ * `metalness` of one here would be a mirror with no reflection in range, and it
+ * would come out the colour of the ground.
+ */
+function obsidianShard() {
+  const parts = [];
+  for (let i = 0; i < 5; i++) {
+    const a = i * 1.27 + 0.3;
+    const len = 0.20 + ((i * 7) % 4) * 0.10;
+    const lean = 0.34 + ((i * 5) % 3) * 0.30;
+    const r = 0.026 + (i % 3) * 0.016;
+    const out = 0.05 + (i % 2) * 0.06;
+    parts.push(spart(cyl(0.004, r, len, 6),
+      M(Math.cos(a) * out, 0, Math.sin(a) * out, 1, 1, 1, 0, a, lean),
+      C.obsidian));
+  }
+  // **and the pale crust round their feet**, in the ash, so the cluster is standing
+  // on the ground and not growing out of it - and **it is the widest thing here**,
+  // which is what a shard's bed is.
+  parts.push(sgrad(slathe([[0.17, 0], [0.12, 0.025], [0.07, 0.045]], 9,
+    (a) => 1 + 0.15 * Math.sin(a * 3)), M(0, 0, 0), 0, 0.045, C.ashStem));
+  return crease(parts, 'obsidian-shard', 30);
+}
+
+/**
+ * A dead scrub, and **it is the ashlands' `bush` and the whole reason the biome
+ * wants one.** `bush` is declined in `meshes/biomes.js` and nothing stood in its
+ * place, so an ashlands course had no plant at all between the ankle-high tufts
+ * and the four-metre trees - nine metres of nothing, and the gap reads as bare
+ * ground rather than as a decision.
+ *
+ * **There is nothing green in it and that is the whole of its design**, so it is
+ * not the meadow's bush in grey. A bush is a core with leaves over it and the
+ * leaf is the read at thirty metres; **the read of a dead scrub is the twigs**, so
+ * the mass is made *of* the twigs - twenty-eight of them off one stem, each forking
+ * once, which buys a thicket that is wider than it is tall with a broken edge and
+ * open enough to see through at four metres. A core with twigs round it is a ball
+ * with a fringe, which is a lollipop.
+ *
+ * **And every twig ends in a pale break**, which is `ashBarkPale` and the same
+ * value `ashTree()` snaps its own branches off at. Each twig is therefore **two
+ * tubes that meet exactly** - the dark one for the length of it, the pale one for
+ * the last quarter - which is `ashTree()`'s own arrangement, and it is why the
+ * pale is a step on each twig rather than a gradient: a twig that fades to nothing
+ * is a root and a twig that stops is a twig something's weather got to.
+ *
+ * **It is drawn in `mat.foliage` and not `mat.ashFoliage`**, and the reason is the
+ * vertex colours and not the wind - both are on the wind list. `mat.ashFoliage` is
+ * a flat `color` with `vertexColors` off, and it is what `ash-tuft` wears because a
+ * tuft is fourteen blades of one value. A scrub is branches, and the branches are
+ * out of the jar's `ashBark` and `ashBarkPale`, so it wants `vertexColors: true` -
+ * which is `mat.foliage`, the material `ash-tree` wears and the county's own.
+ */
+function ashScrub() {
+  const parts = [];
+  const r = makeR(2207);
+  const H = 0.66 + r() * 0.22;          // a shrub's own height
+  const spread = 0.44 + r() * 0.20;     // and half of how far it spreads
+  /**
+   * One twig out of `p0` along `dir`, as the two tubes above. The return is its
+   * tip and its own direction, because the fork comes off the back of it.
+   */
+  const twig = (p0, dir, len, rad, rise) => {
+    const d = dir.clone().normalize();
+    // a sideways kick at the first bend, so the thicket is not a starburst
+    const side = new THREE.Vector3(0, 1, 0).cross(d);
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    side.normalize().multiplyScalar((r() - 0.5) * len * 0.26);
+    const bend = p0.clone().addScaledVector(d, len * 0.24).add(side)
+      .setY(p0.y + rise * 0.34);
+    const mid = p0.clone().addScaledVector(d, len * 0.56).setY(p0.y + rise * 0.70);
+    const tip = p0.clone().addScaledVector(d, len).setY(p0.y + rise);
+    parts.push(grad(tube([p0, bend, mid], [rad, rad * 0.68, rad * 0.48], 5),
+      M(0, 0, 0), 0, H, C.ashBark));
+    // **and the pale half barely tapers**, because a twig that has snapped off
+    // broke at its own thickness: running it down to a point takes the pale with
+    // it, and the pale tip is the only thing on the piece worth reading.
+    parts.push(grad(tube([mid, tip], [rad * 0.48, rad * 0.32], 5),
+      M(0, 0, 0), 0, H, C.ashBarkPale));
+    return { tip, dir: new THREE.Vector3().subVectors(tip, bend).normalize() };
+  };
+  // **and a stem**, short and thick with a flare at the foot, because twenty-eight
+  // twigs out of the ground is a bundle of sticks and a stem is what makes the
+  // whole of them one plant
+  parts.push(grad(slathe([[0.085, 0], [0.064, 0.10], [0.042, 0.21]], 7,
+    (a) => 1 + 0.2 * Math.sin(a * 3)), M(0, 0, 0), 0, 0.21, C.ashBark));
+  const N = 14;
+  for (let i = 0; i < N; i++) {
+    const a = i * 2.399 + r() * 0.5;
+    const out = spread * (0.62 + r() * 0.62);
+    const d = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    const p0 = new THREE.Vector3(d.x * 0.055, 0.06 + r() * 0.10, d.z * 0.055);
+    const br = twig(p0, d, out, 0.019 + r() * 0.008, H * (0.66 + r() * 0.34));
+    // **and its own fork**, off the back of the bend and standing steeper, so the
+    // outside of the thicket is twice as dense at the second order - which is what
+    // a shrub that has been standing in a dead valley for a century looks like
+    const fa = a + (r() - 0.5) * 1.6;
+    twig(br.tip.clone().addScaledVector(br.dir, -out * 0.30),
+      new THREE.Vector3(Math.cos(fa), 0, Math.sin(fa)), out * 0.52,
+      0.011, H * (0.42 + r() * 0.36));
+  }
+  // and the pale crust round the foot, the collar `vent` and `obsidian-shard` both
+  // stand on, so the clump is standing on the ground rather than growing out of it.
+  // **It is a fifth smaller than the one on `obsidian-shard` and it is thirteen
+  // segments and not eleven**, and both of those are this piece's own: a collar
+  // on a shard is hidden under a cone, and a collar on a thicket of two-centimetre
+  // twigs is the widest thing in the piece with nothing over it - so at eleven
+  // segments it reads as a flat plate lying on the ash rather than as a crust the
+  // plant is standing in. **The wobble is two terms for the same reason**: one
+  // term at a third harmonic on thirteen segments is still a recognisable polygon,
+  // and an edge that is recognisable is an edge that has been drawn.
+  parts.push(grad(slathe([[0.27, 0], [0.20, 0.026], [0.13, 0.048]], 13,
+    (a) => 1 + 0.13 * Math.sin(a * 3 + 0.7) + 0.07 * Math.sin(a * 7 + 2.1)),
+    M(0, 0, 0), 0, 0.048, C.ashStem));
+  // **and six pieces of grit out at the edge of the collar**, as `move()` and not
+  // `part()` because `chip()` is handed its colour by its own third argument and
+  // has already tinted itself - see `ashTuft()`.
+  for (let i = 0; i < 6; i++) {
+    const a = r() * Math.PI * 2, rr = 0.17 + r() * 0.17;
+    parts.push(move(chip(0.024 + r() * 0.016, 300 + i, C.cinderStone),
+      M(Math.cos(a) * rr, 0.006, Math.sin(a) * rr, 1, 0.4, 0.9, 0.1, a, 0.06)));
+  }
+  return merge(parts, 'ash-scrub');
+}
+
+/**
+ * A tree that came down with its **root plate still on it**, and it is on its side
+ * in the ash rather than standing, which is the whole of what it is for: an
+ * `ash-tree` is a vertical and a snag is a vertical, and twenty-two of one and a
+ * dozen of the other is a stand of poles. A trunk lying flat is a **landmark**
+ * read at a distance nothing else in the biome is read at, and it costs no
+ * vertical budget at all - a thing you can walk round and a thing lying in the
+ * grass are the same drawing cost and not the same picture.
+ *
+ * **It lies along its own z** because `scatter()` gives every instance a random
+ * bearing, so a bole built along +x would lie across the course on half of them.
+ * The bow is one term and it is signed, because a bole that curves always the
+ * same way is a question mark and two that curve either way are a wood.
+ *
+ * **And the break at the far end is a ring of splinters round an open tube**, not
+ * a cap, because `tube()` leaves both its ends open and a sawn-off log is the one
+ * thing this piece must not look like. The pale ball inside them is what closes
+ * the hole, and it is the pale end of the wood - the same `ashBarkPale` the
+ * scrub's twigs stop in.
+ *
+ * **The root plate is a dish of soil turned on edge**, facing *away* from the bole
+ * and **half of it below the ground**: a plate that has been dropped back after
+ * the tree came down is half buried, and a plate standing proud on its own reads
+ * as a dish on a post. The roots are `strut()`s across its face and they start
+ * **inside** the bole, because a root that begins at the plate's own surface is a
+ * root lying on a plate.
+ */
+function ashFallen() {
+  const parts = [];
+  const r = makeR(6823);
+  const L = 3.5 + r() * 0.9;
+  const r0 = 0.185 + r() * 0.05;
+  const bow = (0.5 + r() * 0.5) * (r() < 0.5 ? -1 : 1);
+  const path = [
+    new THREE.Vector3(0, r0, 0),
+    new THREE.Vector3(bow * 0.22, r0 * 0.96, L * 0.30),
+    new THREE.Vector3(bow * 0.30, r0 * 0.88, L * 0.64),
+    new THREE.Vector3(bow * 0.16, r0 * 0.72, L),
+  ];
+  // **and the shade is a short ramp and not `H`-shaped**, because the piece is
+  // lying down: `grad()` reads the world height, and a `0 - H` ramp on a log
+  // puts its whole dark end at the same value and its whole pale end at another.
+  // A ramp across the bole's own thickness is what puts the underside in shade.
+  parts.push(grad(tube(path, [r0, r0 * 0.90, r0 * 0.74, r0 * 0.58], 8),
+    M(0, 0, 0), 0, r0 * 1.7, C.ashBark));
+  // **and the break**: the pale heart first, sitting a little inside the end so it
+  // closes the tube without standing proud of it
+  const end = path[3];
+  parts.push(part(ball(r0 * 0.62, 8), M(end.x, end.y, end.z - 0.03, 1, 1, 1.2), C.ashBarkPale));
+  // **and the splinters run *along* the bole and not out of it**, which is the
+  // whole difference between a snapped end and a burr: wood breaks along its
+  // grain, so every one of these starts inside the heart and comes forward down
+  // the axis with only a hand's breadth of fan. Splayed radially - which is what
+  // the first cut of this did - and the end is a black starburst, which is a
+  // sea urchin and not a tree.
+  for (let i = 0; i < 6; i++) {
+    const a = i * 2.399 + 0.9;
+    const u = r0 * (0.28 + (i % 3) * 0.18);
+    const run = 0.09 + ((i * 5) % 3) * 0.13;
+    parts.push(part(strut(
+      new THREE.Vector3(end.x + Math.cos(a) * u * 0.78, end.y + Math.sin(a) * u * 0.78, end.z - 0.12),
+      new THREE.Vector3(end.x + Math.cos(a) * u, end.y + Math.sin(a) * u, end.z + run),
+      0.026 + (i % 2) * 0.010, 0.009, 5), M(0, 0, 0), C.ashBarkPale));
+  }
+  // **and the root plate**, on edge at the end the bole came out of, in the cinder
+  // greys because a plate is soil and the soil in this county is `cinder`. It is
+  // fifteen segments and **two** wobble terms for `ashScrub()`'s reason, and the
+  // second term is at a *lower* harmonic here than on the collars - a plate torn
+  // out of the ground has two or three big lobes in its rim, where a crust round a
+  // tuft has six small ones, and the harmonics are what say which of the two it is.
+  const plate = [[0.02, 0], [0.24, 0.035], [0.40, 0.09], [0.44, 0.15]];
+  parts.push(grad(slathe(plate, 15,
+    (a) => 1 + 0.16 * Math.sin(a * 2 + 1.9) + 0.09 * Math.sin(a * 5 + 0.5)),
+    M(0, r0, 0, 1, 1, 1, -Math.PI / 2, 0, 0), 0, r0 * 3.1, C.cinderStone));
+  // **and the roots, which have to lie on the plate's own surface and not in
+  // front of it.** The plate is a profile turned on edge, so its face is that
+  // profile at another radius, and a root placed at a constant depth is a root
+  // hanging in the air off the middle of the dish - the same error as anchoring a
+  // mushroom's strand at a constant depth. So the profile is interpolated: each
+  // root's tip is *on the soil*, and the half of it near the trunk is buried in
+  // the dish, which is where a root on a torn plate is.
+  const plateDepth = (u) => {
+    for (let i = 0; i < plate.length - 1; i++) {
+      const [r0p, y0] = plate[i], [r1, y1] = plate[i + 1];
+      if (u <= r1) return lerp(y0, y1, clamp01((u - r0p) / (r1 - r0p)));
+    }
+    return plate[plate.length - 1][1];
+  };
+  for (let i = 0; i < 7; i++) {
+    const a = i * 2.399 + 0.35;
+    const u = 0.17 + (i % 3) * 0.10;
+    parts.push(part(strut(new THREE.Vector3(0, r0, -0.03),
+      new THREE.Vector3(Math.cos(a) * u, r0 + Math.sin(a) * u, -plateDepth(u) + 0.012),
+      0.030, 0.011, 5), M(0, 0, 0), C.ashBark));
+  }
+  // **and three branches snapped off along the bole**, each in the dark-then-pale
+  // pair every other break in this biome is, because a fallen tree that shed
+  // nothing is a pole on its side
+  for (let i = 0; i < 3; i++) {
+    const at = new THREE.Vector3().lerpVectors(path[0], path[3], 0.24 + i * 0.23 + r() * 0.08);
+    const a = r() * Math.PI * 2;
+    const d = new THREE.Vector3(Math.cos(a) * 0.55, 0.74 + r() * 0.30, Math.sin(a) * 0.55).normalize();
+    const out = at.clone().addScaledVector(d, 0.24 + r() * 0.28);
+    parts.push(part(strut(at.clone().addScaledVector(d, -0.06), out, 0.032, 0.022, 5),
+      M(0, 0, 0), C.ashBark));
+    parts.push(part(strut(out, out.clone().addScaledVector(d, 0.07), 0.024, 0.012, 5),
+      M(0, 0, 0), C.ashBarkPale));
+  }
+  return merge(parts, 'ash-fallen');
+}
+
+/**
+ * A **snag**: a standing trunk with its crown gone, and it is here for the one
+ * reason the biome could not get from twenty-eight more twigs. `ash-tree` is a
+ * *forked* tree - four branches off a trunk in a staircase - and putting a
+ * hundred of them on a course gives a burnt stand, which is a row of copies. A
+ * snag is the same species with the whole crown sheared off, so it is a **mast**
+ * with a jagged top: two totally different silhouettes out of the same lathe
+ * profile, and the count is what stops either of them reading as the only shape
+ * there is.
+ *
+ * **It is built out of `ashTree()`'s own trunk** - the same `rootR`, the same
+ * nine-sided lathe, the same three root buttresses - so the two are one tree at
+ * two ages and a course carrying both reads as a wood that lost some of itself,
+ * which is the story the biome is already telling in its palette.
+ *
+ * **And the crown is six splinters standing round an open break.** `slathe()`
+ * leaves its last row uncapped, which `basaltColumn()` closes by turning the
+ * profile inward into a dish; here the profile does the same and the six splinters
+ * come up through it, so the top is **broken rather than cut** - which is the
+ * whole read, because a snag with a smooth top is a post. Two snapped branch
+ * stubs high up are the third half: a snag that has lost every branch has nothing
+ * to say it was ever a tree, and the wounds are what say it.
+ */
+function snag() {
+  const parts = [];
+  const r = makeR(4411);
+  const H = 4.7 + r() * 1.0;
+  const r0 = 0.15 + r() * 0.035;
+  // the bole, and it is **straight** where `ashTree()`'s is forked - and it leans,
+  // because a dead mast that has stood a century with nothing in its crown has had
+  // every gale it withstood
+  const prof = [[r0, 0], [r0 * 0.90, H * 0.20], [r0 * 0.74, H * 0.45], [r0 * 0.56, H * 0.70],
+    [r0 * 0.40, H * 0.88], [r0 * 0.33, H], [r0 * 0.20, H - 0.04], [0.005, H - 0.07]];
+  parts.push(sgrad(slathe(prof, 9, (a) => 1 + 0.09 * Math.sin(a * 3 + 2.1)),
+    M(0, 0, 0, 1, 1, 1, 0, 0, 0.035 + r() * 0.05), 0, H, C.ashBark));
+  // **and the splinters**, six of them out of the broken rim at six heights.
+  // **`spart` and not `part`, and `crease()` at the bottom and not `merge()`**,
+  // for `basaltColumn()`'s reason: `strut()` hands back an indexed
+  // `CylinderGeometry` and `part()` flattens it on the way in, so one indexed
+  // part and one flattened one in the same list is a `mergeGeometries` null - and
+  // the whole piece was the lathe rather than the splinter. `crease()` at
+  // **ashTree()'s own 26 degrees**, because this is the same tree at a different
+  // age and the two have to facet the same way.
+  for (let i = 0; i < 6; i++) {
+    const a = i * 2.399 + 0.7;
+    parts.push(spart(strut(
+      new THREE.Vector3(Math.cos(a) * r0 * 0.16, H - 0.13, Math.sin(a) * r0 * 0.16),
+      new THREE.Vector3(Math.cos(a) * r0 * (0.30 + (i % 3) * 0.28),
+        H + 0.10 + ((i * 7) % 4) * 0.22,
+        Math.sin(a) * r0 * (0.30 + (i % 3) * 0.28)),
+      0.030 + (i % 2) * 0.012, 0.006, 4), M(0, 0, 0), C.ashBarkPale));
+  }
+  // and two branches snapped off high up, in the dark-then-pale pair - and **long
+  // and thick**, at `ashTree()`'s own proportion of the trunk rather than a
+  // fraction of it. The first cut of these was `H * 0.15` on a `r0 * 0.4` stem,
+  // which is a hair on a mast: two dark threads that vanish at race distance, and
+  // the two wounds are the only thing on a snag that says it was ever a tree.
+  for (let i = 0; i < 2; i++) {
+    const a = i * 2.7 + 0.3;
+    const y = H * (0.56 + i * 0.16);
+    const out = H * (0.24 - i * 0.05);
+    const from = new THREE.Vector3(Math.cos(a) * r0 * 0.7, y, Math.sin(a) * r0 * 0.7);
+    const to = new THREE.Vector3(Math.cos(a) * out, y + out * 0.22, Math.sin(a) * out);
+    parts.push(spart(strut(from, to, r0 * 0.34, r0 * 0.22, 6), M(0, 0, 0), C.ashBark));
+    parts.push(spart(strut(to, to.clone().multiplyScalar(1.13).setY(to.y + 0.06), r0 * 0.24, 0.012, 5),
+      M(0, 0, 0), C.ashBarkPale));
+  }
+  // **and the root flare**, off `ashTree()`'s own three buttresses, because a mast
+  // with no flare is a pole pushed into the ash
+  for (let i = 0; i < 3; i++) {
+    const a = i * 2.1 + 0.4;
+    parts.push(sgrad(slathe([[r0 * 0.95, 0], [r0 * 0.58, 0.26], [r0 * 0.32, 0.5]], 5,
+      (aa) => 1 + 0.18 * Math.sin(aa * 3)),
+      M(Math.cos(a) * r0 * 0.8, 0, Math.sin(a) * r0 * 0.8, 1, 1, 1, 0, a, 0.24),
+      0, 0.5, C.ashBark));
+  }
+  // **and the pale crust round the foot**, the collar the vent and the shard stand
+  // on: a snag that ends at the ground with nothing round it is a post in a hole.
+  // **Thirteen segments and two wobble terms**, for the reason `ashScrub()` says -
+  // the one thing a collar on a five-metre mast can still get wrong is reading as
+  // a polygon, because there is nothing else on the piece near the ground to hide
+  // it behind.
+  parts.push(sgrad(slathe([[0.42, 0], [0.32, 0.03], [0.20, 0.055]], 13,
+    (a) => 1 + 0.12 * Math.sin(a * 4 + 1.4) + 0.06 * Math.sin(a * 7 + 0.3)),
+    M(0, 0, 0), 0, 0.055, C.ashStem));
+  return crease(parts, 'snag', 26);
+}
+
 const PIECES = {
   tuft,
   lily, 'lily-pad': lilyPad, reeds, seashell,
-  'lantern-pole': lanternPole, 'lantern-arch': lanternArch,
+  'lantern-pole': lanternPole, 'lantern-arch': lanternArch, 'candle-lantern': candleLantern,
+  // **And the bower's two, beside the lantern arches and not in a block of their
+  // own** - a piece in the county is not in a biome, and the table says so where
+  // the ashlands' eight are listed.
+  'bower-arch': bowerArch, 'bower-foliage': bowerFoliage, 'bower-litter': bowerLitter,
   'mushroom-giant': mushroomGiant, 'mushroom-pale': mushroomPale,
-  'mushroom-rooted': mushroomRooted, hut, windmill, barn, well, scarecrow, crate, 'push-crate': pushCrate,
+  'mushroom-rooted': mushroomRooted, 'mushroom-red': mushroomRed,
+  'mushroom-brown': mushroomBrown, hut, windmill, barn, well, scarecrow, crate, 'push-crate': pushCrate,
   fence, 'corn-plot': cornPlot, 'sprout-plot': sproutPlot,
-  rock, 'mossy-rock': mossyRock, bush, conifer, evergreen, broadleaf, palm, fountain,
+  rock, 'mossy-rock': mossyRock, bush, cactus, 'cactus-barrel': cactusBarrel, conifer, evergreen, broadleaf, palm, fountain, pine,
+  // and the blossom tree, beside the other trees rather than in a block of its own
+  'cherry-tree': cherryTree,
+
   watchtower,
+  // and the ashlands' eight. They are listed with the rest and not in a block of
+  // their own because `meshes/biomes.js` names them and a piece in the county is
+  // not in a biome.
+  'ash-tree': ashTree, 'basalt-column': basaltColumn, 'ash-tuft': ashTuft,
+  vent, 'obsidian-shard': obsidianShard,
+  'ash-scrub': ashScrub, 'ash-fallen': ashFallen, snag,
 };
 
 /* ---------------------------------------------------------------- output */
@@ -4045,6 +6623,14 @@ const PART_MATERIAL = {
   'mushroom-giant-gills': { name: 'mushroom-giant-gills', roughness: 0.96 },
   'mushroom-rooted-cap': { name: 'mushroom-rooted-cap', roughness: 0.88 },
   'mushroom-rooted-gills': { name: 'mushroom-rooted-gills', roughness: 0.96 },
+  // And the two small ones, which are the same three surfaces at two sizes:
+  // a cap that has been out in the weather is the same cap at ten centimetres
+  // across as it is at six metres, which is the whole reason one map serves
+  // all five mushrooms in the county.
+  'mushroom-red-cap': { name: 'mushroom-red-cap', roughness: 0.88 },
+  'mushroom-red-gills': { name: 'mushroom-red-gills', roughness: 0.96 },
+  'mushroom-brown-cap': { name: 'mushroom-brown-cap', roughness: 0.88 },
+  'mushroom-brown-gills': { name: 'mushroom-brown-gills', roughness: 0.96 },
   // And the crate's iron, which is the county's first metal and the reason a
   // part spec carries a metalness at all. Everything else in this table is a
   // dielectric, and both numbers below are the *base* the maps modulate: a
@@ -4068,6 +6654,43 @@ const PART_MATERIAL = {
   // lid two hundredths glossier than the county's timber came up as a sheet of
   // wet oil laid over the crate. 0.94 of 0.75 is 0.70, the timber's own figure.
   'push-crate': { name: 'push-crate', roughness: 0.94 },
+  // And the candle lantern's iron, which is `push-crate`'s answer again for the
+  // same reason and is here because a piece of three parts needs all three of
+  // its names written down: **a lantern's frame is the county's first metal on
+  // a piece the player walks past**, and `mat.metal` would be the fallback and
+  // not the answer, because a metalness of zero is a dark grey plastic frame and
+  // this frame is the only thing about the piece that has to read as wrought.
+  //
+  // The roughness is **0.85, the crate's number and for the crate's reason**:
+  // `metal-rgh` carries the whole range and reads 0.38 on average, so 0.85 of
+  // that is the 0.33 a worn stamping has - and it is also the right answer on
+  // the day the map fails to load, where a base of 0.34 would leave a mirror
+  // standing in a meadow. A candle lantern is **not** a mirror, whatever it is
+  // doing: it is a working lamp in the weather and it is dull.
+  'candle-lantern-frame': { name: 'candle-lantern-frame', roughness: 0.85, metalness: 1.0 },
+  'candle-lantern-candle': { name: 'candle-lantern-candle', roughness: 0.9 },
+  'candle-lantern-pane': { name: 'candle-lantern-pane', roughness: 0.12 },
+  'candle-lantern-flame': { name: 'candle-lantern-flame', roughness: 0.9 },
+  // **And the bower's hoop, which is `candle-lantern`'s frame again** - a wrought
+  // iron member at race distance, and a metalness of zero is a dark grey plastic
+  // arch standing in a meadow. `metal-*` is the map pair it wears, the same one
+  // the lantern's frame and the crate's brackets wear, **because it is one metal
+  // and a second file for it would be a map nothing else in the county has.**
+  //
+  // The roughness is **0.54 and not the 0.85 those two carry**, and the reason is
+  // the other direction: a hand lantern is a working lamp in the weather and it is
+  // dull, while **a hoop is seen against the sky from thirty metres and is the one
+  // thing about the bower that reads as iron rather than as a bent pipe.** 0.85 of
+  // `metal-rgh`'s 0.38 mean is the 0.33 a worn stamping has, which at this size is
+  // a black silhouette. And 0.54 is still a rough metal: it is a wrought hoop
+  // twenty feet up a hedge, not a mirror.
+  //
+  // **`bower-foliage` has no spec here and that is deliberate** - it wears no map
+  // and no part of it is a material of its own, because it has to be drawn in
+  // `mat.foliage` to get the wind. See `meshes/maps.js` for the empty declaration
+  // that keeps it off the converted list.
+  'pine-leaves': { name: 'pine', roughness: 0.9, side: THREE.DoubleSide },
+  'bower-arch': { name: 'metal', roughness: 0.54, metalness: 0.82 },
 };
 
 /**

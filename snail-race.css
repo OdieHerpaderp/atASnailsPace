@@ -160,17 +160,144 @@
   input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
   input[type=color]::-webkit-color-swatch { border: none; border-radius: 2px; }
   input[type=color]::-moz-color-swatch { border: none; border-radius: 2px; }
-  .styles { display: flex; gap: 4px; margin-left: auto; }
-  .styles button {
-    width: 22px; height: 22px; padding: 0; border-radius: 3px;
+  /* **There is no shell-picker row any more**, and the three gradients that stood in
+     for `bands`, `swirl` and `spots` went with it. The shell is one model now, cut
+     from `references/snailRef.glb`, and a row of three buttons that chose a whorl
+     would be three controls that all did the same thing - **a picker with one thing in
+     it is a button that lies**, and the whorl is drawn by `shell-n` and `shell-tone`
+     rather than baked into a file per style. */
+
+  /* ---------------- the wardrobe ---------------- */
+  /* **A face glyph is a character and not a drawing.** There is no canvas in a
+     `<div>`, so ten faces are ten glyphs at 11px and the whole of the work is
+     picking ten characters that read apart at that size. The dollar sign is the
+     county's own gold and the wave and the horns are the same weight as the rest -
+     which is why the set uses 12px and not the 11.5px of `.cap`: a glyph at the
+     size of a caption reads as a smudge. **A face with no rule here draws nothing
+     at all**, silently, and `FACE_SET` in `src/core.js` and these ten selectors
+     are two lists of the same ten names. */
+  .rival i[class^="f-"] {
+    font-family: var(--mono); font-style: normal; font-size: 13px; line-height: 1;
+    width: 14px; flex: none; text-align: center; color: var(--ink);
+  }
+  .f-cheer { color: var(--good); }
+  .f-dollar { color: var(--gold); font-weight: 700; }
+  .f-keen { color: var(--ink); letter-spacing: -1px; }
+  .f-smug { color: var(--ink); }
+  .f-grim { color: var(--dim); }
+  .f-tidal { color: #3f7d9c; }
+  .f-winged { color: var(--ink); }
+  .f-wild { color: #8a5aa8; }
+  .f-googly { color: var(--ink); }
+  .f-fangs { color: var(--dim); font-weight: 700; }
+  .f-grin { color: var(--ink); }
+  .f-crest { color: var(--ink); }
+  .f-devil { color: #a3323c; font-weight: 700; }
+  /* **The season picker has no glyph, and it is hidden rather than squeezed.**
+     `#ladderRows` is a four-column grid and a fifth child wraps onto a second line,
+     which put every snail's rating under its own name; the season rows are a flex
+     list with the same four children and the same problem in a narrower box, and
+     the picker's names are already ellipsised at 250px. So the face is a field-card
+     and a ladder feature and not a picker feature - and **the rows that do carry it
+     have to count their columns**, which is the part that is easy to forget. */
+  #seasons .srivals i[class^="f-"] { display: none; }
+
+  /* **A shop swatch is a small drawing and not a thumbnail.** Six hats and ten
+     faces on sixteen files, none of them reachable as an image the panel can
+     load - so the hats are built out of a border-radius and a box-shadow, and the
+     faces out of two dots and a curve. `data-s`/`data-h` on the button is the name;
+     the glyph is the class. */
+  .swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 4px; }
+  .wdrow { margin-bottom: 12px; }
+  .wdrow h3 {
+    margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  #wardrobe .card-modal .sub { display: flex; align-items: center; gap: 5px; }
+  #wardrobe .note { margin: 0 0 18px; }
+  .swatches button {
+    position: relative; aspect-ratio: 1; padding: 0; border-radius: 4px;
     border: 1px solid var(--line2); background: rgba(255,255,255,0.5); cursor: pointer;
     display: grid; place-items: center;
   }
-  .styles button.sel { border-color: var(--ink); background: #fff; }
-  .styles button i { display: block; width: 13px; height: 13px; border-radius: 2px; opacity: 0.8; }
-  .s-bands { background: repeating-linear-gradient(90deg, #555 0 2px, #ddd 2px 4px); }
-  .s-swirl { background: conic-gradient(#555, #ddd, #555, #ddd, #555); }
-  .s-spots { background: radial-gradient(circle at 30% 35%, #555 1.6px, transparent 2px), radial-gradient(circle at 70% 70%, #555 1.6px, transparent 2px), #ddd; }
+  .swatches button.sel { border-color: var(--ink); background: #fff; }
+  .swatches button:disabled { opacity: 0.34; cursor: default; }
+  /* **and the glyph is scaled up rather than drawn bigger.** Every face and every
+     hat on this panel is drawn at 16 px out of gradients and box-shadows, which at
+     one-to-one is a mark in the middle of a ninety-pixel cell - a shop where you
+     cannot see what you are buying. `::before` is the only thing that can grow
+     without every rule below being rewritten in bigger numbers, and one `transform`
+     is a thing that cannot go out of step with sixteen drawings. */
+  .swatches button::before { transform: scale(1.55); }
+  .swatches button .price {
+    position: absolute; bottom: 1px; right: 2px;
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.02em; color: var(--faint);
+  }
+  /* the hats, each a shape and not a letter */
+  .h-straw::before { content: ''; width: 20px; height: 5px; border-radius: 50%;
+    background: #c8a35a; box-shadow: 0 -4px 0 -1px #c8a35a; }
+  .h-top-hat::before { content: ''; width: 13px; height: 15px; border-radius: 2px 2px 1px 1px;
+    background: #2c2f33; box-shadow: 0 4px 0 -2px #2c2f33; }
+  .h-propeller::before { content: ''; width: 4px; height: 9px; background: #6b3733;
+    box-shadow: -8px -6px 0 -0.5px #a99060, 8px -6px 0 -0.5px #a99060, 0 -8px 0 -0.5px #a99060,
+                -5px 6px 0 -0.5px #a99060, 5px 6px 0 -0.5px #a99060; }
+  .h-sunglasses::before { content: ''; width: 18px; height: 7px; border-radius: 3px;
+    background: #191c20; box-shadow: inset 0 0 0 1px #6b5a35, 4px -2px 0 -3px #cfcbc4; }
+  .h-bonnet::before { content: ''; width: 17px; height: 15px; border-radius: 50% 50% 40% 40%;
+    background: #7a3330; box-shadow: 0 0 0 2px #bcae90; }
+  /* **the wizard hat is the one glyph on the page that is not a box**, because the hat is
+   *  the one silhouette in the county that is not a box: a bent cone needs a bent outline
+   *  and a box-shadow cannot draw one. So it is a `clip-path` over a flat fill, which is
+   *  the smallest thing that can carry a droop - **and it leans the same way the model
+   *  does**, forwards out of the face, because a glyph leaning the other way from its
+   *  model is a glyph lying about which way up it goes. */
+  .h-wizard::before { content: ''; width: 19px; height: 18px; background: #3f4d8f;
+    clip-path: polygon(2% 100%, 34% 84%, 46% 46%, 66% 20%, 86% 26%, 70% 38%, 84% 62%, 100% 100%); }
+  .h-devil-horns::before { content: ''; width: 16px; height: 14px;
+    background: linear-gradient(to top right, transparent 45%, #8e5a5e 45% 60%, transparent 60%),
+                linear-gradient(to top left, transparent 45%, #8e5a5e 45% 60%, transparent 60%); }
+  .h-none::before { content: '\2014'; color: var(--faint); font-family: var(--mono); font-size: 13px; }
+  /* the faces, each two eyes and a mouth - the same three things the model is */
+  .swatches button[class^="f-"]::before {
+    content: ''; width: 16px; height: 12px; position: relative;
+    background:
+      radial-gradient(circle 2.2px at 3px 4px, #2c2f33 0 2.2px, transparent 2.3px),
+      radial-gradient(circle 2.2px at 13px 4px, #2c2f33 0 2.2px, transparent 2.3px);
+  }
+  .swatches button[class^="f-cheer"]::before { background:
+      radial-gradient(circle 2.2px at 3px 4px, #2c2f33 0 2.2px, transparent 2.3px),
+      radial-gradient(circle 2.2px at 13px 4px, #2c2f33 0 2.2px, transparent 2.3px),
+      radial-gradient(ellipse 5px 2px at 8px 9px, #7a3a34 0 2px, transparent 2.1px); }
+  .swatches button[class^="f-dollar"]::before { background:
+      radial-gradient(circle 2.4px at 3px 4px, #b8912a 0 2.4px, transparent 2.5px),
+      radial-gradient(circle 2.4px at 13px 4px, #b8912a 0 2.4px, transparent 2.5px),
+      radial-gradient(ellipse 5px 2px at 8px 9px, #7a3a34 0 2px, transparent 2.1px); }
+  .swatches button[class^="f-keen"]::before,
+  .swatches button[class^="f-grim"]::before { background:
+      linear-gradient(90deg, #2c2f33 0 5px, transparent 5px 11px, #2c2f33 11px 16px),
+      linear-gradient(0deg, transparent 0 9px, #7a3a34 9px 11px, transparent 11px); }
+  .swatches button[class^="f-winged"]::before { background:
+      radial-gradient(circle 2.2px at 3px 5px, #2c2f33 0 2.2px, transparent 2.3px),
+      radial-gradient(circle 2.2px at 13px 5px, #2c2f33 0 2.2px, transparent 2.3px),
+      linear-gradient(-30deg, transparent 0 5px, #2c2f33 5px 6.5px, transparent 6.5px),
+      linear-gradient(30deg, transparent 0 5px, #2c2f33 5px 6.5px, transparent 6.5px); }
+  .swatches button[class^="f-tidal"]::before { background:
+      radial-gradient(circle 2.2px at 3px 4px, #3f7d9c 0 2.2px, transparent 2.3px),
+      radial-gradient(circle 2.2px at 13px 4px, #3f7d9c 0 2.2px, transparent 2.3px),
+      linear-gradient(0deg, transparent 0 9px, #3f7d9c 9px 10.4px, transparent 10.4px); }
+  .swatches button[class^="f-wild"]::before { background:
+      radial-gradient(circle 2.2px at 4px 3px, #2c2f33 0 2.2px, transparent 2.3px),
+      radial-gradient(circle 2.2px at 12px 6px, #2c2f33 0 2.2px, transparent 2.3px),
+      linear-gradient(6deg, transparent 0 8px, #7a3a34 8px 10px, transparent 10px); }
+  .swatches button[class^="f-smug"]::before { background:
+      radial-gradient(circle 2.2px at 3px 5px, #2c2f33 0 2.2px, transparent 2.3px),
+      radial-gradient(circle 2.2px at 13px 4px, #2c2f33 0 2.2px, transparent 2.3px),
+      linear-gradient(12deg, transparent 0 8px, #7a3a34 8px 10px, transparent 10px); }
+  .swatches button[class^="f-devil"]::before { background:
+      radial-gradient(circle 2.4px at 3px 4px, #a3323c 0 2.4px, transparent 2.5px),
+      radial-gradient(circle 2.4px at 13px 4px, #a3323c 0 2.4px, transparent 2.5px),
+      linear-gradient(-40deg, transparent 0 2px, #6b3733 2px 3.6px, transparent 3.6px),
+      linear-gradient(40deg, transparent 0 2px, #6b3733 2px 3.6px, transparent 3.6px); }
 
   #stats { margin-top: 10px; }
   .stat { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -230,6 +357,27 @@
     transition: transform 0.12s ease, background 0.15s ease;
   }
   button.quiet:hover { transform: translateY(-1px); background: rgba(255, 255, 255, 0.85); }
+  /* **The Adversary's button is the county's own `--bad` at a tenth of its strength,
+     and that is the whole of its styling.** It is one of three quiet buttons stacked
+     in the corner of the card and the only one that is not a link to another screen,
+     so the one thing that says so is its colour. `--bad` at full strength on a
+     permanent control would be an alarm; a hairline of it reads as a name rather than
+     as a warning, which is what it is.
+     **And it is never `disabled`.** They are always available, whatever your rating -
+     `finishRace()` is where a loss is decided and it does not consult the season you
+     are eligible for, so a dimmed button would be a lie about a rule that does not
+     exist. */
+  button.quiet.danger { color: var(--bad); border-color: rgba(176, 64, 52, 0.38); }
+  button.quiet.danger:hover { background: rgba(176, 64, 52, 0.07); }
+  /* **and it is clamped to two lines' worth of the note's own length.** The card is
+     absolute under the snail card and the options bar is fixed in the corner, so an
+     unbounded paragraph here is an unbounded paragraph over a button. `min()` with a
+     `vh` term is the honest form: the card grows with the card and stops growing at
+     the point it would reach the bar. */
+  #adversaryNote { margin: 8px 0 0; max-width: 30ch; }
+  /* the ladder's own row for them: no rank, because there is none */
+  #ladderRows .adversary .rk { color: var(--bad); }
+  #ladderRows .adversary .nm { font-weight: 600; }
   /* At 268px the season name and the rank beside it wrap onto two lines apiece -
      `SNAIL INVITATIONAL` next to `YOU · 1300 · 13TH` is fifteen characters each in
      236px, and nothing can be shortened without losing either the season you are
@@ -277,6 +425,22 @@
      scale is not the preset's, so the label goes faint for a disagreement and not
      for a player having picked their own scale. */
   .optrow.preset .nm { color: var(--faint); }
+  /* The cells that build the post chain, in the county's own `--warn` - an orange
+     that was already in the jar and had nothing using it. **On the button and not on
+     the row**, because the question a player is asking when they look at a settings
+     panel is "what will this cost me", and a frame round the row answers a different
+     one: "is it happening now", which is a step behind them and can only be read
+     after they have pressed something. The frames are drawn when the panel is built
+     and never move, so they are a price list rather than a status light.
+     **Two pixels, over the cell's own one-pixel rule** - a frame has to be readable
+     as a frame at this size, and `border-box` is global, so the extra width comes out
+     of the padding and moves nothing. After `.on` on purpose: a cell that is both
+     selected and costly keeps its dark fill and gains the orange edge, so one glance
+     says both things instead of the fill hiding the frame. */
+  .optbtn.chain {
+    border: 2px solid var(--warn);
+    padding: 4px 1px;
+  }
   /* The heading between the ladders and the switches, and a rule on the first
      switch row rather than a gap: a modal with a group in it and nothing marking
      where the group starts is a modal whose second half reads as a ninth ladder. */
@@ -318,6 +482,10 @@
   .chip.swim { color: #2a5a7a; border-color: #7fa8c4; }
   .chip.fly { color: #55607a; border-color: #9aa6c2; }
   .chip.push { color: #7a5320; border-color: #c9a86a; }
+  /* **And the bower's own**, which is a leaf and not the footpath's straw: the
+   * rail is a legend, and a second straw on it beside the footpath's is a chip
+   * nobody can sort out at a glance. It is the card's one olive. */
+  .chip.bower { color: #55662b; border-color: #9aab63; }
   .card svg { display: block; margin-top: 5px; }
   .card .move { display: flex; flex-direction: column; gap: 3px; justify-content: center; }
   .card .move button {
@@ -624,14 +792,23 @@
      column cannot shrink under, and a snail called Quill takes the row's width
      off the number beside it. */
   #ladderRows { margin-bottom: 12px; }
+  /* **Five columns and not four, and the fifth is the face.** The grid is
+     `rank · dot · name · rating` and a face glyph inserted between the dot and the
+     name makes the browser put the rating on a second line: **every row in the modal
+     wrapped, and the rating of every snail in the county was on the line below its
+     own name.** A grid with a fixed column count does not notice a fifth child; it
+     wraps it. So the count is 5 and the glyph gets its own `auto` column, which is
+     the general form of it - **any cell added to `rivalRow()` is a column here.**
+  */
   #ladderRows > div {
-    display: grid; grid-template-columns: 2.6em auto minmax(0, 1fr) auto;
+    display: grid; grid-template-columns: 2.6em auto auto minmax(0, 1fr) auto;
     gap: 3px 9px; align-items: center;
   }
   #ladderRows .nm { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #ladderRows .rk, #ladderRows .rt { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
   #ladderRows .rk { text-align: right; color: var(--faint); }
   #ladderRows .rt { text-align: right; color: var(--dim); }
+  #ladderRows i[class^="f-"] { margin: 0 -2px 0 -3px; }
   /* A snail on your own rating shares your number, so it is neither of the five
      above nor of the five below - and the modal says so in its note rather than
      in a gap in the list, which would read as a mistake in the drawing. */

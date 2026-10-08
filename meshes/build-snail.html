@@ -19,7 +19,7 @@
 <body>
 <h1>meshes/snail.glb</h1>
 <p class="note">
-  The snail, built from the same numbers the game used to build it in code. Open this
+  The snail, built out of the same numbers the game has always built it from. Open this
   page from the folder that serves the game, press <em>write snail.glb</em>, and save the
   file over <code>meshes/snail.glb</code>.
   <br><br>
@@ -32,8 +32,17 @@
   must stay a single mesh. The eyes and the smile keep their own dark material,
   which the game leaves alone.
   <br><br>
-  The shell is not built here - it is <code>build-shell.html</code>, which cuts
-  the same dome three times over, once for each whorl the game hands out.
+  <strong>The head's own ball is not to be touched.</strong> It is an ellipsoid of radius
+  <b>0.112</b> scaled <code>1.00, 0.97, 1.02</b>, and <code>build-face.html</code> and
+  <code>build-hat.html</code> both put every one of their pieces against those three
+  numbers and the frame <code>headG</code> is at. Moving the head up the neck is free and
+  making it <b>bigger</b> is free too &mdash; <code>HEAD_SCALE</code> is <code>headG</code>'s
+  own scale and the whole wardrobe comes up with it, because every one of those sixteen
+  files hangs off that node. Changing the ball's own radius is the change that is sixteen
+  files.
+  <br><br>
+  The shell is not built here - it is <code>build-shell.html</code>, which winds the same
+  logarithmic coil three times over, once for each whorl the game hands out.
 </p>
 <button id="go">write snail.glb</button><button id="prev">preview</button>
 <pre id="log"></pre>
@@ -41,16 +50,37 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js';
-import { mergeGeometries } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/utils/BufferGeometryUtils.js';
+import { COUNTY } from './palette.js';
 
 const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
 const $ = (id) => document.getElementById(id);
+const C = COUNTY;
 
-// ---------------------------------------------------------------- the model
-// A snail lies along the ground: a long soft body with a fat round head at
-// the front, a wide flat foot under the whole of it, and the shell slung on
-// its back, tipped forward so the spiral faces up and out. The head carries
-// the face - two big eyes and a smile - and two thin feelers above them.
+/* ================================================================== *
+ * The animal, and it is three sweeps and a ball
+ * ================================================================== *
+ *
+ * A snail as the references draw it is not a loaf with a lump on it. It is
+ *
+ *   - a **foot**: a wide flat skirt with a scalloped edge, lying on the ground and
+ *     running the length of the animal and out well past its body on both sides. It is
+ *     the widest thing on the snail and it is the thing the game ripples as it goes.
+ *   - a **body**: a long soft loaf over the middle of that, deepest under the shell and
+ *     tapering to a **tail** that is flat, thin and lifted a centimetre off the ground.
+ *   - a **neck**: a steep rise at the front, out of which the head comes.
+ *
+ * The old body was the loaf alone - a smooth tube from tail to nose, with the foot as a
+ * lip *narrower* than the body, so there was no skirt to see and no neck to speak of,
+ * and the shell sat on the one part of the animal that had nothing else on it.
+ *
+ * **And the sole is at `-SOLE`, which is a number the game owns and not one this file
+ * does.** `race.js` lifts `bodyG` by `BODY_Y` and drops the racer on the lane's own
+ * height, so the lowest point of the body has to be exactly `-BODY_Y` or the snail floats
+ * or sinks. `SOLE` is written against that and nothing else may move it.
+ */
+const SOLE = -0.088;
+/** One tile of `snail-*`, in this file's own units. See `sweep()` for what it sizes. */
+const TILE = 0.105;
 
 const M = (x, y, z, sx = 1, sy = 1, sz = 1, rz = 0, rx = 0, ry = 0) =>
   new THREE.Matrix4().compose(
@@ -67,38 +97,81 @@ function tint(g, c) {
   return g;
 }
 
-/** One primitive, transformed, with a flat vertex colour. */
+/** One primitive, transformed. Its own uv is kept and rescaled onto the snail's tile. */
 function part(geo, m, c) {
   const g = geo.clone();
   g.applyMatrix4(m);
-  g.deleteAttribute('uv');
+  const uv = g.attributes.uv;
+  if (uv) for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.22, uv.getY(i) * 0.22);
   return tint(g, c);
 }
 
 /** A shade from belly to back, so a big soft form is not one dead flat tone. */
-function shade(g, lo, hi) {
+function shade(g, lo, hi, cLo, cHi) {
   const p = g.attributes.position;
   const n = p.count, col = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const t = Math.max(0, Math.min(1, (p.getY(i) - lo) / (hi - lo)));
-    const v = 0.90 + 0.16 * t;
-    col[i * 3] = v; col[i * 3 + 1] = v * 0.99; col[i * 3 + 2] = v * 0.96;
+    for (let k = 0; k < 3; k++) col[i * 3 + k] = cLo[k] + (cHi[k] - cLo[k]) * t;
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return g;
 }
 
 /**
- * A body, swept: rings of points along x, each ring a closed shape standing
- * between its own floor and its own back, so the whole animal is one long form
- * rather than a lump with a slab under it. `rows` are [x, floor, back,
- * halfWidth] and the two poles close off the ends. They are the shape you want,
- * not the shape you get: they are run through a spline and resampled `sub`
- * times so there are no kinks, and a ring is an ellipse, or with `n` above two
- * a squircle - a rounded box, flat along the floor and round at the corners,
- * which is what the sole of a foot wants.
+ * A body, swept: rings of points along x, each ring a closed shape standing between its
+ * own floor and its own back, so the whole animal is one long form rather than a lump
+ * with a slab under it. `rows` are `[x, floor, back, halfWidth]`; the two ends are closed
+ * by poles at `tailX` and `frontX`. They are the shape you want, not the shape you get:
+ * they are run through a spline and resampled `sub` times so there are no kinks, and a
+ * ring is an ellipse, or with `n` above two a squircle - a rounded box, flat along the
+ * floor and round at the corners, which is what the sole of a foot wants.
+ *
+ * **It is indexed, and it has to be.** A sweep written as loose triangles - which is what
+ * this was - gives `computeVertexNormals()` one normal per face, and the county's house
+ * style is smooth shading, so the body came out faceted along every ring it had. A grid
+ * with `ring + 1` columns - the seam column duplicated, so `v` can run from 0 to 1 and
+ * back without a twist - gives the averaging something to average.
+ *
+ * **The uv is metres over a tile and not a count of repeats**, in `u` along the animal
+ * and in `v` round the section, so one tile of `snail-*` is one tile on the sole and on
+ * the flank and on the tail. `u` is the distance along `x` and `v` is the length round
+ * the section at that station, so the grain does not squash where the animal is thin -
+ * which is the same bargain `shell-n`'s coil strikes, and for the same reason.
+ *
+ * `scallop` is the foot's: a width multiplier running along the animal, which is how a
+ * skirt gets its edge. **It scales the section's width and not its height**, so the
+ * scallops are in the plane of the ground and the skirt's own top and sole are flat.
+ *
+ * **And the poles are a distance along `x` and a fraction of the way up, and not a
+ * point each.** They used to be a point given in full, and a point given in full can
+ * disagree with the ring it closes - and did, at both ends, by sitting twenty-nine
+ * millimetres above the ring's own middle. A fan off a pole that is not where the
+ * ring's centre is **is not a taper**, it is a flat sheet the length of the animal
+ * lying out sideways from its end, and it is the thing that makes a swept body look
+ * inside out: two pale sheets and a hard edge between them and the animal.
+ *
+ * `poleY` is the fraction of the end ring's own depth the pole sits at, and it is the
+ * difference between a tail lying on the ground and a tail lifted off it: `0.55` for
+ * the body, so the tail tip is off the sole and a hand's breadth above the ground, and
+ * `0.10` for the foot, so the skirt's ends are still on the floor when the sweep ends.
  */
-function sweep(rows, tailPole, frontPole, ring = 16, n = 2, sub = 1) {
+/**
+ * `poleY` is the tail pole's height as a fraction of its own ring, and **`poleYFront` is
+ * the front's own**, because the two ends are not the same shape and one number for both
+ * is what put a pole outside a head. The pole lands at `floor + (back - floor) * f`.
+ *
+ * **A closure has to be somewhere the surface cannot be seen, and at the front that
+ * means somewhere the head cannot be seen either**, so the front pole is *not* required
+ * to be inside the head's ball - which it could not be while the neck is a neck, because
+ * the head is 224 mm across and the throat in front of it is 220 mm deep, and a ring
+ * small enough to fit the ball is a stalk. **What the front closure has to be is small
+ * and correctly wound**: the head stands in front of its upper half, what is left
+ * showing is the throat under the chin, and a rounded face a centimetre deep on a ring
+ * the head is bolted to is an animal's jaw rather than a hole. The gate on that is
+ * `outwardReport()` and not the eye.
+ */
+function sweep(rows, tailX, frontX, ring = 16, n = 2, sub = 1, scallop = null, poleY = 0.5, poleYFront = poleY) {
   const dense = [];
   for (let i = 0; i < rows.length - 1; i++) {
     const p0 = rows[Math.max(0, i - 1)], p1 = rows[i], p2 = rows[i + 1], p3 = rows[Math.min(rows.length - 1, i + 2)];
@@ -119,78 +192,349 @@ function sweep(rows, tailPole, frontPole, ring = 16, n = 2, sub = 1) {
   const at = (i, j) => {
     const [x, floor, back, w] = dense[i];
     const a = (j / ring) * Math.PI * 2;
-    return [x, (floor + back) / 2 - ((back - floor) / 2) * sp(Math.cos(a)), w * sp(Math.sin(a))];
+    const lobe = scallop ? 1 + scallop.a * Math.cos(x * Math.PI * 2 / scallop.period) : 1;
+    return [x, (floor + back) / 2 - ((back - floor) / 2) * sp(Math.cos(a)), w * sp(Math.sin(a)) * lobe];
   };
-  const verts = [];
-  const tri = (p, q, r) => { for (const v of [p, q, r]) verts.push(v[0], v[1], v[2]); };
-  for (let i = 0; i < rows.length - 1; i++) {
-    for (let j = 0; j < ring; j++) {
-      const a = at(i, j), b = at(i, j + 1), c = at(i + 1, j + 1), d = at(i + 1, j);
-      tri(a, c, b); tri(a, d, c);
+  const pos = [], uv = [], idx = [];
+  /**
+   * **The axis each vertex was built around, kept beside the vertices rather than
+   * derived from them.** A sweep's ring is a squircle about one point on its own spine,
+   * so `vertex - axis` is the outward direction at that vertex, and comparing a face's
+   * geometric normal against it is a *per-face* outward test that no winding mistake
+   * anywhere can agree with by accident. `computeVertexNormals()` cannot do this - those
+   * normals are derived from the winding, so the two always agree and a uniformly
+   * inside-out surface passes. **One entry per vertex and not one per ring**, because the
+   * report indexes it by the same number as `position` and a ring's spine point repeated
+   * down its own columns is the cheapest way to keep the two in step. It is a WeakMap
+   * rather than an attribute because `GLTFExporter` writes `userData` into `extras`, and
+   * a thousand three-component floats of bookkeeping have no business in the file.
+   */
+  const axis = [];
+  for (let i = 0; i < dense.length; i++) {
+    const [x, floor, back, w] = dense[i];
+    // the length round this station's section, so `v` is metres and not a fraction
+    const round = Math.PI * (w + (back - floor) / 2) * (scallop ? 1 + scallop.a : 1);
+    for (let j = 0; j <= ring; j++) {
+      const p = at(i, j);
+      pos.push(p[0], p[1], p[2]);
+      uv.push(p[0] / TILE, (j / ring) * round / TILE);
+      axis.push([x, (floor + back) / 2, 0]);
     }
   }
-  for (let j = 0; j < ring; j++) {
-    tri(tailPole, at(0, j), at(0, j + 1));
-    const i = rows.length - 1;
-    tri(frontPole, at(i, j + 1), at(i, j));
+  for (let i = 0; i < dense.length - 1; i++) {
+    for (let j = 0; j < ring; j++) {
+      // **a = (i, j), b = (i, j+1), c = (i+1, j), d = (i+1, j+1)** - so the diagonal is
+      // a-d. Writing the two triangles off the other diagonal each is a bowtie, and half
+      // the surface comes out inside out; `build-shell.html` has the same note on it.
+      const a = i * (ring + 1) + j, b = a + 1, c = a + ring + 1, d = c + 1;
+      idx.push(a, b, d, a, d, c);
+    }
   }
+  /**
+   * **And the winding is settled by the surface, in code, and not by hand.**
+   *
+   * A sweep's quads can be written either way round and nothing about the source says
+   * which is out; it depends on the handedness of the frame the ring is built in, and
+   * for this ring - a point at `a = 0` on the **floor** and `a = π/2` on the **right** -
+   * the whole animal came out inside out. Nothing throws. Nothing warns. `compute-
+   * VertexNormals()` hands back normals pointing into the shell of it, the near wall is
+   * culled, and what you are looking at is the inside of the far wall: **a snail that
+   * looks like a hollow trough with its own skin showing through it**, which is the
+   * hardest thing in this project to read as a winding fault rather than as a shape.
+   *
+   * **Comparing the faces against the stored normals does not catch it**, because those
+   * normals are derived from the winding and the two always agree. **The signed volume is
+   * the right answer to the wrong question**: the sum over the triangles of
+   * `dot(centroid, cross(b - a, c - a)) / 6` is positive for a closed mesh whose triangles
+   * face outwards, and it is positive for a closed mesh with **fifty of two thousand**
+   * facing the other way as well. It answers about the whole, and what goes wrong at the
+   * ends of a sweep goes wrong in a handful of faces - so the whole index buffer is
+   * reversed when the sum is negative, `outwardReport()` is what says whether that was
+   * enough, and the sum is printed beside it because a mesh that went inside out entirely
+   * would move its sign and is the one case worth seeing in it.
+   */
+// and the two poles, fanned off one vertex each. **The two flags are not decoration:**
+  // a ring at the tail and the same ring at the front are seen from opposite ends of the
+  // sweep, so the fan that closes one of them outward closes the other inward, and
+  // `true`/`false` is the whole of that fact. What used to be wrong was not the flags -
+  // **it was that the volume test had already run by the time they were used.** The quads
+  // were measured, reversed, and the green tick printed; then fifty triangles were added
+  // by hand with no measurement behind them at all. **The animal came out with four holes
+  // in it** - one at the front of the body, one at its back, one at each end of the foot -
+  // and the preview said every face faced outwards, because **the signed volume is a sum
+  // and a sum is blind to fifty inward triangles inside two thousand outward ones.** So
+  // the poles go in *before* the test and the one decision covers all three blocks.
+  const pole = (x, r, i, flip, f) => {
+    const at0 = pos.length / 3;
+    pos.push(x, r[1] + (r[2] - r[1]) * f, 0);
+    uv.push(x / TILE, 0.5);
+    axis.push(axis[i * (ring + 1)]); // a cap closes about the spine of the ring it caps
+    const last = i * (ring + 1);
+    for (let j = 0; j < ring; j++) {
+      if (flip) idx.push(at0, last + j + 1, last + j);
+      else idx.push(at0, last + j, last + j + 1);
+    }
+  };
+  pole(tailX, rows[0], 0, true, poleY);
+  pole(frontX, rows[rows.length - 1], dense.length - 1, false, poleYFront);
+
+  let vol = 0;
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t] * 3, c = idx[t + 1] * 3, d = idx[t + 2] * 3;
+    vol += (pos[a] * (pos[c + 1] * pos[d + 2] - pos[c + 2] * pos[d + 1])
+      + pos[a + 1] * (pos[c + 2] * pos[d] - pos[c] * pos[d + 2])
+      + pos[a + 2] * (pos[c] * pos[d + 1] - pos[c + 1] * pos[d])) / 6;
+  }
+  if (vol < 0) for (let t = 0; t < idx.length; t += 3) { const s = idx[t + 1]; idx[t + 1] = idx[t + 2]; idx[t + 2] = s; }
+
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
-  g.deleteAttribute('uv');
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+  g.setIndex(idx);
   g.computeVertexNormals();
-  // the shade runs from the lowest belly to the highest back
+  AXIS.set(g, axis);
+  return g;
+}
+
+/** Each sweep's ring axes, for `outwardReport()`. Nothing else reads it and nothing else writes it. */
+const AXIS = new WeakMap();
+
+/**
+ * **The gate is one face at a time, and the signed volume is beside it rather than
+ * instead of it.**
+ *
+ * The volume answers a question about the *whole*: is this solid inside out. It cannot
+ * answer the question that actually stops a snail being see-through, which is about
+ * *fifty triangles* at the two ends of two meshes, and it answers it wrongly - two
+ * thousand good faces and fifty bad ones is a comfortably positive number. The per-face
+ * test cannot be wrong that way, because its reference is the point on the spine the
+ * ring was built around and a face either points away from it or does not.
+ *
+ * **So the tick is printed off the per-face count and the volume is printed beside it,
+ * unsigned of any claim.** A sweep that went inside out again would move the volume's
+ * sign, and a sweep whose *caps* went inside out would not, which is exactly the
+ * difference the two numbers are there to show.
+ */
+function outwardReport(g) {
+  const axis = AXIS.get(g);
+  const p = g.attributes.position, ix = g.index.array;
+  const v = (k) => [p.getX(k), p.getY(k), p.getZ(k)];
+  let inward = 0, worst = 0;
+  for (let t = 0; t < ix.length; t += 3) {
+    const k = [ix[t], ix[t + 1], ix[t + 2]];
+    const a = v(k[0]), b = v(k[1]), c = v(k[2]);
+    const u = sub(b, a), w = sub(c, a), n = cross(u, w);
+    // the three corners' own axes, averaged: the spine point this face sits over
+    const m = [0, 0, 0];
+    for (const q of k) for (let i = 0; i < 3; i++) m[i] += axis[q][i] / 3;
+    const mid = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+    const s = dot(sub(mid, m), n);
+    if (s <= 0) { inward++; worst = Math.min(worst, s); }
+  }
+  return `${inward} of ${ix.length / 3} faces inward`
+    + (inward ? `  ← THE NEAR WALL IS CULLED (worst ${worst.toExponential(2)})` : '   ✓ every face faces out of the animal');
+}
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** Shade a sweep from one jar colour to another, over its own belly-to-back range. */
+function skinned(g, rows, cLo, cHi) {
   const belly = Math.min(...rows.map((r) => r[1]));
   const back = Math.max(...rows.map((r) => r[2]));
-  return shade(g, belly, back);
+  return shade(g, belly, back, cLo, cHi);
 }
+
+/* ------------------------------------------------------------------ *
+ * The three sweeps
+ * ------------------------------------------------------------------ */
+
+/**
+ * The body. **The rings are squircle and not ellipse** so the sole is flat and the sides
+ * stand near upright where the animal is thick - a snail's flanks are walls, and an
+ * elliptical section at this width reads as a sausage lying on its side.
+ *
+ * The two ends are the shape: the **tail** is a thin flat wedge lifted clear of the
+ * ground at the tip, and the **neck** is the steep rise at the front the head is set on.
+ * The rows between them carry the shell - the back is held down at eleven centimetres
+ * under the middle - because a shell that has to sit on a hump is a shell that is going
+ * to float.
+ */
+const BODY_ROWS = [
+  //   x       sole      back   halfWidth
+  [-0.368, -0.0800, -0.0380, 0.0080],
+  [-0.348, -0.0860, -0.0180, 0.0300],
+  [-0.322, -0.0880,  0.0120, 0.0560],
+  [-0.288, -0.0880,  0.0400, 0.0790],
+  [-0.244, -0.0880,  0.0640, 0.0980],
+  [-0.190, -0.0880,  0.0870, 0.1130],
+  [-0.126, -0.0880,  0.1060, 0.1230],
+  [-0.056, -0.0880,  0.1180, 0.1270],
+  [ 0.014, -0.0880,  0.1230, 0.1250],
+  [ 0.078, -0.0880,  0.1240, 0.1180],
+/**
+   * **And the seven rows after the shoulders are the neck, and both of its own columns
+   * are the whole of what they are for.** The animal used to run to `0.294` on a sole
+   * that came up from `-0.0875` to `-0.066` and a back that came up from `0.152` to
+   * `0.198`: a hundred and ten millimetres of throat under a crest that finished **above
+   * the head's own centre**, so from the front the neck's back was the top of the animal
+   * and the head was a ball sunk to its middle in it. **That is what "the front looks
+   * flat" is** - a snail is raised at the front or it is not, and the number that raises
+   * it is how far off the ground the throat is, not how high the crest goes.
+   *
+   * **The sole climbs from `-0.0878` at `0.132` to `0.093` at `0.334`, which is 181 mm of
+   * throat lift, and that is the whole of the front.** It is the column that stops being
+   * a wall: **the last row is 138 mm deep and 140 wide, a small round blob under the chin,
+   * where the row before this one was 291 deep and 132 wide** - a tall oval hanging in
+   * the air, which is what three of the four views were looking at. The ratio comes *back
+   * down* to under one at the front, so the neck tapers all the way forward and never once
+   * becomes a blade.
+   *
+   * **The back climbs too, from `0.124` at the shoulders to `0.232`, and it is the back
+   * and not the head that closes the shell.** The shell's front lip stands about 90 mm
+   * clear of this line at `rz` of zero, and a 90 mm notch between the shell and the head
+   * is a hole in the silhouette whatever the head is doing. **The head's rear dome crosses
+   * this crest at `0.155` and is inside it from there forward**, so the ball's own rear
+   * pole is nineteen millimetres out of the back line over the twenty of animal behind
+   * that - **which is the smallest bump this arrangement can have, and the tell for it is
+   * a crease and not a hollow.**
+   *
+   * **And the last three rows are wider than the neck's own taper wants, because the head
+   * grew and did not take them with it.** `HEAD_SCALE` is 1.20, so the ball is 269 mm
+   * across where it was 224, and **a head that grew 45 mm over a neck that did not is a
+   * lollipop** - the step under the chin goes from 54 mm a side to 76, which is the
+   * balloon-on-a-stick this file's own comment warns about. So the half-widths at `0.288`,
+   * `0.316` and `0.334` carry the head's share of that growth on top of the taper, which
+   * is also why the front can stay a circle: **at `0.334` it is 138 deep and 140 wide
+   * rather than 138 and 116.**
+   */
+  [ 0.132, -0.0878,  0.1520, 0.1110],
+  [ 0.172, -0.0868,  0.1860, 0.1050],
+  [ 0.212, -0.0800,  0.2090, 0.0985],
+  [ 0.252, -0.0560,  0.2230, 0.0900],
+  [ 0.288, -0.0140,  0.2300, 0.0860],
+  [ 0.316,  0.0450,  0.2320, 0.0810],
+  [ 0.334,  0.0930,  0.2310, 0.0700],
+];
 
 function buildBody() {
-  // The animal is one loaf: the sole is part of the body, so there is no join
-  // to see and nothing to read as a base it is sitting on. The rings are
-  // squircles, which keeps the sole flat and the sides near upright, and the
-  // rows are resampled so the shape has no kinks to catch the light.
-  return sweep([
-    //   x      sole    back   width
-    [-0.250, -0.058,  0.052, 0.022],
-    [-0.215, -0.080,  0.096, 0.052],
-    [-0.170, -0.088,  0.132, 0.082],
-    [-0.120, -0.088,  0.154, 0.106],
-    [-0.060, -0.088,  0.162, 0.120],
-    [ 0.000, -0.088,  0.161, 0.124],
-    [ 0.060, -0.088,  0.157, 0.121],
-    [ 0.120, -0.088,  0.149, 0.113],
-    [ 0.175, -0.084,  0.137, 0.097],
-    [ 0.225, -0.068,  0.119, 0.070],
-    [ 0.258, -0.044,  0.098, 0.042],
-  ], [-0.272, -0.020, 0], [0.278, 0.020, 0], 22, 2.5, 3);
+  /**
+   * **The front pole is a jaw and not a blade, and the number that says so is how far it
+   * is from the ring it closes.** `0.348` is fourteen millimetres past a ring whose own
+   * section is 138 mm deep and 116 wide, and the pole sits at `0.50` of that ring - its
+   * **middle**, so the fan is a cone off the centre of its own ring and not a sheet
+   * sweeping down to a point near the ground. **A jaw is a thing with a base, and the
+   * base is `FOOT_TO` having moved**: the foot now runs to `0.212` so the neck stands on
+   * the animal's own sole rather than on nothing.
+   *
+   * The tail keeps the `0.55` it always had, because a tail tip wants to be low and a
+   * tail cap that dives towards the sole is a wedge lying on the lane rather than a tail.
+   */
+  return skinned(sweep(BODY_ROWS, -0.386, 0.348, 26, 2.4, 3, null, 0.55, 0.50),
+    BODY_ROWS, C.snailBelly, C.snailShade);
 }
+
+/**
+ * The foot, and it is the **widest thing on the animal** - five centimetres of skirt
+ * either side of the body.
+ *
+ * **And its rows are read off the body's and not written out.** That is the whole of
+ * what a skirt *is*: the body's own section, flared out sideways, with its floor on the
+ * ground and its top just under the body's back. Written out as its own table it came
+ * out as a separate apron standing three centimetres proud of the flanks at the tail and
+ * a **collar standing up in front of the head** at the neck - two sheets of pale skin
+ * with an edge between them and the body, which is what "the body looks inside out"
+ * turns out to be on a snail: you are looking at the foot's upper surface, not at the
+ * animal. Derived, it can only ever be the body plus a flare, and the flare is the one
+ * number here.
+ *
+ * **And it is trimmed to the tail and to the last row still on the ground**, because the
+ * tail tip is a blade and the front pole is a jaw - a hundred and eighty-eight millimetres
+ * tall and seventy-eight wide at the front pole - and a skirt derived from either is a
+ * blade. A snail's foot is under the body and not up its neck, so the skirt runs from the
+ * fourth row to the eleventh, and what closes each end is the sweep's own pole.
+ *
+ * **And its top is a fraction of the body's own depth and not its back.** A skirt is a
+ * sole: its top is where the flank begins, about half way up, and everything above that
+ * is body. Taking the body's back for it put a two-hundred-millimetre wall of pale
+ * skin along each side, which from behind is a pair of pale wings.
+ *
+ * **The flare dies out at both ends**, which is what stops the apron becoming a rim: it
+ * is a third of the body's own half-width at its widest, in the middle, and nothing at
+ * either end. `SKIRT` shapes it with a power so it comes up quickly off the tail and
+ * goes down slowly into the neck - the flare is widest behind the shoulders, which is
+ * where a snail carries it.
+ *
+ * **It is a separate mesh because the game rewrites its vertices every frame** - that is
+ * the ripple under the animal as it goes, and it is the only moving geometry in the file.
+ */
+/**
+ * **And `SKIRT` is 0.12 and not 0.22, because a skirt measured against the body is a
+ * number the body can disagree with.** At 0.22 the foot came out 37 mm proud of the
+ * flank on each side - **which is not a sole, it is a paddle** - and at every bearing
+ * except the one straight down its length it read as a rim rather than as the animal's
+ * ground. **A snail's foot does project past its body; a third of its own width does
+ * not.** `SKIRT_FLOOR` lifts it two millimetres off the body's belly so the two surfaces
+ * are never coincident, and `SKIRT_DEPTH` puts its own top at half the body's section,
+ * which is where the sole's own thickness lives.
+ */
+const SKIRT = 0.12, SKIRT_FLOOR = 0.002, SKIRT_DEPTH = 0.50;
+/**
+ * **The foot stops at `0.216` and not at the neck, and both halves of that are the same
+ * rule.** The foot's rings are the body's own section plus a skirt, so a foot that runs
+ * as far forward as the front pole puts its own closure **outside** the body's outline
+ * and a foot's closure is a flat plate on a single-sided surface. **The sole of an animal
+ * ends under its own body.** But the rule has to be read off *this* body and not off the
+ * one it was written for: **the sole now comes up off the ground over the last sixty
+ * millimetres, and the last row still on the ground is `0.216`** - so that is where the
+ * foot stops, and the twenty-two millimetres of cap ahead of it are inside a neck the body
+ * is still standing on. `FOOT_TO` was `9` and stopped it at `0.078`, which was under the
+ * belly and fine while the front of the animal lay along the ground and **a head held up
+ * 200 mm with nothing beneath it the whole way back to its own shoulders.** A jaw needs a
+ * base, and the base is the skirt.
+ */
+const FOOT_FROM = 3, FOOT_TO = 12;
+const FOOT_ROWS = BODY_ROWS.slice(FOOT_FROM, FOOT_TO + 1).map(([x, sole, back, w], i, all) => {
+  const t = i / (all.length - 1);
+  const flare = SKIRT * Math.pow(Math.sin(Math.PI * t), 0.8) * w;
+  /**
+   * **And the two ends pull in, because the closure is judged against the body's width
+   * *at the cap's own station* and not at this row's.** The cap sits twelve millimetres
+   * beyond the ring, and over those twelve the body has already tapered away: at x = -0.300
+   * the body is 40 mm across and the ring it was capped from is 79. **A foot that ends on
+   * its last row's width ends wider than the tail it is hanging off**, which is the pale
+   * tab at the bottom rear in every side view - and the flat face on it is the plate.
+   * `0.55 + 0.45·sin^0.35` takes the ends to just over half the body's own section, which
+   * is inside the taper at both of them and a full sole in the middle.
+   */
+  const tuck = 0.55 + 0.45 * Math.pow(Math.sin(Math.PI * t), 0.35);
+  return [x, sole + SKIRT_FLOOR, sole + (back - sole) * SKIRT_DEPTH, (w + flare) * tuck];
+});
+// eight scallops along the animal, at seven per cent of its width
+const SCALLOP = { a: 0.070, period: 0.086 };
 
 function buildFoot() {
-  // The foot is only a lip now, because the sole is the body's own. Down the
-  // middle it is a sliver, a shade wider than the body and buried just above
-  // the ground, so all that shows is a thin rim round the base - and that is
-  // the bit the game ripples as the snail goes. At the ends it has to climb,
-  // because the tail and the chin are lifted clear of the ground.
-  return tint(sweep([
-    //   x      floor   top   width
-    [-0.248,  0.010,  0.070, 0.010],
-    [-0.232,  0.000,  0.062, 0.026],
-    [-0.200, -0.005,  0.052, 0.058],
-    [-0.150, -0.006,  0.048, 0.088],
-    [-0.080, -0.006,  0.048, 0.101],
-    [ 0.000, -0.006,  0.048, 0.105],
-    [ 0.080, -0.006,  0.048, 0.103],
-    [ 0.150, -0.005,  0.052, 0.095],
-    [ 0.200, -0.002,  0.062, 0.082],
-    [ 0.245,  0.006,  0.086, 0.058],
-    [ 0.275,  0.020,  0.110, 0.028],
-  ], [-0.256, 0.040, 0], [0.292, 0.104, 0], 22, 3, 3), [0.87, 0.86, 0.82]);
+  const head = BODY_ROWS[FOOT_FROM], tail = BODY_ROWS[FOOT_TO];
+  // **and the foot's two caps are twelve millimetres deep and not thirty.** The foot is a
+  // skirt, so its end rings are the body's own — a hundred and forty-eight millimetres
+  // across — and thirty millimetres of cap on that is **a flat plate on each end, and a
+  // flat plate on a single-sided surface is a window.** Twelve millimetres on the same
+  // ring is a rounded shoulder, which is what a skirt's edge is, and it stays tucked
+  // under the body's own section where nothing outside the animal can see it.
+  return tint(sweep(FOOT_ROWS, head[0] - 0.012, tail[0] + 0.012,
+    20, 3.0, 2, SCALLOP, 0.10), C.snailFoot);
 }
 
+/**
+ * The head, and **it is the head the county has always had**: an ellipsoid of radius
+ * 0.112 scaled 1.00, 0.97, 1.02, carrying the face - two big eyes and a smile - and two
+ * feelers above it. Every face and every hat in the wardrobe is built against those
+ * numbers, so this block is the one thing in the file that is not free to move; the head
+ * is *placed* further forward and much higher on the new neck and its own geometry is
+ * untouched.
+ */
 function build() {
-  // the head: a big ball on the front of the body, sunk in far enough that
-  // the two read as one form
-  const head = part(new THREE.SphereGeometry(0.112, 20, 14), M(0, 0, 0, 1.00, 0.97, 1.02), [0.96, 0.95, 0.91]);
+  const head = part(new THREE.SphereGeometry(0.112, 20, 14), M(0, 0, 0, 1.00, 0.97, 1.02), C.snailShade);
   // the face: two big eyes low on the front of the head, and a smile cut round
   // the head - the smile is a slice of a circle whose ring is the circle the
   // head's own surface makes at that depth, so it lies on the face
@@ -200,8 +544,8 @@ function build() {
     M(0.104, 0, 0, 1, 1, 1, Math.PI * 1.5 - smileArc / 2, 0, Math.PI / 2), [1, 1, 1]);
   // a feeler: a short thin neck with a rounded knob on the end, and the knob
   // takes the body colour, as a snail's feeler tip does
-  const stalk = part(new THREE.CylinderGeometry(0.0115, 0.017, 0.075, 6), M(0, 0.037, 0), [0.92, 0.90, 0.86]);
-  const knob = part(new THREE.SphereGeometry(0.022, 12, 9), M(0, 0.078, 0, 0.90, 1.20, 0.90), [0.98, 0.97, 0.93]);
+  const stalk = part(new THREE.CylinderGeometry(0.0115, 0.017, 0.075, 6), M(0, 0.037, 0), C.snailBelly);
+  const knob = part(new THREE.SphereGeometry(0.022, 12, 9), M(0, 0.078, 0, 0.90, 1.20, 0.90), C.snailShade);
   return { head, eye, smile, stalk, knob };
 }
 
@@ -209,11 +553,13 @@ const mat = (name, o) => new THREE.MeshStandardMaterial(Object.assign({ name }, 
 
 async function assemble() {
   const { head, eye, smile, stalk, knob } = build();
-  // the shell is a file of its own, so the three whorl patterns stay three
-  // files; it is the same spiral, mounted on the back and scaled to the body.
-  // The whorl the snail wears is swapped for the racer's own the moment one is
-  // built, so this is only the shell you see before then.
-  const src = await new GLTFLoader().loadAsync('shell-swirl.glb');
+  // **The shell is a file of its own and there is one of them.** It is
+  // `references/snailRef.glb`'s own coil, cut into its shell island by
+  // `build-shell.html` and normalised to the county's size, mounted on the back
+  // and scaled here. The snail swaps this geometry for the same file's the moment
+  // a racer is built, so it is only the shell you see before then - and because it
+  // is the same file, **what the preview wears is what the field wears.**
+  const src = await new GLTFLoader().loadAsync('shell.glb');
   // the same rule the game uses to read a prop file: the first mesh in it
   let shellMesh = null;
   src.scene.traverse((o) => { if (o.isMesh && !shellMesh) shellMesh = o; });
@@ -233,10 +579,40 @@ async function assemble() {
   const bodyG = new THREE.Group(); bodyG.name = 'bodyG'; root.add(bodyG);
   add(bodyG, buildBody(), mBody, 'bodyM');
 
-  // the head sits on the front shoulder, tipped very slightly nose down
+  // **The head rides the neck, and it rides it up and forward.** The neck is the body's
+  // front rise: its back comes to `0.232` and the head is set **95 millimetres above where
+  // it was and forty-four forward**, and **the pair of them is the front silhouette**.
+  //
+  // Every face and every hat is placed in `headG`'s own frame, so the whole wardrobe comes
+  // up with it and none of the sixteen files has to know.
   const headG = new THREE.Group(); headG.name = 'headG';
-  headG.position.set(0.222, 0.096, 0);
-  headG.rotation.set(0, 0, -0.06);
+  headG.position.set(0.270, 0.245, 0);
+  headG.rotation.set(0, 0, 0.07);
+  /**
+   * **And the head's twenty per cent is `headG`'s scale and never the ball's own.**
+   *
+   * `build-face.html` and `build-hat.html` both write `HEAD_R = 0.112, HEAD_SY = 0.97,
+   * HEAD_SZ = 1.02` and hang every one of their pieces off those three numbers, and
+   * `build-hat.html`'s `BRIM_Y = 0.082` is one of them - **so a bigger ball is a change
+   * to sixteen glb files and a bigger `headG` is not.** Everything that makes a head a
+   * head is a child of this node: the ball, the two eyes, the smile, both feelers, and
+   * whatever `race.js` has hung on it this visit - **so one scale here takes the face, the
+   * hat and the propeller up with it and every feature stays in proportion to the ball.**
+   * `race.js` writes this node's `position.y` and `rotation.z` and never its scale, and
+   * `tools/wardrobe.html` clones the model, so the shop's preview wears the same head the
+   * field does.
+   *
+   * **What it costs is measured in three places rather than chosen.** The ball is 269 mm
+   * across and its rear pole moves to `0.136`, which takes the skull bump out of the back
+   * line to nineteen millimetres over twenty of animal - **a bigger head sits *deeper* in
+   * the neck, not higher out of it**, because the neck's crest did not move. Its crown
+   * lands at `0.375`, which is the number the shell has to be measured against. And the
+   * face's own front goes to `0.377` against the throat's front wall at `0.334`, so
+   * **the eyes clear the jaw by 43 mm where the 1.00 gave them 25** - a bigger head
+   * arrives further forward without the throat having to follow it.
+   */
+  const HEAD_SCALE = 1.20;
+  headG.scale.setScalar(HEAD_SCALE);
   bodyG.add(headG);
   add(headG, head, mBody, 'headM');
   add(headG, eye, mEye, 'eyeM').position.set(0.088, -0.018, 0.054);
@@ -253,15 +629,83 @@ async function assemble() {
     add(st, knob, mStalk, 'knobM');
   }
 
-  // the shell sits down into the back between the head and the tail, and is
-  // tipped well forward so the whorl faces out of the front of the snail, the
-  // way it does on a snail that is going somewhere. Note that the tilt is the
-  // z: the y only spins the whorl round to catch the light.
+  /**
+   * The shell, and **where it sits is the whole of the mounting.**
+   *
+   * `build-shell.html` does not wind anything: it takes the coil out of
+   * `references/snailRef.glb`, **turns it by measurement** so the spire points up-and-back
+   * and the aperture forward-and-down, and normalises the result to **0.44 on its long
+   * axis** with its bounding-box centre on the origin. So the shell arrives in the animal's
+   * own frame - long axis along +x, spire up, mouth forward - and **that is why
+   * `SHELL_ROT` is two zeroes and not a full turn.** It is not a neutral default: the last
+   * mount wrote `[-2.62, 0, 2.59]` and a comment full of sentences about standing a coil up,
+   * which described the file this one replaced. **A rotation that stands a dome up is a
+   * rotation that puts it on its side, and the numbers were right for a file and wrong for
+   * a sculpt.** Which end of the thing is the spire is a fact about the model and not a
+   * decision the animal's back gets to make.
+   *
+   * Three numbers and a half, and every one of them is a sentence about the body:
+   *
+   *  - **It is back from the middle**, at `-0.130` of an animal whose own length runs from
+   *    `-0.386` to `0.348` - which puts the shell's own middle at **just under half the
+   *    animal's length from the tail**. A shell centred on the animal sits over its
+   *    shoulders, and one at `-0.180` sits on its haunches; **the tell is the length of
+   *    bare neck in front of it**, and **the shell's own front is at `0.094` against a
+   *    head's rear pole at `0.136`, which is 42 mm of bare back** - a third of a head's
+   *    width, which is what the shell had before the head grew.
+   *  - **It is up on the animal at `0.244`, and the number is the shell's own half-height
+   *    added to the back line.** The shell is `0.361` tall in the file and `0.368` at this
+   *    scale, and **its lowest point lands twenty-six millimetres inside the back**, whose
+   *    own height at this station is `0.119`. The earlier mount sat the centre at 0.095,
+   *    which put the base at **-0.092**: ninety-two millimetres under a back that is only
+   *    a hundred and twenty tall, so **more than half the shell was inside the animal and
+   *    it read as a snail swimming in its own shell.**
+   *
+   *    **The tell is the body's own curve, and not the shell's.** A shell sitting on a
+   *    back still has the back's line visible in front of it and behind it, and the join
+   *    is a line where the two surfaces meet rather than a shell emerging out of a flank.
+   *    Half buried is what makes it worn rather than balanced, and **the shadow under it is
+   *    the shell's own shadow on the back** - a shell perched clear of the body casts it
+   *    somewhere else.
+   *  - **`1.02` and not a free choice, and it is the head's own scale carried across.**
+   *    It is `0.85 × HEAD_SCALE`, because **a shell and a head that disagree about how big
+   *    the animal is read as two animals**: the shell is 0.449 along, 0.368 high and 0.241
+   *    deep, so on a body 0.734 long it is **61 per cent of the animal's length** and
+   *    61 per cent taller than the body's own crest. **The depth is the number worth
+   *    watching**: the shell is 241 mm across against a foot 283 wide at its widest and
+   *    about 260 at this station, so **it still cannot fall between the flanks - with 21
+   *    mm to spare where the 0.85 mount had 41, which is the price of the twenty per cent
+   *    and the reason it is a foot's width and not a body's.**
+   *  - **`-0.22` on `z`, and it is the one number on the shell that is a decision rather
+   *    than a measurement.** The measured fit above puts the aperture at 35 degrees below
+   *    horizontal, which is the sculpt's own attitude and not the attitude that *this*
+   *    back line wants: **the shell's front lip stands about 90 mm clear of the body's back
+   *    at `rz` of zero, and a 90 mm notch between the shell and the head is a hole in the
+   *    silhouette whatever the head is doing.** Pitching the shell twelve degrees nose-down
+   *    brings that lip down onto the crest, drops the aperture to 47 degrees so the back
+   *    fills more of the mouth, and lifts the spire's own tail by about the same 30 mm the
+   *    front gained - **so the price is at the spire, which is up in the air anyway and
+   *    which nothing in the silhouette can see standing off anything.** It does not sink
+   *    the shell: the lowest point is still twenty-six millimetres inside the back, and
+   *    **the tell for that is the shadow under the rim and not the rim's own height.**
+   *
+   * **And the head is what sets the seat.** `HEAD_SCALE` takes the ball's crown to `0.375`
+   * and its rear pole to `0.136`, and **the shell's front is at `0.085`** — **which leaves
+   * 50 mm of bare neck, bought by moving the shell *back* 50 mm rather than by making it
+   * smaller, because a bigger head arrives forward and a shell that had not moved would
+   * have been inside the animal's face.** The shell's top ends up 60 mm above the crown,
+   * where the 0.85 mount finished 24 above, and that is the other half of the twenty per
+   * cent: a shell this size is the tallest thing on the animal and the head is not, which
+   * is what every photograph of a snail says and what a snail drawn the other way round
+   * does not.
+   */
+  const SHELL_AT = { x: -0.130, y: 0.244, z: 0, scale: 0.85 * HEAD_SCALE };
+  const SHELL_ROT = [0, 0, -0.22];
   const shellG = new THREE.Group();
   shellG.name = 'shellG';
-  shellG.position.set(-0.022, 0.118, 0.005);
-  shellG.rotation.set(0, -0.50, -0.68);
-  shellG.scale.setScalar(0.48);
+  shellG.position.set(SHELL_AT.x, SHELL_AT.y, SHELL_AT.z);
+  shellG.rotation.set(...SHELL_ROT);
+  shellG.scale.setScalar(SHELL_AT.scale);
   bodyG.add(shellG);
   add(shellG, shellGeo, mShell, 'shellM');
 
@@ -270,7 +714,19 @@ async function assemble() {
 }
 
 let built = null;
+/**
+ * **The button, and it goes through the server's hook when there is one.**
+ * `tools/serve.py` injects `window.__snailExport` into this page and that is the route
+ * that writes into `meshes/`; a plain download lands in the browser's own folder
+ * instead, which is a snail built and thrown away. **The two are the same call with one
+ * `if` between them.**
+ */
 $('go').onclick = async () => {
+  if (window.__snailExport) {
+    const r = await window.__snailExport('snail.glb');
+    log(`wrote meshes/snail.glb — ${r.bytes} bytes`);
+    return;
+  }
   const root = built || (built = await assemble());
   const buf = await new Promise((res, rej) =>
     new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
@@ -278,38 +734,115 @@ $('go').onclick = async () => {
   const a = document.createElement('a');
   a.href = url; a.download = 'snail.glb';
   document.body.appendChild(a); a.click(); a.remove();
-  log(`wrote snail.glb — ${buf.byteLength} bytes`);
+  log(`wrote snail.glb — ${buf.byteLength} bytes (downloaded, not saved into meshes/)`);
 };
 
 $('prev').onclick = async () => {
   document.getElementById('view')?.remove();
   const root = built || (built = await assemble());
-  // stand it on a flat ground and light it the way the game does
+  // **Four angles at once and not a turntable**, because the thing this file has to get
+  // right is the *mounting* - where the shell sits on the animal and which way its coil
+  // faces - and a turntable shows you one of those at a time and a snail is not a
+  // radially symmetric object. Front quarter, side, from above and from behind, side by
+  // side, which is the set a race camera ever actually sees.
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x9fb7c4);
   scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
   const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
   key.position.set(2.5, 4, 3);
   scene.add(key);
-  scene.add(root);
   const ground = new THREE.Mesh(new THREE.CircleGeometry(6, 40), new THREE.MeshStandardMaterial({ color: 0x6f8f4a }));
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
-  const camera = new THREE.PerspectiveCamera(35, 2, 0.1, 100);
-  let angle = Math.PI * 0.62;
-  const draw = () => {
-    // a slow turntable, so every side of it can be looked at
-    camera.position.set(Math.cos(angle) * 1.5, 0.62, Math.sin(angle) * 1.5);
-    camera.lookAt(0, 0.34, 0);
-    renderer.render(scene, camera);
-    angle += 0.006;
-  };
+  const W = 1800, H = 300;
+  // [bearing, height, label, distance] - the bearing is around the animal, zero on its
+  // nose. **The distance is per view because the two the front needed are not pictures
+  // of the animal**: a head-on view at the other five views' 1.55 m frames the whole
+  // snail end-on and the neck it is here to show is forty pixels of it. **A view is a
+  // question, and the camera is part of the question** - so the two new cells ask about
+  // the front of the animal at the distance the front is worth looking at from.
+  // [bearing, height, label, distance, focus] - the bearing is around the animal, zero on
+  // its nose. **The distance and the focus are per view because the two the front needed
+  // are not pictures of the animal**: a head-on view at the other four's 1.55 m frames the
+  // whole snail end-on and the neck it is here to show is forty pixels of it. **A view is
+  // a question and the camera is part of the question.** The focus is the height each
+  // cell looks at, and it is written per view rather than derived from the distance
+  // because **0.92 m of a 0.65 m animal is a portrait and the portrait is of the head** -
+  // which wants the head's own middle, at 0.238 with the sole on the ground, and not
+  // whatever a `d < 1` test happened to pick. The tell is a cropped feeler, which is a
+  // camera aimed at the wrong thing and not a model too big for its frame.
+  const VIEWS = [
+    [Math.PI * 0.68, 0.34, 'front quarter'],
+    [Math.PI * 0.50, 0.22, 'side'],
+    [Math.PI * 0.50, 0.95, 'above'],
+    [0, 0.34, 'front', 1.30, 0.17],
+    [0.62, 0.22, 'neck', 1.70, 0.14],
+    [Math.PI * 0.30, 0.42, 'behind'],
+  ];
+  // **and the camera's aspect is the cell's and not the canvas's.** Four scissored
+  // viewports share one camera, and a camera left at the whole canvas's 4.8 shows each
+  // cell a quarter of the animal with the rest of the frame scissored away - which reads
+  // as a snail standing on its tail.
+  const camera = new THREE.PerspectiveCamera(32, W / H / VIEWS.length, 0.05, 40);
+  /**
+   * **The copies are lifted by `SOLE`, and that is the preview agreeing with the game
+   * rather than tidying the picture.** The snail is built with its sole at `y = -0.088`
+   * because `race.js` puts `bodyG.position.y = 0.088` on it and the ground is at zero -
+   * **so the game draws this animal standing on a lane, and a preview that left it where
+   * the geometry is drew it sunk into the ground.** The number to lift by is the one the
+   * log prints a line below, which is the whole of the agreement between the two: **the
+   * sole is a number the game owns, and a preview that does not use it is a picture of
+   * something the county never draws.**
+   */
+  const copies = VIEWS.map(([a, y, , d, focus]) => {
+    const c = root.clone(true);
+    c.position.set(0, -SOLE, 0);
+    scene.add(c);
+    return { c, a, y, d: d || 1.55, focus: focus === undefined ? 0.10 : focus };
+  });
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(760, 420);
-  renderer.id = 'view';
+  renderer.setSize(W, H);
+  renderer.domElement.id = 'view';
   document.body.appendChild(renderer.domElement);
-  renderer.setAnimationLoop(draw);
-  log('preview: spinning');
+  const cell = W / VIEWS.length;
+  renderer.setScissorTest(true);
+  renderer.setAnimationLoop(() => {
+    copies.forEach(({ a, y, d, focus }, i) => {
+      camera.position.set(Math.cos(a) * d, y - SOLE, Math.sin(a) * d);
+      camera.lookAt(0, focus - SOLE, 0);
+      renderer.setViewport(i * cell, 0, cell, H);
+      renderer.setScissor(i * cell, 0, cell, H);
+      renderer.render(scene, camera);
+    });
+  });
+  // **The sole is a number the game owns, and it is worth saying out loud whether this
+  // build agrees with it** - a snail that floats a centimetre above a lane looks like a
+  // snail on a different lane.
+  const b = new THREE.Box3().setFromObject(root);
+  log(`preview: ${VIEWS.map((v) => v[2]).join(' · ')}`);
+  log(`lowest point ${b.min.y.toFixed(4)} · the game lifts bodyG by ${-SOLE} · `
+    + `${(root.getObjectByName('bodyM').geometry.index.count / 3)} body tris, `
+    + `${(root.getObjectByName('footM').geometry.index.count / 3)} foot tris`);
+// **The winding check, and it is a per-face one.** The signed volume answers a question
+  // about the whole mesh and it cannot answer the one that matters: two thousand outward
+  // faces and fifty inward ones at the two caps is a comfortably positive volume, and it
+  // printed its green tick on an animal with four holes in it. `outwardReport()` compares
+  // every face against the spine its own ring was built around, which a winding mistake
+  // cannot agree with by accident, and the volume is printed beside it only because a
+  // sweep that went inside out *entirely* would move its sign and is worth seeing.
+  for (const nm of ['bodyM', 'footM']) {
+    const g = root.getObjectByName(nm).geometry;
+    const p = g.attributes.position, ix = g.index.array;
+    let vol = 0;
+    for (let t = 0; t < ix.length; t += 3) {
+      const a = ix[t] * 3, c = ix[t + 1] * 3, d = ix[t + 2] * 3;
+      vol += (p.getX(a / 3) * (p.getY(c / 3) * p.getZ(d / 3) - p.getZ(c / 3) * p.getY(d / 3))
+        + p.getY(a / 3) * (p.getZ(c / 3) * p.getX(d / 3) - p.getX(c / 3) * p.getZ(d / 3))
+        + p.getZ(a / 3) * (p.getX(c / 3) * p.getY(d / 3) - p.getY(c / 3) * p.getX(d / 3))) / 6;
+    }
+    log(`${nm}: ${outwardReport(g)}`
+      + `   (signed volume ${vol.toExponential(3)}${vol > 0 ? '' : ' ← INSIDE OUT'})`);
+  }
 };
 </script>
 </body>

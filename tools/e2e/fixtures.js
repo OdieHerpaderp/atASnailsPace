@@ -149,11 +149,22 @@ export function captureSim(catId) {
   S.start(catId);
   const r = S.sim(300, 0.04);
   S.surge(false);
+  // **And the two fields a biome added are taken off before the comparison.**
+  //
+  // `standingReport()` grew a `biome` and a `declined`, and `tools/e2e/baseline.json`
+  // is a capture off the pre-split game and may never be regenerated - so a report
+  // carrying them can only ever differ from it, and the golden suite would go red
+  // on a fixture that is not stale in any number it compares. They are stripped
+  // **here**, in the fixture rather than in the assertion, because the fixture is
+  // the thing that says what a comparison is against; and they are asserted
+  // instead in `biome.spec.js`, which is where a course's biome is the subject
+  // rather than an accident of which course it is.
+  const { biome, declined, ...standing } = S.standing();
   return {
     place: S.race.player.place, points: S.race.player.points,
     time: +r.time.toFixed(6), length: +r.length.toFixed(4), hour: +r.hour.toFixed(6),
     field: r.field.map((f) => [f.name, f.place, f.points, +f.time.toFixed(6), f.rating]),
-    standing: S.standing(),
+    standing,
     mills: S.mills(),
   };
 }
@@ -163,16 +174,31 @@ export function captureSim(catId) {
  *  back?" - an init script re-runs on every navigation, so a page armed with the
  *  fixture's tier stamps that tier back over whatever was saved and the reload
  *  proves nothing. */
-export async function boot(page, { gfx = GFX } = {}) {
+/**
+ * **`save: false` boots the page on whatever is already in `localStorage`.**
+ *
+ * The init script below writes the fixture save over the top of whatever the last
+ * page left behind, which is what makes every spec deterministic - and which is
+ * exactly wrong for the one spec that is about something surviving a reload. A
+ * `wipeSave()` in between would not help either: it is stamped before the game's
+ * first line, and the game's first line is `load()`.
+ *
+ * So `save: false` is the honest route and it is **not** a convenience: the spec
+ * that wants to see a save survive has to open a second page in the same context
+ * and be *given* the chance not to have the fixture stamped over it. The settings
+ * spec already does this for `gfx`, and the same `null` means the same thing in
+ * both places.
+ */
+export async function boot(page, { gfx = GFX, save = SAVE } = {}) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   await page.addInitScript(
-    ([save, gfxKey, saveKey, gfxVal]) => {
-      localStorage.setItem(saveKey, save);
+    ([saveJson, gfxKey, saveKey, gfxVal]) => {
+      if (saveJson !== null) localStorage.setItem(saveKey, saveJson);
       if (gfxVal) localStorage.setItem(gfxKey, JSON.stringify(gfxVal));
     },
-    [JSON.stringify(SAVE), GFX_KEY, SAVE_KEY, gfx],
+    [save === null ? null : JSON.stringify(save), GFX_KEY, SAVE_KEY, gfx],
   );
   await page.goto('/snail-race.html', { waitUntil: 'load' });
   // `window.__snail` existing is the game's own statement that its last line

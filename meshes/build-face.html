@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>build the faces</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 24px; background: #171a1c; color: #d8d4cc; }
+  h1 { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; }
+  button { font: inherit; padding: 7px 12px; margin: 0 6px 6px 0; background: #2b3134; color: #d8d4cc;
+           border: 1px solid #3d4548; border-radius: 3px; cursor: pointer; }
+  button:hover { background: #36403f; }
+  .note { color: #8b9195; max-width: 76ch; }
+  code { color: #b9c4a8; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8b9195; margin: 22px 0 6px; }
+  #log { color: #b9c4a8; }
+</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1>meshes/faces/&hellip;.glb</h1>
+<p class="note">
+  Thirteen faces, one file each, all built in <b>head-local space</b>: the origin is the
+  centre of a snail's head, <code>+x</code> forward out of the face, <code>+y</code> up,
+  and <code>&plusmn;z</code> either side. That is the frame <code>headG</code> is at in
+  <code>meshes/snail.glb</code>, so a face drops onto it at the origin with no offset
+  table &mdash; which is the only reason there is no table to keep in step.
+  <br><br>
+  **Every part is laid on the head, not in front of it.** The head is an ellipsoid of
+  radius <b>0.112</b> scaled <code>1.00, 0.97, 1.02</code>, and a brow placed at the eye's
+  own <code>x</code> floats a centimetre off the side of the face at its outer end and
+  touches it in the middle, which at race distance reads as a smudge. So
+  <code>onHead()</code> builds each piece where it wants to be and then
+  <strong>pushes it onto the ellipsoid</strong>, keeping its own depth: that is one
+  function and it is the whole of how ten faces sit on one head.
+  <br><br>
+  The eyes are the exception and are the file's own numbers &mdash;
+  <code>(0.088, -0.018, &plusmn;0.054)</code> at radius <b>0.033</b>, which is where
+  <code>snail.glb</code> already puts <code>eyeM</code>. A face drawn anywhere else would
+  not cover the eyes it is standing in front of.
+  <br><br>
+  One file is <b>one mesh</b> named <code>face-&lt;name&gt;</code>, holding the whole face:
+  eyes, brows and mouth together, because a face is swapped as a face and three meshes
+  is three draw calls and a join to see. Everything is merged flat, carries a vertex
+  colour, and has <b>no uv at all</b> &mdash; a face is four centimetres across, so the maps
+  are the colour in the vertices and there is nothing a tiling map could add.
+  <code>meshes/maps.js</code> says so with an empty array per face, which is the same
+  state an unconverted prop is in.
+  <br><br>
+  Open this page from the folder that serves the game and press a button, and the file
+  is written into <code>meshes/faces/</code> over the one of the same name; nothing is
+  downloaded and nothing has to be moved. The colour is out of the county's own jar
+  (<code>meshes/palette.js</code>) and not invented here.
+</p>
+
+<h2>the faces</h2>
+<div id="row"></div>
+<button id="all">write them all</button>
+<button id="prev">preview</button>
+<pre id="log"></pre>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFExporter } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js';
+import { mergeGeometries } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/utils/BufferGeometryUtils.js';
+import { COUNTY as C } from './palette.js';
+
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+const $ = (id) => document.getElementById(id);
+const TAU = Math.PI * 2;
+
+// ---------------------------------------------------------------- helpers
+// **The scenery page's argument order, not the snail page's.** `build-snail.html`
+// takes `rz, rx, ry` and `build-scenery.html` takes `rx, ry, rz`, and copying a call
+// between the two rotates about the wrong axis and produces a face that is still the
+// right size and the wrong expression. Everything below is `rx, ry, rz`.
+const M = (x, y, z, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) =>
+  new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+    new THREE.Vector3(sx, sy, sz));
+
+/** A flat vertex colour. */
+function tint(g, c) {
+  const n = g.attributes.position.count, col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2]; }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+/**
+ * three's primitives come indexed and `mergeGeometries` wants them all the same.
+ *
+ * **De-indexing costs smoothness, and it is worth saying out loud where**, because it is
+ * the reason `buildFace()` cannot recompute normals and the reason the pieces have to
+ * arrive with their own. Every piece is flattened here, so by the time the merge is done
+ * the geometry has no shared vertices left — and **a normal computed on a non-indexed
+ * geometry is a per-face normal**, one per face, because a face's three vertices have
+ * nothing to average between them. That is why the merge step is where smoothing stops
+ * being available, and not the geometry.
+ *
+ * **So a piece takes its normals before it gets here, and they are already correct:**
+ * three's primitives ship them, and `applyMatrix4` carries them through a rotation and a
+ * non-uniform scale with the proper normal matrix. `smoother()` exists for the one case
+ * where the positions are rewritten *after* that, which is `onHead()`.
+ */
+const flat = (g) => (g.index ? g.toNonIndexed() : g);
+/** Averaged normals, taken while the vertices are still shared — which is the only state in which three can average them. */
+const smoother = (g) => { if (g.index) g.computeVertexNormals(); return g; };
+/**
+ * One primitive, transformed, flat vertex colour, no uv — **and not laid on the
+ * head.** `onHead()` below is the one that puts a piece on the surface, and this is
+ * the one that leaves it where it was told to be, which is what the shipped eyes and
+ * the shipped smile need: those two stand at numbers copied out of
+ * `meshes/build-snail.html` and a face that had them conformed onto the head would
+ * not be the face the game has been drawing.
+ */
+function part(geo, m, c) {
+  const g = flat(geo.clone());
+  g.applyMatrix4(m);
+  g.deleteAttribute('uv');
+  return tint(g, c);
+}
+/**
+ * The same, **for a piece that is a curve** — and it is a separate function rather than a
+ * flag on `part()` because the flag would have to be read at three call sites and the
+ * reason is only ever the same one: this piece is a dome and it wants its normals
+ * averaged. `part()` is for boxes and bars, which are flat by nature.
+ */
+function partSmooth(geo, m, c) {
+  const g = flat(smoother(geo.clone()));
+  g.applyMatrix4(m);
+  g.deleteAttribute('uv');
+  return tint(g, c);
+}
+
+// ------------------------------------------------- the head's own surface
+// **These three are the snail file's, read off `build()` in
+// `meshes/build-snail.html`**, and they are the only numbers a face needs. They are
+// written down here rather than imported because that file is a page and not a module,
+// and the alternative is a shared constants file for six numbers - a second place to
+// forget to change one of them, which is worse than a comment naming where they are
+// from. **If the head is reshaped, they move here too.**
+const HEAD_R = 0.112, HEAD_SY = 0.97, HEAD_SZ = 1.02;
+const HEAD_RY = HEAD_R * HEAD_SY, HEAD_RZ = HEAD_R * HEAD_SZ;
+/** Where the head's own surface is, at a height and a width. */
+const surfaceX = (y, z) => HEAD_R * Math.sqrt(Math.max(0.0004, 1 - (y / HEAD_RY) ** 2 - (z / HEAD_RZ) ** 2));
+/** And how far a piece stands off it. A hair is enough; a millimetre is a blister. */
+const OUT = 0.0018;
+// the file's own eye line, and the mouth's own ring radius of 0.0463
+const EYE = { x: 0.088, y: -0.018, z: 0.054, r: 0.033 };
+
+/**
+ * One piece of a face, laid **on the head**.
+ *
+ * The geometry is built flat about `x = 0`, moved and turned into place, and then
+ * every vertex's `x` is rewritten as the head's own surface at that vertex's `y` and
+ * `z` **plus the depth it had**. That is the whole trick and there are two halves to
+ * it: without the rewrite a brow at the eye's height is in the air at its outer end,
+ * and without the `+ x` a slab collapses to a shell of no thickness. So a piece keeps
+ * its own depth, sits on the surface, and curves with it.
+ */
+function onHead(geo, c, o = {}) {
+  const g = geo.clone();
+  g.applyMatrix4(M(o.x || 0, o.y || 0, o.z || 0, 1, 1, 1, o.rx || 0, o.ry || 0, o.rz || 0));
+  const p = g.attributes.position;
+  const lift = o.lift == null ? OUT : o.lift;
+  for (let i = 0; i < p.count; i++) {
+    p.setX(i, surfaceX(p.getY(i), p.getZ(i)) + p.getX(i) + lift);
+  }
+  p.needsUpdate = true;
+  // **The normals are recomputed because the positions were just rewritten, and before
+  // `flat()` because this is the only place averaging is still possible.** The rewrite
+  // is the whole point of the function — it is what bends a slab onto a curved face — and
+  // it invalidates every normal the primitive arrived with, so a brow's own flat normals
+  // are the right answer here for free and a mouth's own are not.
+  smoother(g);
+  g.deleteAttribute('uv');
+  return tint(flat(g), c);
+}
+/**
+ * The same, but for a piece that **bulges** rather than lies down - an eye.
+ *
+ * **The scale is part of the call and not an afterthought.** An eye is a 33 mm
+ * sphere squashed to 13 mm across the face, and an unsquashed one is a 33 mm ball
+ * standing 24 mm proud of a head that is 112 mm in radius: not a face, a pair of
+ * bubbles. It was ignored here once and the bounding box said so - `min.x` came
+ * back at 55 mm, which is the eye's own radius off its centre rather than the
+ * thirteen it should be.
+ */
+function onHeadBulge(geo, c, o = {}) {
+  // **The scale is why this one recomputes, and `flat()` is why it is not free.**
+  // `applyMatrix4` carries a primitive's normals through a *rotation* correctly, but a
+  // non-uniform *scale* leaves them wrong: three transforms the existing normals by the
+  // normal matrix, which is right for the shape the primitive had and not for the shape
+  // it now has. A sphere squashed to `0.42 / 1.00 / 0.74` is the case in point — its
+  // normals were computed for a ball and then the ball was squashed under them.
+  //
+  // **So the order here is: transform, recompute, flatten.** The recompute has to sit
+  // between them, because averaging needs shared vertices and `flat()` is what removes
+  // them. Averaging a flattened geometry silently gives every face its own normal, which
+  // is the faceting this function's callers keep fighting.
+  const g = geo.clone();
+  g.applyMatrix4(M(o.x || 0, o.y || 0, o.z || 0,
+    o.sx == null ? 1 : o.sx, o.sy == null ? 1 : o.sy, o.sz == null ? 1 : o.sz,
+    o.rx || 0, o.ry || 0, o.rz || 0));
+  // **`o.smooth` is for pieces that must not be averaged at all**: a box wants its six
+  // faces and a coin wants its rim, and averaging either turns a lid into a pillow. A
+  // bare rotation needs no recompute — the primitive's own normals are already right.
+  if (o.smooth || o.sx != null || o.sy != null || o.sz != null) smoother(g);
+  g.deleteAttribute('uv');
+  return tint(flat(g), c);
+}
+
+// ------------------------------------------------------------------ pieces
+/**
+ * **The file's own eye, at the file's own numbers, and this is the base of all ten
+ * faces.** A sphere of radius 0.033 squashed to 13.9 mm across the face and 24.4 mm
+ * deep, standing at `(0.088, -0.018, ±0.054)` in the county's own near-black - which
+ * is exactly what `build()` in `meshes/build-snail.html` builds as `eyeM` and
+ * `eyeM_1`, because these *are* those two numbers.
+ *
+ * **So `plain` is that and the file's smile and nothing else, and it looks identical
+ * to the face the county shipped.** Every other face below is `plain` plus things put
+ * in front of it, which is why the silhouette, the size and the gloss are the same on
+ * all ten: the difference between them is entirely what has been added and never a
+ * different eyeball. An earlier version of this page gave every face its own modelled
+ * white-and-iris eye and `plain` came out a different animal from the model the game
+ * had been showing for a year, which is not a new face, it is a different snail.
+ *
+ * **It returns a list of one and not a geometry**, because `buildFace()` spreads
+ * whatever a face hands it and `coinEye()` spreads this one into itself.
+ */
+function eye(side) {
+  return [part(new THREE.SphereGeometry(EYE.r, 14, 11),
+    M(EYE.x, EYE.y, side * EYE.z, 0.42, 1.00, 0.74), C.eyeDark)];
+}
+/**
+ * **The file's own smile, at the file's own numbers**, and for the same reason. The
+ * ring's radius of 0.0463 is the circle the head's own surface makes at that depth,
+ * the slice is 0.45 of it, and it stands at `x = 0.104` - which is **inside** the
+ * surface at the centre of the arc and a millimetre proud of it at the ends, so the
+ * corners of the smile catch the light and the middle of it does not. That is the
+ * shape the shipped face has and it is not a bug to be tidied away.
+ */
+function smile0() {
+  const arc = Math.PI * 0.45;
+  return part(new THREE.TorusGeometry(0.0463, 0.006, 5, 16, arc),
+    M(0.104, 0, 0, 1, 1, 1, 0, Math.PI * 0.5, Math.PI * 1.5 - arc * 0.5), C.eyeDark);
+}
+/**
+ * An iris **laid on the front of the file's own eye**, and the one piece that decides
+ * whether a face reads as looking at you or as staring. It is a squashed sphere rather
+ * than a disc so it takes the eye's curve and the shine on it moves as the head does,
+ * and the catchlight beside it is a separate smaller piece rather than a highlight,
+ * because a specular on a vertex-coloured prop is a property of the light and not of
+ * the snail.
+ */
+function iris(side, c, r = 0.56) {
+  const z = side * EYE.z;
+  return [
+    onHeadBulge(new THREE.SphereGeometry(EYE.r * r, 12, 8), c,
+      { x: EYE.x + 0.0088, y: EYE.y - 0.001, z, sx: 0.30 }),
+    onHeadBulge(new THREE.SphereGeometry(EYE.r * 0.17, 10, 7), C.eyeWhiteShade,
+      { x: EYE.x + 0.0136, y: EYE.y + EYE.r * 0.22, z: z - side * 0.004, sx: 0.30 }),
+  ];
+}
+/** A brow: a slab **across** the face, so its long axis is z and its tilt is `rx`. */
+function brow(side, c, y, tilt, len = 0.050, thick = 0.0060, lift = OUT + 0.002) {
+  return onHead(new THREE.BoxGeometry(0.006, thick, len), c, { y, z: side * (EYE.z - 0.006), rx: tilt, lift });
+}
+/**
+ * A mouth, which is an arc of a ring **and is therefore conformed like anything
+ * else**. A torus's axis is its own `z`, so a rotation of `PI / 2` about `y` stands it
+ * up out of the page and its arc lands in the `z`/`y` plane - where the face is - and
+ * the spin about `x` afterwards chooses which half of the ring is showing. **`down`
+ * is the smile and `!down` is the frown, and they are the same arc:** a frown is not a
+ * smile drawn lower, it is the other half of the same circle.
+ *
+ * **These mouths are conformed and the shipped one is not**, and the difference is
+ * deliberate: a conformed mouth lies on the head's surface along its whole length and
+ * reads as a groove, where the file's own sits inside the surface at the middle and
+ * proud of it at the ends. `plain` uses `smile0()` and the other nine use this, so
+ * plain is the shipped face and the rest are the county's.
+ */
+function mouth(c, o = {}) {
+  const r = o.r == null ? 0.040 : o.r;
+  const arc = o.arc == null ? Math.PI * 0.8 : o.arc;
+  // **`down` picks the top of the ring and not the bottom**, which is the opposite of
+  // what the name suggests and was the other way round here: `grim` came out with a
+  // grin on it and nobody could tell which face was meant to be which.
+  const spin = (o.down ? 1 : -1) * Math.PI * 0.5 - arc * 0.5;
+  return onHead(new THREE.TorusGeometry(r, o.tube == null ? 0.0050 : o.tube, 6, 14, arc), c, {
+    y: o.y == null ? 0.004 : o.y, z: o.z || 0, rx: spin, ry: Math.PI * 0.5, lift: OUT + 0.001,
+  });
+}
+
+/**
+ * **The reference's mouth is a filled crescent, and `mouth()` cannot draw it.**
+ *
+ * Every other mouth on this page is `mouth()`'s, and `mouth()` is **an arc of a ring** —
+ * a *stroked* line, a groove, a band of tube round a circle. The reference's mouth is a
+ * **dark shape with an inside**: a crescent of solid dark, and the teeth are shapes
+ * standing *in* it. A band has no inside to stand in, so the only way to draw the
+ * reference with the piece this page already had was to hang the teeth off the band's
+ * own outer edge — **which is a row of spikes on a groove**, and it is what `fangs` and
+ * the first `grin` both came out as.
+ *
+ * **So it is a `RingGeometry`, which is a filled annular sector: solid between `rIn` and
+ * `rOut`, and the shape of the reference's mouth exactly.** A ring lies in its own `xy`
+ * plane, so the same `ry: PI / 2` that stands `mouth()`'s torus up lands this one in the
+ * `z`/`y` plane where the face is — and **the mapping is the same one, so a piece placed
+ * on this ring and a piece placed on `mouth()`'s are on the same circle**: `(y, z)` of a
+ * ring at angle `θ` is `(r sin θ, -r cos θ)` under both.
+ */
+function grinMouth(c, o = {}) {
+  const arc = o.arc == null ? Math.PI * 0.85 : o.arc;
+  const rIn = o.rIn == null ? 0.038 : o.rIn;
+  const rOut = o.rOut == null ? 0.052 : o.rOut;
+  // **The same `spin` `mouth()` builds its arc from**, so the two are the same arc of the
+  // same circle and a tooth can be placed against either one without a conversion.
+  const spin = (o.down ? 1 : -1) * Math.PI * 0.5 - arc * 0.5;
+  return onHead(new THREE.RingGeometry(rIn, rOut, 30, 1, spin, arc), c, {
+    y: o.y == null ? 0.004 : o.y, z: o.z || 0, ry: Math.PI * 0.5, lift: OUT + 0.001,
+  });
+}
+/**
+ * **The teeth of a filled mouth, and they stand in it rather than on it.**
+ *
+ * **`wedgeRow()` and not `grinTeeth()`,** which is the Adversary's five flat bars and is
+ * right for a human mouth — a bar reads as a tooth of somebody who is smiling and a
+ * wedge reads as a thing with a bite.
+ *
+ * This is not `fangRow()`'s arrangement either, and the difference is the whole of it. A
+ * tooth on a *band* hangs off the band's edge, because a band is a line and there is
+ * nothing else to be inside; **a tooth in a filled crescent is planted on one of the
+ * crescent's two edges with its whole body over the dark**, which is the difference
+ * between a saw edge and teeth.
+ *
+ * **`o.lower` is which of the two edges, and it is the whole of the difference between a
+ * grin with one row and a grin with two.** The crescent has an inner edge and an outer one
+ * — for a smile the inner is the top and the outer is the bottom — and a row on either is
+ * the same three lines of arithmetic with the radius and the turn swapped. **The turn is
+ * what makes it a jaw**: a wedge planted on the outer edge has to point *inwards*, up into
+ * the dark, and the rotation that does that is `th + PI / 2` where the inner row's is
+ * `th - PI / 2`. **A lower row turned the upper row's way is a second row of spikes
+ * pointing at the ground**, which is the first version of this and the reason the flag is
+ * a *turn* and not a height.
+ *
+ * **Everything here is off the mouth's own ring rather than written beside it.**
+ * `grinMouth()` puts its shape at `(r sin θ, -r cos θ)` and this asks the same circle the
+ * same question: the tooth's angle is `-acos(-z / rEdge)` — the branch inside the arc,
+ * which is the one whose middle is `-PI / 2` — and its position and its lean both come off
+ * that one angle. **A tooth that does not lean with the crescent is a peg in a curve**,
+ * which is the failure `fangRow()`'s own comment was written about and the reason this is
+ * a second function rather than a flag on the first.
+ */
+function wedgeRow(c, o) {
+  const out = [];
+  // **The edge is the radius the wedge is planted against, and `lower` is the only thing
+  // that changes** — the angle, the centre and the turn are all read off it.
+  const rEdge = o.lower ? o.rOut : o.rIn;
+  // **The arc's own angular span, and the one thing about a wedge's position that is not
+  // free.** `grinMouth()` draws the crescent from `spin` through `arc`, so a tooth whose
+  // angle falls outside that is a tooth **standing past the end of the mouth** — and the
+  // first two-row version had exactly that at both ends: `spread` of 0.036 on an inner
+  // radius of 0.039 puts the outermost wedge at `-2.745` radians where the arc stops at
+  // `-2.571`, so the two outside teeth hung off the corners of the smile into bare head.
+  //
+  // **`spread` is the free number and the arc is the constraint**, so the arc is what
+  // clamps: a row asks for the width it wants and takes what the mouth can hold.
+  const spin = (o.down ? 1 : -1) * Math.PI * 0.5 - o.arc * 0.5;
+  for (let i = 0; i < o.n; i++) {
+    const t = o.n === 1 ? 0 : (i / (o.n - 1) - 0.5) * 2;
+    const z = t * o.spread;
+    // **The angle is read off the crescent's own edge the wedge sits on**, and `z` is
+    // where the tooth goes across the mouth.
+    const th = Math.min(spin + o.arc, Math.max(spin,
+      -Math.acos(Math.max(-1, Math.min(1, -z / rEdge)))));
+    // **The centre is a half-height *in* from that edge, along the ring's own radius**, so
+    // the wedge's base is *on* the edge and its point is `h` inside the dark. A lower row
+    // measures in the other direction because "in" is inwards there.
+    const rad = rEdge + (o.lower ? -1 : 1) * o.h * 0.5;
+    out.push(onHead(new THREE.ConeGeometry(o.r0, o.h, 4), c, {
+      // **`+ o.y` is the whole of a bug that was eight millimetres of daylight.** The
+      // ring's *centre* is at `o.y`, not at zero — `grinMouth()` moves the whole ring up
+      // there and this was measuring from the origin, so every wedge was planted at the
+      // height the mouth would have if it were eight millimetres lower and its points
+      // hung off the bottom of the dark. **Two pieces on one circle is not the same as
+      // two pieces on one circle's centre**, and the offset between a ring and the
+      // origin is the one number that only one of the two knows.
+      x: 0, y: o.y + rad * Math.sin(th), z: -rad * Math.cos(th),
+      // **`rx` of `th - PI / 2` turns the cone's own `+y` into the ring's outward radius**
+      // and `th + PI / 2` into its inward one — straight down at the middle of a smile
+      // and straight up, which are the two directions the reference's two rows point.
+      rx: th + (o.lower ? 1 : -1) * Math.PI * 0.5,
+      lift: OUT + 0.0016,
+    }));
+  }
+  return out;
+}
+
+/**
+ * **A narrowed eye: **the file's own eye, squashed in y and with a lid over the top.**
+ *  The narrowing is done to the eye rather than to something inside it, so the
+ *  silhouette shrinks with it - a smaller pupil on a big black ball reads as a big
+ *  black ball, and a flattened one reads as a decision. */
+function slitEye(side) {
+  const z = side * EYE.z;
+  return [
+    onHeadBulge(new THREE.SphereGeometry(EYE.r, 12, 8),
+      C.eyeDark, { x: EYE.x, y: EYE.y, z, sx: 0.42, sy: 0.34, sz: 0.74 }),
+    // **and a lid over the top of it**, in the county's own brow colour, which is the
+    // same near-black one value up: an eye with a lid over the top half of it and an
+    // eye without are two different expressions of the same animal.
+    onHeadBulge(new THREE.SphereGeometry(EYE.r * 1.02, 12, 8, 0, TAU, 0, Math.PI * 0.44),
+      C.brow, { x: EYE.x + 0.0018, y: EYE.y, z, sx: 0.42, sy: 0.36, sz: 0.74 }),
+  ];
+}
+/**
+ * The dollar eye. **A coin and a bar, and not a glyph.** A dollar sign at three
+ * millimetres is a smudge; a disc with a bar through it and two beads at its ends is
+ * four shapes, and it reads as money from the timing camera as well as from the front
+ * one. The disc stands **proud of the white** rather than sunk into it, which is the
+ * difference between a coin on an eye and a pupil the wrong colour.
+ */
+function coinEye(side) {
+  const z = side * EYE.z, x = EYE.x, r = EYE.r;
+  return [
+    ...eye(side),
+    onHeadBulge(new THREE.CylinderGeometry(r * 0.68, r * 0.68, 0.0022, 14), C.coinLit,
+      { x: x + 0.0122, y: EYE.y, z, rz: Math.PI * 0.5 }),
+    onHeadBulge(new THREE.BoxGeometry(0.0022, r * 1.00, 0.0026), C.eyeDark, { x: x + 0.0138, y: EYE.y, z }),
+    onHeadBulge(new THREE.SphereGeometry(r * 0.19, 8, 6), C.eyeDark, { x: x + 0.0142, y: EYE.y + r * 0.42, z }),
+    onHeadBulge(new THREE.SphereGeometry(r * 0.19, 8, 6), C.eyeDark, { x: x + 0.0142, y: EYE.y - r * 0.42, z }),
+  ];
+}
+/** A wing-shaped brow: two strokes sweeping up and **out**, so the silhouette is a
+ *  wing rather than a line. **The second stroke is outboard of the eye and not on
+ *  top of the first** - a brow that runs twice across the same place is a thicker
+ *  brow, and the shape of this one is that the two strokes are at different widths
+ *  and different heights, which is the whole difference between a wing and a
+ *  doubled line. */
+function wingBrow(side, c) {
+  const out = [];
+  for (let i = 0; i < 2; i++) {
+    out.push(onHead(new THREE.BoxGeometry(0.008, 0.008, 0.046 - i * 0.010), c, {
+      y: 0.018 + i * 0.014, z: side * (EYE.z + 0.004 + i * 0.013),
+      rx: -(0.26 + i * 0.46), lift: OUT + 0.004,
+    }));
+  }
+  return out;
+}
+/** The Adversary's brows: **a swept horn each, and the tip is the one bright thing on
+ *  the face.** `hornHot` is the only colour of its own in the set and it is under
+ *  three millimetres of geometry, which is the trade: a face nobody can read at a
+ *  glance is worth less than a pair of eyes that find them. */
+function hornBrow(side, c, hot) {
+  return [
+    brow(side, c, 0.014, 0.22, 0.060, 0.013, OUT + 0.004),
+    brow(side, hot, 0.034, 0.92, 0.036, 0.009, OUT + 0.006),
+  ];
+}
+/** A grin with something behind it. **Teeth are the one pale thing in the set**, and
+ *  they are planes rather than curves, and a plane at this size catches the sun as a
+ *  bar - which is exactly what a set of teeth is. */
+function grinTeeth(c, teeth) {
+  const out = [];
+  for (let i = 0; i < 5; i++) {
+    const t = (i / 4 - 0.5) * 2;
+    out.push(onHead(new THREE.BoxGeometry(0.0024, 0.010, 0.0072), teeth, {
+      y: -0.016 - t * t * 0.006, z: t * 0.030, lift: OUT + 0.0016,
+    }));
+  }
+  return out;
+}
+
+/** A part that belongs to the middle of the face, so it is built on one side only.
+ *  The file already has a set for this (`WHOLE`) and it answers the wrong question
+ *  for a face that is per-side for its eyes and whole for its mouth. */
+const once = (s, ...g) => (s > 0 ? g : []);
+
+/**
+ * **The reference's eye, and it is a white dome with a round pupil in it.**
+ *
+ * A white ground, a round dark pupil in the middle of it and one small catchlight —
+ * which is the whole of that look, and it is the strongest single thing about the
+ * creature these three came off. **It covers the eye and never rebuilds it**, because
+ * `plain`'s eye is the shipped one and every face on this page is that ball plus what
+ * has been put in front of it, and a face that changed the eyeball would be a different
+ * snail rather than a different expression.
+ *
+ * **The ground is a dome of the eye's own shape and not a disc on the front of it**, and
+ * that is the whole of what was wrong with the first version. It was three flat cylinders
+ * and it came out as **a black ball sitting in a grey washer**: the file's eye is squashed
+ * to `0.42 / 1.00 / 0.74`, so its silhouette is 48.8 mm across in `z` while a disc of
+ * `0.96 r` is 63.4 — the disc spilled a ring *round* the ball rather than covering it, and
+ * no amount of moving it forward repairs that, **because a disc cannot cover a ball and
+ * lie on a curved head at the same time.** One is flat and the other is round, and the
+ * head is the thing they are both trying to sit on.
+ *
+ * **So the ground is the ball's own ellipsoid, carried in its own scale** — which is what
+ * `iris()` and `slitEye()` already do, and they are the only two pieces on this page that
+ * have ever looked like eyes. The radius carries the three per cent of margin that hides
+ * the black at the silhouette's edge; the scale carries the shape, and nothing else does.
+ *
+ * The catchlight is a separate piece and not a highlight, for the same reason
+ * `iris()`'s is: a specular on a vertex-coloured face is a property of the light and
+ * not of the snail, so it moves when the sun moves and the reference's does not.
+ */
+function googlyEye(side) {
+  const z = side * EYE.z, r = EYE.r;
+  // **All three ask for `smooth`, and the reason is `flat()`.** These are the only pieces
+  // on the page that are nothing but curve, and a dome drawn with per-face normals is
+  // **a visibly faceted egg** — which is what the first version of this was, at sixteen by
+  // twelve. A box wants its corners and a cap wants its rim; this does not.
+  // **And it is not larger than the eye it covers, which is the other half of it.** The
+  // ground is a dome *of the eye's own size and no more*: the render came back as **a
+  // pair of goggles** — a white dome wider and taller than the black ball under it, so
+  // the eye reads as a separate object stuck on a snail rather than as an eye. `1.03` is
+  // the three per cent of margin that hides the black at the silhouette's edge and is
+  // not three per cent of *size*; the scale carries the shape and the margin is in `sx`.
+  return [
+    onHeadBulge(new THREE.SphereGeometry(r * 1.03, 16, 12), C.eyeWhite,
+      { x: EYE.x, y: EYE.y, z, sx: 0.44, sy: 1.00, sz: 0.76, smooth: true }),
+    // The pupil and its catchlight are squashed spheres rather than discs because they
+    // are on the dome: **a disc laid on a dome stands off it at the middle and sinks into
+    // it at the edge**, which is the same failure `onHead()` exists to remove, running the
+    // other way. A pupil that takes the ground's curve is also the pupil whose shine
+    // moves as the head does.
+    onHeadBulge(new THREE.SphereGeometry(r * 0.44, 14, 10), C.eyePupil,
+      { x: EYE.x + 0.0118, y: EYE.y - r * 0.04, z: z - side * r * 0.04,
+        sx: 0.34, sy: 0.92, sz: 0.88, smooth: true }),
+    onHeadBulge(new THREE.SphereGeometry(r * 0.17, 10, 8), C.eyeWhiteShade,
+      { x: EYE.x + 0.0160, y: EYE.y + r * 0.26, z: z - side * r * 0.26, sx: 0.30, smooth: true }),
+  ];
+}
+
+/**
+ * **A row of teeth, and a row of wedges rather than a row of bars.**
+ *
+ * The reference's mouth is a dark band with a saw edge above and below it, and five
+ * flat rectangles read as a zipper — **so each tooth is a four-sided cone, which is a
+ * wedge, and the apex is the one thing the eye picks up at four centimetres.**
+ * `grinTeeth()` uses bars and that is right for the Adversary's grin, which is a
+ * human mouth; this is a row of fangs and the two are not the same shape.
+ *
+ * **It takes the mouth's own `r`, `y` and `tube` and hangs off them, and that is the
+ * whole of what makes a tooth a tooth rather than a decoration.** The two rows used to
+ * carry a `y` and a `sag` of their own, and they came out **forty millimetres clear of
+ * the mouth on both sides** — a face with a set of fangs floating on the forehead and
+ * another lot on the chin. A tooth's `y` is a *function of its `z`*, because the mouth
+ * is an arc of a ring and a ring's height at a given `z` is `y - sqrt(r² - z²)`; write
+ * that number down as a constant and the two numbers can never be kept in step, and
+ * `fangs` is the only caller, so it hands its own mouth's numbers straight over.
+ *
+ * **And every tooth is turned by the ring's own angle**, which is what makes a row of
+ * them a set of teeth rather than a fringe along a lip: a wedge that does not point away
+ * from the band it belongs to is not on that band, however exactly its height is right.
+ * The band's height at a given `z` is `o.y - sqrt(r² - z²)` and its outward normal is
+ * that same radius turned through `asin(z / r)`, so the two come off `mouth()`'s own
+ * numbers and neither is written down twice.
+ *
+ * `down` is which edge of the band the row is on: a tooth on the upper edge points down
+ * into the mouth and a tooth on the lower one points up out of it, and it is the same
+ * wedge either way.
+ */
+function fangRow(c, o) {
+  const out = [];
+  for (let i = 0; i < o.n; i++) {
+    const t = o.n === 1 ? 0 : (i / (o.n - 1) - 0.5) * 2;
+    const z = t * o.spread;
+    // **The tooth points along the ring's own radius and not along the screen's `y`, and
+    // that is the difference between teeth and a fringe.** `mouth()` puts its arc on a
+    // ring of radius `o.r` centred at `o.y`, so the band's height at this `z` is
+    // `o.y - sqrt(r² - z²)` and the band's *outward* normal there points up and away from
+    // the ring's centre. Placing the wedge at that height and turning it with an `rx` of
+    // `PI` gave **five teeth lying along the smile pointing down past it** — the row read
+    // as a fringe on the lip because a tooth that does not point away from the band it
+    // belongs to is not on the band.
+    //
+    // **So the wedge is turned by the ring's own angle**, `rz` from the tooth's `z` over
+    // `o.r`, and the base sits a tube's width in from the band's centre-line so the wedge
+    // and the mouth share an edge rather than meeting at one.
+    const a = Math.asin(Math.max(-1, Math.min(1, z / o.r)));
+    const y = o.y - Math.sqrt(Math.max(0.0004, o.r * o.r - z * z));
+    out.push(onHead(new THREE.ConeGeometry(o.r0, o.h, 4), c, {
+      y: y + (o.down ? -1 : 1) * o.tube, z,
+      rx: o.down ? Math.PI : 0,
+      rz: o.down ? -a : a,
+      lift: OUT + 0.0016,
+    }));
+  }
+  return out;
+}
+
+/**
+ * **The reference's spike, and it is a shape and not a colour.**
+ *
+ * The little crest on the crown of the creature that reference came off is a yellow,
+ * and the county's own rule about that is written down in the palette: **a face only
+ * ever differs by shape and never by a colour of its own, because a coloured brow
+ * reads as a different animal rather than a different expression.** So it is drawn in
+ * the near-black brow colour and the *point* does the work — which is also the reason
+ * it reads at four centimetres and a yellow one would not, four millimetres of
+ * saturated colour on a pale head being a stain rather than a crest.
+ *
+ * **And it is planted at `x = 0.104` with its base on the head and not its middle**,
+ * which is the same sentence `smoothRidges()` gets to keep a leap's lip out of a
+ * Laplacian: a spike's *base* is what touches the forehead, so the base is the point
+ * that goes on the surface and the thirty millimetres above it stand up off it. Putting
+ * the cone's centre there instead buries the tip in the skull and leaves the base ring
+ * standing proud — a spike that cannot see the sun.
+ */
+function crestSpike(c, h = 0.030) {
+  // **A crest is the one piece of a face that stands *up*, so it is not laid on the head
+  // at all.** `onHead()` rewrites every vertex's `x` to the surface at that vertex's own
+  // `y` and `z`, which is what keeps a brow still on a curved face, and it is exactly
+  // what turns a thirty-millimetre spike into **a flat triangle lying on the forehead**.
+  // A thing standing on the head has to keep its own depth, so this one is `part()`.
+  //
+  // **And it leans back and not sideways, which is the other half of it.** `rx` turns
+  // about the axis pointing out of the face, so an `rx` on an upright cone leans it left
+  // or right — a cowlick and not a crest — and the first render had a leaning blade.
+  // `rz` turns about `z`, which lies across the face, and tips the cone towards `-x`.
+  const lean = -0.34;
+  // **The base is at `y = 0.052` and the centre is pushed forward by half the lean's
+  // rise, so the base sits on the surface and the thirty millimetres above it stand up.**
+  // Putting the *centre* at the surface instead buries the tip in the skull and leaves
+  // the cone's base ring standing proud of the forehead — a spike that cannot see the sun.
+  const baseY = 0.052;
+  return part(new THREE.ConeGeometry(0.011, h, 4), M(
+    surfaceX(baseY, 0) + Math.sin(-lean) * h * 0.5, baseY, 0, 1, 1, 1, 0, 0, lean), c);
+}
+
+// ---------------------------------------------------------------- the ten
+/**
+ * **One table, and each face is a list of the parts it is made of, per side.** The
+ * names here, `FACE_SET` in `src/core.js` and `MESH_SETS` in `src/materials.js` are
+ * three copies of one list, and `tools/plan-test.mjs --faces` is what says they agree.
+ * `plain` is the one that exists for every snail and `devil` is here only because The
+ * Adversary wears it.
+ */
+const FACES = {
+  /**
+   * **The shipped face, and it is the file's own two eyes and the file's own smile
+   * with nothing added.** This is what `meshes/snail.glb` has been drawing all along
+   * as `eyeM`, `eyeM_1` and `smileM`, and it is `plain` here so that a snail with
+   * nothing said about it looks exactly as it looked before faces existed. Every
+   * other face in the table is this one plus pieces: the eyes are never rebuilt and
+   * only ever covered.
+   *
+   * **It asks for both eyes itself and ignores `side`**, because it is built once -
+   * see `WHOLE` below - and a function of `side` that ran once would have given the
+   * snail one eye.
+   */
+  plain: () => [...eye(1), ...eye(-1), smile0()],
+  // The cheerful one is the file's smile opened out and an iris in each eye and the
+  // brows lifted. It is the free one, so it is the one every snail in the county has.
+  cheer: (s) => [
+    ...iris(s, C.eyeIris),
+    brow(s, C.browPale, 0.022, -0.24),
+    mouth(C.grin, { arc: Math.PI * 1.0, r: 0.040, y: 0.006, tube: 0.0060 }),
+  ],
+  // Dollar eyes and a wide grin, on the snails with `greed >= 0.70`.
+  dollar: (s) => [
+    ...coinEye(s),
+    brow(s, C.brow, 0.026, -0.30),
+    mouth(C.grin, { arc: Math.PI * 1.0, r: 0.040, y: 0.006, tube: 0.0064 }),
+  ],
+  // Keen: the eyes narrowed to slits and the brows down and in. The narrowing is
+  // applied to the eye itself and not to something inside it, so the silhouette
+  // shrinks with it - which is what survives a distance a smaller pupil would not.
+  keen: (s) => [
+    ...slitEye(s),
+    brow(s, C.brow, 0.014, 0.30),
+    mouth(C.mouth, { arc: Math.PI * 0.46, r: 0.038, tube: 0.0042 }),
+  ],
+  // Smug: **the asymmetric one.** One brow up, one down, and the mouth pushed to one
+  // side. Symmetry is a smile; asymmetry with a raised brow is somebody who thinks
+  // they are better than you, and there is no other way to draw that without a word
+  // for it.
+  smug: (s) => [
+    ...iris(s, C.eyeIris),
+    brow(s, C.brow, 0.030, -0.34),
+    brow(s, C.brow, -0.002, 0.14),
+    mouth(C.mouth, { arc: Math.PI * 0.62, r: 0.034, y: 0.002, z: 0.014, tube: 0.0050 }),
+  ],
+  // Grim: brows flat and heavy and the mouth is the **other half of the same ring**.
+  grim: (s) => [
+    ...slitEye(s),
+    brow(s, C.brow, 0.016, 0.08, 0.056, 0.012),
+    mouth(C.mouth, { arc: Math.PI * 0.66, r: 0.036, y: -0.012, down: true, tube: 0.0055 }),
+  ],
+  // Tidal: **a wave for a mouth and a ripple over the brow**, in the county's own two
+  // wet-ground colours - which is the only other place those numbers are used and is a
+  // good part of why they are in the jar.
+  //
+  // **The wave is three short arcs of equal radius, alternating which way they curve,
+  // and that is the only way it reads as a wave.** Two arcs of the same radius on the
+  // same centre are concentric, and two concentric arcs are a ring - which is what
+  // this was for two rounds, and a ring on a face is a monocle and not a wave.
+  // Different radii would have been no better: that is two curves, not a wave.
+  tidal: (s) => [
+    ...iris(s, C.waterB),
+    mouth(C.waterB, { r: 0.018, arc: Math.PI * 0.5, y: 0.030, z: s * (EYE.z - 0.010), tube: 0.0032 }),
+    mouth(C.waterB, { r: 0.017, arc: Math.PI * 0.5, y: 0.007, z: -0.026, tube: 0.0034, down: true }),
+    mouth(C.waterA, { r: 0.017, arc: Math.PI * 0.5, y: -0.001, z: 0, tube: 0.0034 }),
+    mouth(C.waterB, { r: 0.017, arc: Math.PI * 0.5, y: 0.007, z: 0.026, tube: 0.0034, down: true }),
+  ],
+  // Winged: **two brow strokes that sweep up and out**, and that is the face. Every
+  // face in the set keeps the file's eyes, so the difference is always what is above
+  // them.
+  winged: (s) => [
+    ...iris(s, C.eyeIris),
+    ...wingBrow(s, C.brow),
+    mouth(C.mouth, { arc: Math.PI * 0.56, r: 0.038, tube: 0.0046 }),
+  ],
+  /**
+   * Wild: **the jitter one, and it is drawn wrong on purpose.** A snail seven
+   * eighths of the way round the dial gets brows at different heights and a mouth
+   * that is not centred, and that is a face you can pick out of a pack from the
+   * timing camera. The cant is small on purpose - enough to read as unsettled and not
+   * enough to look like a bug in the mesh.
+   */
+  wild: (s) => [
+    ...iris(s, C.eyeIris),
+    brow(s, C.brow, 0.020 + s * 0.007, -0.10 - s * 0.26),
+    mouth(C.mouthPale, { arc: Math.PI * 0.70, r: 0.036, y: 0.000, z: s * 0.010, tube: 0.0050 }),
+  ],
+  // The Adversary's. Horn-shaped brows and a mouth that is not a mouth.
+  devil: (s) => [
+    ...iris(s, C.hornHot, 0.42),
+    ...hornBrow(s, C.horn, C.hornHot),
+    mouth(C.mouth, { arc: Math.PI * 1.0, r: 0.040, y: 0.006, tube: 0.0066 }),
+    ...grinTeeth(C.mouth, C.eyeWhite),
+  ],
+  /**
+   * **Googly: the reference's eye, and that is the face.**
+   *
+   * A white ground with a round black pupil in it is the strongest single thing about
+   * the creature these three came off, and it is a thing this county cannot already
+   * do: every other face here puts a **dark** iris on the file's own black ball, so
+   * the whole set reads as a set of dark eyes, and this one inverts that with three
+   * flat discs. **It covers the eye and never rebuilds it** — `plain`'s ball is the
+   * shipped one and every face in this table is that ball plus what has been put in
+   * front of it, which is the rule the whole set is built to keep.
+   */
+  googly: (s) => [
+    ...googlyEye(s),
+    brow(s, C.browPale, 0.026, -0.30),
+    mouth(C.grin, { arc: Math.PI * 0.86, r: 0.040, y: 0.004, tube: 0.0055 }),
+  ],
+  /**
+   * **Fangs: the saw mouth, and it is the teeth and not the eyes.**
+   *
+   * The reference's mouth is a wide dark band with a row of points hanging off its top
+   * edge and a shorter row coming up off its bottom one, and **`grinTeeth()`'s flat
+   * bars are not it** — a bar reads as a tooth of a mouth somebody is smiling with and
+   * a wedge reads as a thing with a bite. So the teeth are four-sided cones, five above
+   * and four below, over a wide dark arc. **The eyes are the reference's and the mouth
+   * is the reason the face exists**, so it takes the googly ones rather than shipping
+   * ones: a new mouth on the county's own dark eye is a face that reads as somebody
+* else's animal.
+   */  fangs: (s) => {
+     // **One mouth, written once, and the teeth are handed its own numbers.** `M` is the
+     // `mouth()` options object and both the arc and the two rows spread it, because a
+     // tooth placed against a copy of the mouth's radius is a tooth placed against
+     // whatever the mouth's radius happens to be this week — which is how a face ends up
+     // with its teeth on its forehead.
+     const M = { arc: Math.PI * 0.94, r: 0.040, y: 0.000, tube: 0.0082 };
+     return [
+       ...googlyEye(s),
+       ...once(s,
+         mouth(C.grin, M),
+         ...fangRow(C.eyeWhite, { ...M, n: 5, r0: 0.0054, h: 0.0130, spread: 0.030, down: true }),
+         ...fangRow(C.eyeWhite, { ...M, n: 4, r0: 0.0044, h: 0.0100, spread: 0.021, down: false })),
+     ];
+  },
+  /**
+   * **Grin: the reference's own mouth, and it is a shape rather than an idea.**
+   *
+   * `fangs` came off the same creature and got the mouth **wrong in ways the render says
+   * so**: it came out as a thin band with a fine saw on both edges, where the reference's
+   * mouth is **a wide dark crescent with big teeth hanging off its top edge into the dark
+   * and a shorter row coming up off its bottom one.** So the difference is three numbers
+   * and a shape: a **filled crescent** where `mouth()` draws a stroke, a **wider and
+   * shallower arc**, teeth **twice the height** of `fangs`' fine ones so they fill most of
+   * the dark — and the dark is what you read between them, so a row that is all tooth is
+   * a row of pegs.
+   *
+   * **So the arc is wider, the teeth are nearly half the ring, and there are two rows of
+   * them.** The ring's radius is the mouth's height at its middle, which is the number a
+   * tooth's height has to be read against: a tooth at a tenth of it is a scratch on a
+   * smile and a tooth at half of it is the thing the mouth is for. **The reference's lower
+   * edge carries its own shorter row**, which is a jaw and not a lip — one row of wedges
+   * on a crescent reads as a monster's upper teeth and nothing else, because a mouth with
+   * no lower teeth has nothing to close on.
+   *
+   * **And it is a new face rather than a repair of `fangs`, because `fangs` is the one
+   * face in the county whose teeth point both ways** and a face that is half of another
+   * face is not an expression — the reference is two animals and `grin` is the grin.
+   */
+  grin: (s) => {
+    // **One mouth, written once, and the teeth are handed its own numbers** — the same
+    // bargain `fangs` strikes, and here it matters more than anywhere: `wedgeRow()`
+    // places a wedge on the crescent's *inner edge*, so a mouth written in one place and
+    // a row written in another puts the teeth on a circle that is not there.
+    // **The arc and the two radii are a solved pair and not three numbers that looked
+    // right.** A crescent of ring radius `R` over a half-arc `a` is `2R sin a` across and
+    // drops `R(1 - cos a)` from its ends to its middle, so the width-to-depth ratio is
+    // `sin a / (1 - cos a)` **and nothing else** — the radii scale both together and so
+    // cannot change the shape at all. The reference is about three and a half to one, and
+    // **the first `grin` was 0.85π of arc, which is two and a half to one: a deep U with
+    // its ends curling up past the middle of the face**, where the reference is a wide
+    // shallow crescent. `a = 1.0` gives 3.66, and the radius only sets how big.
+    //
+    // **`R = 0.056` is the width, which is what the ratio leaves free**: 94 mm across on a
+    // 224 mm head, and the reference's mouth is most of the face. **The band's thickness is
+    // set by the teeth and not chosen, and with two rows that is a sum rather than a
+    // single number**: `rOut - rIn` is the two wedges' depths plus the dark between their
+    // points, and a band with one row's depth and two rows in it puts the lower row's
+    // points out through the bottom of the mouth **into pale head** — a row of fangs
+    // hanging under a lip rather than a jaw inside it.
+    //
+    // **21 mm, and the two rows are 13 and 8**, so the upper teeth are nearly twice the
+    // lower ones and their points cross by four millimetres. **They cross on purpose**: a
+    // pair of rows that meet exactly is a zipper and a pair that interlock is a bite, and
+    // the gap between them is where the dark is read.
+    const M = { arc: Math.PI * 0.6366, rIn: 0.039, rOut: 0.060, y: 0.008 };
+    return [
+      ...googlyEye(s),
+      ...once(s,
+        grinMouth(C.grin, M),
+        // **`n: 7` on a `spread` of 0.032, so the wedges touch and stay on the crescent.** The
+        // reference's teeth are a *run* of triangles separated by thin dark seams, not a
+        // row of pegs: a tooth's width is `2 * r0` and the spacing is `2 * spread / (n - 1)`,
+        // so they meet when `spread` is `(n - 1) * r0`. **0.032 is `6 * 0.0053` and the
+        // radius is 0.039** — the arc ends at 0.033 of spread, so this is the widest run
+        // the mouth holds and `wedgeRow()` clamps anything wider rather than drawing it.
+        ...wedgeRow(C.eyeWhite, { ...M, n: 7, r0: 0.0053, h: 0.0130, spread: 0.032 }),
+        // **`n: 5` and a narrower `spread`, because the lower row is the shorter one** and
+        // five across 26 mm is the same tooth width as seven across 32 — which is the
+        // point: a lower row on a wider pitch is a row of pegs. **And its edge is the
+        // outer one, so it may spread wider still** — the arc's end is 0.050 of spread
+        // measured on `rOut`, which is why the lower row is not the row that clips.
+        ...wedgeRow(C.eyeWhite, { ...M, n: 5, r0: 0.0048, h: 0.0080, spread: 0.026, lower: true })),
+    ];
+  },
+  /**
+   * **Crest: the point.** The third thing off the reference is a spike on the creature's
+   * crown, and here it is on the forehead and in the near-black — **a shape and not a
+   * colour**, because the palette's own rule is that a face never differs by a colour
+   * of its own. A crest is the whole of this face and the wide eye underneath it is
+   * the reference's; a small pale mouth finishes it, because a mouth as wide as
+   * `fangs`' would make the two faces one face.
+   */
+  crest: (s) => [
+    ...googlyEye(s),
+    ...once(s, crestSpike(C.brow)),
+    mouth(C.mouthPale, { arc: Math.PI * 0.62, r: 0.038, y: 0.000, tube: 0.0050 }),
+  ],
+};
+
+/**
+ * **The faces that are built once and not twice.**
+ *
+ * Every other face is a function of `side` and is run for `+z` and `-z`, because a
+ * brow tilted one way on one side has to be tilted the other way on the other. `plain`
+ * is the exception and the reason is its smile: it is one arc centred on `z = 0`, and
+ * a function run twice puts two smiles on the middle of the face. So a face named here
+ * is built once, and `side` is 1 - which is also why it is a set of one and not a
+ * flag on the table.
+ */
+const WHOLE = new Set(['plain']);
+
+/**
+ * One face, as one geometry, in head-local space.
+ *
+ * **`side` is not a mirror of a face.** Every face is built twice, once for `+z` and
+ * once for `-z`, and the parts that are not the eyes take the side so they can lean the
+ * right way - a brow tilted `+0.2` on one side is tilted `-0.2` on the other or the
+ * snail is winking. That is why this is a function of `side` and not a list of parts:
+ * **one side's worth of a face, run twice, mirrored.**
+ */
+function buildFace(name) {
+  const fn = FACES[name];
+  if (!fn) throw new Error('no face called ' + name);
+  const geos = [];
+  for (const side of WHOLE.has(name) ? [1] : [1, -1]) for (const g of fn(side)) geos.push(g);
+  const merged = mergeGeometries(geos, false);
+  merged.deleteAttribute('uv');
+  // **No `computeVertexNormals()` here, and that is the fix rather than a removal.**
+  // Every piece is already flattened by the time it arrives — `flat()` is what makes
+  // `mergeGeometries()` accept a mixed list of primitives — and **a normal computed on a
+  // non-indexed geometry is a per-face normal**, so this one call was flat-shading the
+  // whole face whatever any piece had done. `googlyEye()`'s ground asked `onHeadBulge()`
+  // for averaged normals, took them, and then had them overwritten here: **a dome of
+  // sixteen by twelve came out a visibly faceted egg**, and the fix was not a finer
+  // sphere but stopping a second opinion two lines downstream of the first one.
+  //
+  // **Each piece's own normals are already right**, because three's primitives ship them
+  // and `applyMatrix4` carries them through the rotation. So the one thing that has to
+  // recompute is the piece whose *positions* were rewritten after its normals were taken,
+  // which is `onHead()`'s surface rewrite and `onHeadBulge()`'s squashing — and both of
+  // those do it on their own geometry while it is still indexed, where averaging is
+  // possible at all. This is the general form: **a normal is a function of a shape, so
+  // the shape is the only place that can decide it**, and a merge is not a shape.
+  return merged;
+}
+
+/**
+ * The file: a group holding **one mesh** named `face-<name>`, so the loader's part
+ * logic at `src/materials.js` sees the piece itself and has nothing to mistake for a
+ * part. That is its contract - a mesh named the file, or `<file>-<part>` - and a face
+ * is the easiest case of it because there is no second mesh at all.
+ *
+ * **And the group is *not* called the same thing**, which is a real trap rather than
+ * a tidiness one: `GLTFExporter` disambiguates a duplicate node name inside one
+ * scene, so a group and its only child both called `face-cheer` come back as
+ * `face-cheer` and `face-cheer_1`. It happens to still load - `_1` is not
+ * `<name>-<part>`, so it lands on the piece - but it loads by luck, and the next
+ * part-suffixed name would stop working without anything saying so. The group is
+ * `face-set` and the mesh keeps the name.
+ */
+function assemble(name) {
+  const mesh = new THREE.Mesh(buildFace(name), new THREE.MeshStandardMaterial({
+    // **roughness 0.30, and it is the shipped face's own gloss that sets it.** The
+    // eyes and the smile in `snail.glb` are a material at 0.2; a face file is one
+    // material for the whole face, so the number is a compromise between that and
+    // what a brow wants - and **the gloss on an eye is most of what makes an eye
+    // read as an eye**, so it errs low.
+    name: 'face', color: 0xffffff, vertexColors: true, roughness: 0.30, metalness: 0.0,
+  }));
+  mesh.name = 'face-' + name;
+  mesh.castShadow = true;
+  const root = new THREE.Group();
+  root.name = 'face-set';
+  root.add(mesh);
+  return root;
+}
+
+// ---------------------------------------------------------------- the page
+const exportBuf = (root) => new Promise((res, rej) =>
+  new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
+
+/**
+ * **Write one file, and by two routes.** The dev server splices a hook into this
+ * page's module scope and `__faceExport` POSTs the bytes straight into
+ * `meshes/faces/`, which is the route that never involves a folder somewhere else.
+ * Opened on its own there is no hook, so the bytes come down as a download and the
+ * implementer moves them - which is the worse route and is here so the page is never
+ * dead without the server. **Which one ran is in the log either way**, because a
+ * builder that quietly did nothing is the failure this page exists to make loud.
+ */
+async function writeFace(name) {
+  const root = assemble(name);
+  const buf = await exportBuf(root);
+  if (window.__faceExport) {
+    const r = await window.__faceExport(name);
+    log(`posted faces/${name}.glb — ${r.bytes} bytes, ${buildFace(name).attributes.position.count} verts`);
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name + '.glb';
+  document.body.appendChild(a); a.click(); a.remove();
+  log(`downloaded faces/${name}.glb — ${buf.byteLength} bytes, ${buildFace(name).attributes.position.count} verts`);
+}
+
+for (const n of Object.keys(FACES)) {
+  const b = document.createElement('button');
+  b.textContent = 'write ' + n;
+  b.onclick = () => writeFace(n);
+  $('row').appendChild(b);
+}
+$('all').onclick = async () => { for (const n of Object.keys(FACES)) await writeFace(n); };
+
+/**
+ * **The preview is one head per face, not one mesh per face.** A face modelled against a
+ * page is a face nobody has ever seen: every piece here is pushed onto an ellipsoid,
+ * so the only honest way to look at one is on the head it was pushed onto.
+ */
+$('prev').onclick = () => {
+  document.getElementById('view')?.remove();
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9fb7c4);
+  scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+  const key = new THREE.DirectionalLight(0xfff3dc, 1.6);
+  key.position.set(2.0, 3.0, 3.0);
+  scene.add(key);
+  const cam = new THREE.PerspectiveCamera(30, 2, 0.01, 10);
+  const heads = [];
+  Object.keys(FACES).forEach((n, i) => {
+    const g = new THREE.Group();
+    const head = new THREE.SphereGeometry(HEAD_R, 18, 12);
+    const cols = new Float32Array(head.attributes.position.count * 3);
+    for (let k = 0; k < cols.length; k += 3) {
+      cols[k] = C.snailBelly[0]; cols[k + 1] = C.snailBelly[1]; cols[k + 2] = C.snailBelly[2];
+    }
+    head.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    const shell = new THREE.Mesh(head, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72 }));
+    shell.scale.set(1, HEAD_SY, HEAD_SZ);
+    g.add(shell);
+    g.add(new THREE.Mesh(buildFace(n), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.30 })));
+    // **five across and as many rows as it takes**, and not two fixed rows: a set of
+    // faces in ten cells is faces standing in somebody else's picture, and a
+    // grid whose row count is a literal is a grid that quietly crops when the set grows.
+    const perRow = 5, rows = Math.ceil(Object.keys(FACES).length / perRow);
+    const cell = 0.52;
+    g.position.set(((i % perRow) - (perRow - 1) / 2) * cell,
+      -(((i / perRow) | 0) - (rows - 1) / 2) * cell, 0);
+    g.scale.setScalar(2.2);
+    scene.add(g);
+    heads.push(g);
+  });
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  // **and the canvas is as tall as the grid is**, because a fixed 800 crops the third
+  // row to the top of a head - which is a preview that lies about the face it is showing.
+  renderer.setSize(1600, 300 * Math.ceil(Object.keys(FACES).length / 5));
+  // **the DOM id and not `renderer.id`**: that is a property on the renderer
+  // object and never reaches the element, so a preview button that asks for it
+  // back to clear the last one finds nothing and stacks a second canvas.
+  renderer.domElement.id = 'view';
+  document.body.appendChild(renderer.domElement);
+  const draw = () => {
+    // **and it turns about the face, not about its own front.** A face is authored
+    // at `+x`, so a head rotated by nothing has it pointing at the camera's left
+    // and the preview is ten blank heads; `-PI / 2` is what brings `+x` onto `+z`.
+    for (const g of heads) g.rotation.y = -Math.PI * 0.5 + Math.sin(performance.now() * 0.0006) * 0.35;
+    cam.position.set(0, 0, 5.6 + 0.52 * Math.ceil(Object.keys(FACES).length / 5 - 2));
+    cam.lookAt(0, 0, 0);
+    renderer.render(scene, cam);
+  };
+  renderer.setAnimationLoop(draw);
+  log(`preview: ${Object.keys(FACES).length} faces on ${Object.keys(FACES).length} heads`);
+};
+</script>
+</body>
+</html>

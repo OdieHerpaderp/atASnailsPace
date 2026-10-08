@@ -63,10 +63,19 @@ import {
   CLUB_SNAILS,
   CLUB_ATTR,
   ATTR_MAX,
-  RATING_PER_ATTR,
-  RATING_EASE,
+  RATING_GAIN,
+  PODIUM_FLOOR,
+  RATING_MIN,
+  RATING_MAX,
   RATING_STEP,
-  RATING_PER_WIN,
+  ratingOf,
+  faceFor,
+  hatFor,
+  dressPool,
+  FACE_SET,
+  HAT_SET,
+  FACE_BY_NAME,
+  HAT_BY_NAME,
   SURGE_MULT,
   SURGE_DRAIN,
   PASSIVE_DRAIN,
@@ -82,9 +91,11 @@ import {
   seasonPicks,
   seasonFinaleId,
   effTraits,
+  seasonDef,
   trackSeed,
   makeRng,
   rand,
+  CATS,
   CAT_BY_ID,
   TIER_BY_ID,
 } from './core.js';
@@ -93,7 +104,8 @@ import {
 // asks for it through `world.forceTimeOfDay()` rather than importing a function
 // that lives in the one module that imports this one.
 import { world, makeEnv, raceHour } from './graphics.js';
-import { props, snailTemplate, matFor, partMat, mat } from './materials.js';
+import { COUNTY as C, hex } from '../meshes/palette.js';
+import { props, propMat, snailTemplate, matFor, partMat, mat, useBiome, biomeNow, mapTex, reflectMark } from './materials.js';
 import { syncProbes, dropReflections } from './post.js';
 import { buildTrack, trackAt, newFrame } from './course.js';
 import {
@@ -105,6 +117,7 @@ import {
   lampPosts,
   lampWalk,
   backdrop,
+  rebuildBackdrop,
   gateGroup,
   clearRegister,
   fans,
@@ -120,8 +133,18 @@ import {
 const BODY_Y = 0.088;
 // how big a snail is drawn, eight abreast across a lane
 const SNAIL_SCALE = 0.82;
-/** A shell, by style - the whorl pattern is baked into the file's vertices. */
-const shellFor = (style) => props['shell-' + (style || 'bands')];
+/**
+ * **The shell, and there is one of them.** It used to be `props['shell-' + style]` over
+ * three whorls cut in `meshes/`, with a row of three buttons in the shop choosing
+ * between them and `def.style` carried through the save to say which. **The shell is
+ * now the reference model's own coil** - `references/snailRef.glb`, which arrived as a
+ * whole snail and was cut into its shell island by `meshes/build-shell.html` - so
+ * there is one geometry, one file and one key, and **the whorl is what the map draws**:
+ * `shell-n`'s growth lines and `shell-tone`'s suture are the pattern now, which is the
+ * same bargain the county struck for a cobbled road and a cliff face, and the shell is
+ * the one piece where a map can carry a pattern three files used to bake into vertices.
+ */
+const shellFor = () => props.shell;
 
 function makeSnail(def) {
   // a copy of the file, with this snail's colours on it
@@ -142,23 +165,63 @@ function makeSnail(def) {
   });
   const paint = (key, material) => { for (const m of parts.get(key) || []) m.material = material; };
 
+  /**
+   * **The maps, and the snail is the one piece in the county that has to fetch them
+   * itself.**
+   *
+   * `applyMaps()` in `materials.js` never runs on this file: the loader skips it
+   * outright (`if (name === 'snail') { snailTemplate = root; continue; }`), because the
+   * snail is a *tree* of nine meshes and every other file in the library is one mesh.
+   * The four materials below are built here by hand, so **the manifest's entry for
+   * `snail` was a record of what a snail ought to wear and bound to nothing at all**,
+   * and `snail-n`, `snail-rgh`, `shell-n` and `shell-rgh` were fetched at boot, uploaded
+   * and bound to no surface in the game. A snail was drawn in four flat vertex-coloured
+   * tones with no grain on it and nothing to reflect but the dome.
+   *
+   * **And `roughness` is 1 and not 0.35, because a `roughnessMap` multiplies.** The
+   * maps here carry the whole value - `snail-rgh` runs 0.25 to 0.50 and `shell-rgh` 0.14
+   * to 0.58, measured off the written files - so a scalar of 0.35 in front of them would
+   * multiply the whole field down to between four and twenty per cent and every snail in
+   * the county would come up a mirror. `metalness` is left at zero and gets no map: the
+   * blue channel of a `-rgh` is zero everywhere and a metalness multiplied by zero is
+   * the metalness it already had.
+   *
+   * **The `-tone` is the albedo and it is grey**, which is the only way a base-colour
+   * slot is legal on a piece `applyLook()` recolours - see `maps.js`. It buys the one
+   * thing a normal map cannot draw, which is *where the dirt is*: in the rings and in
+   * the pores of the skin, and in the suture of the shell.
+   */
   const bodyMat = new THREE.MeshPhysicalMaterial({
-    color: def.body, vertexColors: true, roughness: 0.35, metalness: 0.05,
+    color: def.body, vertexColors: true, roughness: 1, metalness: 0,
     clearcoat: 0.8, clearcoatRoughness: 0.13,
     envMapIntensity: 1.4,
   });
   const shellMat = new THREE.MeshPhysicalMaterial({
     color: def.shell, vertexColors: true,
-    roughness: 0.25, metalness: 0.1,
+    roughness: 1, metalness: 0,
     clearcoat: 0.8, clearcoatRoughness: 0.13,
     envMapIntensity: 1.6,
   });
   const footMat = new THREE.MeshStandardMaterial({
-    color: def.body, vertexColors: true, roughness: 0.66,
+    color: def.body, vertexColors: true, roughness: 1,
   });
   const stalkMat = new THREE.MeshStandardMaterial({
-    color: def.body, vertexColors: true, roughness: 0.6,
+    color: def.body, vertexColors: true, roughness: 1,
   });
+  // one fetch for the four, and the same texture object on each: a snail is a tree of
+  // nine meshes on four materials and there is nothing per-racer about a tile
+  const wear = (m, tone, n, rgh) => {
+    if (tone) m.map = tone;
+    if (n) m.normalMap = n;
+    if (rgh) m.roughnessMap = rgh;
+    return m;
+  };
+  const skinTex = [mapTex('snail-tone'), mapTex('snail-n'), mapTex('snail-rgh')];
+  const shellTex = [mapTex('shell-tone'), mapTex('shell-n'), mapTex('shell-rgh')];
+  wear(bodyMat, ...skinTex);
+  wear(footMat, ...skinTex);
+  wear(stalkMat, ...skinTex);
+  wear(shellMat, ...shellTex);
 
   // hand the snail its colours: the file's own eye materials are left as they
   // are, and everything that takes the body or shell colour is repainted
@@ -167,7 +230,94 @@ function makeSnail(def) {
   paint('shell', shellMat);
   paint('stalk', stalkMat);
   const shell = node.shellM;
-  shell.geometry = shellFor(def.style);
+  shell.geometry = shellFor();
+
+  /* ------------------------------------------------------------------ *
+   * The reflection mark, and **a snail is the first thing in the county
+   * that is worth tracing** - it is the one surface a racer camera is close
+   * to, it is round, and it is the one thing every racer in a field is
+   * holding. Until this the reflections row reported `pools` and `cube`
+   * and never `shells`, which is what the note in `post.js` was written
+   * about and could not do.
+   *
+   * **The numbers are reflectances and not strengths**, which is the whole
+   * difference between a reflection and a mirror: a wet snail is a dielectric
+   * and returns four or five per cent straight into it, the same as the water
+   * on a pool is two, and a polished shell a little more because it has been
+   * rubbed by a foot for a year. `reflectMark()` bakes one float per vertex
+   * onto the geometry and the traced pass reads it out of the alpha of its
+   * flat buffer, so **the shell file is marked and not the shell already in
+   * `snail.glb`** - the geometry is swapped onto the node as a racer is built
+   * and a mark on the template would be a mark on a buffer nothing reads.
+   */
+  const SKIN_F0 = 0.045, SHELL_F0 = 0.055;
+  for (const nm of ['bodyM', 'headM', 'footM', 'stalkM', 'knobM']) {
+    if (node[nm]) reflectMark(node[nm].geometry, SKIN_F0, 'skin');
+  }
+  if (props.shell) reflectMark(props.shell, SHELL_F0, 'shells');
+
+  /* ------------------------------------------------------------------ *
+   * The face and the hat, and both of them are a geometry swap onto a node
+   * the file does not have.
+   *
+   * **`eyeM`, `eyeM_1` and `smileM` are hidden and not deleted.** The head's own
+   * face is three meshes on a material nobody repaints, so hiding them costs three
+   * draw calls a snail and saves rewriting `snail.glb` - and the face mesh is drawn
+   * in front of exactly the place they were, so a snail wearing `face-plain` looks
+   * the same as it always did because **`face-plain` is those two eyes and that one
+   * smile, rebuilt out of the file's own numbers**. `hidden` rather than `visible =
+   * false` because `applyShadows()` walks the tree and an invisible mesh is a mesh
+   * it does not have to skip.
+   */
+  for (const nm of ['eyeM', 'eyeM_1', 'smileM']) if (node[nm]) node[nm].visible = false;
+
+  // **The face material is the file's own, cloned per racer.** The loader hands
+  // every snail the same material object, and a material on `props` is shared by
+  // sixty-five racers and the plinth - so one snail's face being repainted would
+  // repaint the field. It goes on `sn.mats` like the four above and is disposed with
+  // them, which is the whole of what the array is for.
+  // **and it is `propMat[name]` and not `matFor(name)`.** `matFor()` answers with
+  // `fallback` for anything the manifest has not converted, and a face is not
+  // converted - it is a hand-authored file with its own material and an empty entry
+  // in `maps.js`. So `matFor()` hands back `undefined` here and `.clone()` is a
+  // `TypeError` on the first snail of the county, which is why a prop's own
+  // material is reachable by name rather than only through the parts table.
+  const faceMat = (propMat['face-' + (def.face || 'plain')] || mat.vcol).clone();
+  const faceMesh = new THREE.Mesh(props['face-' + (def.face || 'plain')], faceMat);
+  faceMesh.name = 'faceM';
+  faceMesh.castShadow = true;
+  faceMesh.userData.gfxCast = true;
+  headG.add(faceMesh);
+
+  /**
+   * **And the hat, which is a second mesh and in one case a third.**
+   *
+   * `hat-none` is a sentinel with no file behind it, so the answer is a `null` and
+   * not a missing geometry: `hatFor()` returns the name and this is where the name
+   * becomes a thing or nothing. A hat with a second surface - the propeller's rotor
+   * - puts the extra mesh on `sn.rotor` and **nothing else in the game knows it is
+   * there** except `update()`, which turns it.
+   */
+  let hatMesh = null, rotor = null;
+  const hatName = def.hat || 'none';
+  const hatParts = props['hat-' + hatName + '.parts'];
+  const hatGeo = props['hat-' + hatName];
+  const hatMat = hatGeo ? (propMat['hat-' + hatName] || mat.vcol).clone() : null;
+  if (hatGeo) {
+    hatMesh = new THREE.Mesh(hatGeo, hatMat);
+    hatMesh.name = 'hatM';
+    hatMesh.castShadow = true;
+    hatMesh.userData.gfxCast = true;
+    headG.add(hatMesh);
+    const rotorGeo = hatParts && hatParts.rotor;
+    if (rotorGeo) {
+      rotor = new THREE.Mesh(rotorGeo, hatMat);
+      rotor.name = 'rotorM';
+      rotor.castShadow = true;
+      rotor.userData.gfxCast = true;
+      headG.add(rotor);
+    }
+  }
   // the foot is the one part that moves: its vertices are rewritten every
   // frame, so each snail needs its own copy of the geometry to write into
   foot.geometry = foot.geometry.clone();
@@ -186,7 +336,9 @@ group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.userData.gfxCast 
 
   const sn = {
     def, group, bodyG, shellG, headG, stalks, foot, footBase,
-    phase: Math.random() * 10, mats: [bodyMat, shellMat, footMat, stalkMat],
+    faceMesh, hatMesh, rotor,
+    phase: Math.random() * 10,
+    mats: [bodyMat, shellMat, footMat, stalkMat, faceMat, hatMat].filter(Boolean),
     /**
      * `st` carries the motion state: travelled distance, speed and what the
      * snail is currently doing (running, swimming or in the air).
@@ -238,9 +390,47 @@ group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.userData.gfxCast 
       }
       pos.needsUpdate = true;
       foot.geometry.computeVertexNormals();
+      /**
+       * **The propeller, and it is the only thing in the county that turns off the
+       * snail's own phase.** It winds down when the snail does, which is the whole of
+       * what makes it a hat rather than a decoration: a spinner at a constant rate is
+       * a spinner on a snail that is standing still, and the game is full of snails
+       * standing still at the start line.
+       *
+       * The rate is the body's own glide, so it is already the snail's speed and
+       * nothing new has to be measured - and **`update()` runs for a snail that never
+       * leaves the grid**, so the null check is not defensive, it is the state a
+       * snail is in for the first two seconds of every race.
+       */
+      if (rotor) rotor.rotation.y = p * 3.2 * (0.25 + 0.75 * Math.min(1, Math.abs(glide) + sg * 2));
     },
-    setShellStyle(style) {
-      shell.geometry = shellFor(style);
+    /**
+     * Swap the face and the hat, and it is the one place a wardrobe change becomes a
+     * mesh. **Nothing is created and nothing is disposed**: the geometry comes off the
+     * loader's shared registry and the material off the one already on `sn.mats`, so a
+     * player pressing a shop button a hundred times has allocated a hundred times
+     * nothing at all. A `null` geometry is a hatless snail rather than a crash, which
+     * is what `hat-none` asks for.
+     */
+    setFace(name) {
+      const n = name || 'plain';
+      const geo = props['face-' + n];
+      if (geo) faceMesh.geometry = geo;
+      // **and the def records it, so `sn.def` is the snail's whole appearance.**
+      // `applyLook()` writes `def.body` and `def.shell` by hand for exactly this
+      // reason, and a def that carried the colours and not the costume would be
+      // the sort of thing a reader trusts: `state.face` right, the save right, and
+      // the plinth wearing last season's hat, with nothing anywhere to say so.
+      def.face = n;
+    },
+    setHat(name) {
+      def.hat = name || 'none';
+      if (!hatMesh) return;
+      hatMesh.geometry = props['hat-' + def.hat] || null;
+      hatMesh.visible = !!hatMesh.geometry;
+      const parts = props['hat-' + def.hat + '.parts'];
+      const rg = parts && parts.rotor;
+      if (rotor) { rotor.geometry = rg || null; rotor.visible = !!rotor.geometry; }
     },
     dispose() {
       for (const m of sn.mats) m.dispose();
@@ -259,7 +449,108 @@ const NAMES = ['Nim', 'Wren', 'Bram', 'Pell', 'Otto', 'Hask', 'Marl', 'Dob', 'Yu
   'Otto', 'Pete', 'Quin', 'Roger', 'Sher', 'Tom', 'Uly', 'Vict', 'Wade', 'Xena', 'Yuki', 'Zane', 'Adam',
   'Moss', 'Rune', 'Hank', 'Nick', 'Otto', 'Pete', 'Quin', 'Roger', 'Sher', 'Tom', 'Uly', 'Vict', 'Wend', 'Xena', 'Yuki', 'Zack'];
 const HUES = [0.06, 0.09, 0.12, 0.02, 0.55, 0.62, 0.75, 0.92, 0.45, 0.35];
-const STYLES = ['bands', 'swirl', 'spots'];
+
+/**
+* The Adversary, and **they are not in the pool**.
+ *
+ * A 65th literal would put them in `makePool()`'s loop, where the ladder's one
+ * count per rung and `rankOf()`'s "one more than how many rate above you" would
+ * both have to carry them, and the ladder would then owe the player an answer
+ * about a snail the ladder has no list for. **They are built here instead**, from
+ * `state.pool`'s own strongest rival, so their attributes track the ladder as the
+ * ladder moves: a season ago the top snail rated 120 and they were unbeatably out of
+ * reach, and today the top snail rates 666 and they are one clean season above it.
+ *
+ * **Three numbers are not derived and are written down**, and the reason is the
+ * rule `faceFor()` and `hatFor()` cannot break:
+ *
+ *  - **They are not quick.** `skill` 0.98 against the top rival's 0.94–1.07 puts them
+ *    mid-pack on pace, so the duel is a two-snail race decided by the road and not
+ *    by a number the game invented. They are strong, not fast, and the only way to
+ *    beat them is to be quicker than they are.
+ *  - **Their greed is zero.** `stepRacer()` surges on `r() < sn.greed` and `AI
+ *    SURGE_GAIN` is 4.2, so greed is a snail's willingness to spend its stamina
+ *    and nothing else - and a rival that never surges is a rival that runs out of
+ *    road. Zero is the value that means it.
+ *  - **They have no face or hat of their own here.** `face-devil` and `hat-devil-horns`
+ *    are `locked` in `FACE_SET` / `HAT_SET`, `faceFor()` / `hatFor()` cannot return
+ *    them, and the only thing in the county that puts them on a snail is
+ *    `adversary()`, reading them off the duel's own entry.
+ *    `tools/plan-test.mjs --faces` is what says so about all sixty-four.
+ *
+ * **And the three numbers above are now out of the source and in the course's own
+ * `duel` entry**, which is where the whole of a duel went: `attrBonus`,
+ * `skill` and `greed` are read out of the standing duel, and so are `ratingOver`,
+ * the face and the hat. They used to be three literals in this function and a
+ * `+ 1` in the app's ladder note, so the same number was written in two files and
+ * one of them is a screen. See `duelCatId()`.
+ */
+function adversary() {
+  const d = duelDef();
+  const top = state.pool.reduce((a, b) => (b.rating > a.rating ? b : a), state.pool[0]);
+  const attrs = {};
+  for (const a of ATTRS) {
+    // **The bonus is a per-attribute object rather than a `+ 2` on the first
+    // one**, because "they are two better at running than the best snail in the
+    // county" was `ATTRS[0]` written as a position, and the first attribute is
+    // `running` today by an accident of the array's order.
+    const bonus = (d.attrBonus && d.attrBonus[a.key]) || 0;
+    attrs[a.key] = bonus ? Math.min(ATTR_MAX, top.attrs[a.key] + bonus) : top.attrs[a.key];
+  }
+  return {
+    player: false,
+    id: -1,
+    adversary: true,
+    name: d.name || 'The Adversary',
+    attrs,
+    rating: top.rating + (d.ratingOver == null ? 1 : d.ratingOver),
+    // **Both colours come out of the county's jar**, not out of a hex written in
+    // this file: `hex()` is the jar's own sRGB encoder, so `def.body` is the same
+    // number `rndColor()` hands out and `meshes/palette.js` stays the one place a
+    // colour is written. They are a hue nobody in the pool draws - the pool is at
+    // 0.30–0.75 saturation and they are at 0.58 of a red no other snail is.
+    body: hex('adversaryBody'),
+    shell: hex('adversaryShell'),
+    face: d.face,
+    hat: d.hat,
+    skill: d.skill,
+    greed: d.greed,
+    jitter: 0,
+  };
+}
+/**
+ * **The duel is a course in `races.json` and its id is found by asking which entry
+ * has one.** It used to be the constant `DUEL_CAT = 'marathon'`, and a constant
+ * is a name written in one file and relied on by three others: this one, the app's
+ * `challengeAdversary()`, and a spec asserting the duel is on the marathon.
+ * Putting the course in `races.json` moves all six of the numbers a duel changes
+ * into its own entry - the field's size, the countdown, the purse, the two locked
+ * wardrobe names, their `attrBonus`/`skill`/`greed`, and the hour it is raced at -
+ * and this scan is what finds it.
+ *
+ * **The fallback is the marathon and it is written down**, because a county with
+ * no duel course at all should still be a county that runs one rather than one
+ * whose button does nothing, and the marathon is the only course with everything
+ * on it.
+ */
+const duelCatId = () => (CATS.find((c) => c.duel) || CAT_BY_ID['marathon']).id;
+/** And the standing duel's own object, or the marathon's with nothing filled in -
+ *  the same shape, so every reader below is `d.thing` and not `d && d.thing`. */
+const duelDef = () => CAT_BY_ID[duelCatId()].duel || {};
+/**
+ * Which stretch of the day a course is raced in, and **it is `day` or `finale`
+ * rather than a boolean**, because a duel is fought at dusk on a course called
+ * `adversary` and `race.catId === seasonFinaleId(state.tier)` is false for it: the
+ * app read the tier's finale, the duel came up in the morning, and a green-lit
+ * course with dead ground and no sun in it is a wrong picture rather than a broken
+ * one, which is why nothing else in the county would have caught it. The course's
+ * own entry carries `hour`, and the finale is still the finale.
+ */
+function raceHourKeyOf(catId) {
+  const duel = CAT_BY_ID[catId] && CAT_BY_ID[catId].duel;
+  if (duel) return duel.hour || 'day';
+  return catId === seasonFinaleId(state.tier) ? 'finale' : 'day';
+}
 
 function rndColor(r) {
   return new THREE.Color().setHSL(HUES[(r() * HUES.length) | 0], 0.30 + r() * 0.45, 0.42 + r() * 0.34).getHex();
@@ -277,7 +568,33 @@ function makePool() {
     // modest snail every time - three of everything - which is what the foot
     // of a ladder actually looks like from the inside, and it means the lowest
     // season has something in it you can see yourself beating.
-    const sum = Math.round(lerp(6, 158, i / (POOL_SIZE - 1)));
+    //
+    // **And the total is bounded by what five attributes can actually hold.**
+    // The spread used to run `lerp(6, 158, ...)` against a per-attribute ceiling
+    // of `ATTR_MAX` of 16, so a total of 158 could not be split into five
+    // numbers that are each at most 16 - and the split below inverted once it
+    // had more than 80 to give away: `lo` ran ahead of `hi`, the draw went out of
+    // range and roughly thirty of the sixty-four rivals came out with attributes
+    // above the ceiling. `effTraits()` does not clamp them either, so those
+    // rivals were up to six times a maxed snail on the road, and the 0.8 rating
+    // power hid it in the number without touching the animal.
+    //
+    // **So the top of the spread is `ATTR_MAX * 5` and not 158**, and that is
+    // the difference between a ladder and a plateau. Clamping a spread whose top
+    // is above the ceiling makes every rung past the clamp *identical*: two
+    // thirds of the pool came out on exactly 666, one rating with thirty-three
+    // snails on it, and a GP field drawn from it would have been eight snails
+    // the county agreed were the same animal. `makePool()` spreading 64 rivals
+    // over the whole range one per rung is what `rankOf()` and `ladderAt()` are
+    // both built on - a tie at the top is not a tie at the top when thirty-three
+    // of them share it. The `Math.min` stays as the belt it is: with the range
+    // written off the ceiling it cannot fire, and it is here so a widening of
+    // `lerp`'s upper number cannot quietly reintroduce the plateau.
+    //
+    // **It adds no `r()` draw**, so the field composition is otherwise untouched.
+    const sum = i < CLUB_SNAILS ? CLUB_ATTR * ATTRS.length
+      : Math.min(ATTR_MAX * ATTRS.length,
+        Math.round(lerp(6, ATTR_MAX * ATTRS.length, i / (POOL_SIZE - 1))));
     const attrs = {};
     if (i < CLUB_SNAILS) {
       for (const a of ATTRS) attrs[a.key] = CLUB_ATTR;
@@ -285,8 +602,13 @@ function makePool() {
       let left = sum;
       for (let k = 0; k < ATTRS.length - 1; k++) {
         const rest = ATTRS.length - 1 - k;
-        const lo = Math.max(1, left - ATTR_MAX * rest);
+        // **and `lo` can never pass `hi`.** With `left` at or below five
+        // attributes' worth of ceiling the two cannot cross, so `Math.min(hi,
+        // ...)` is a no-op today - and it is written because the one time this
+        // mattered it was an arithmetic inversion with nothing to say so, and
+        // the range above is a number somebody will widen one day.
         const hi = Math.min(ATTR_MAX, left - rest);
+        const lo = Math.min(hi, Math.max(1, left - ATTR_MAX * rest));
         const v = lo + ((r() * (hi - lo + 1)) | 0);
         attrs[ATTRS[k].key] = v;
         left -= v;
@@ -295,43 +617,56 @@ function makePool() {
     }
     let total = 0;
     for (const a of ATTRS) total += attrs[a.key];
-    pool.push({
-      id: i, name: NAMES[i], attrs, rating: total * RATING_PER_ATTR,
-      body: rndColor(r), shell: rndColor(r), style: STYLES[(r() * 3) | 0],
+    const sn = {
+      id: i, name: NAMES[i], attrs, rating: ratingOf(total),
+      body: rndColor(r), shell: rndColor(r),
       skill: 0.94 + r() * 0.13,
       greed: 0.15 + r() * 0.75,
       jitter: r() * TAU,
       races: 0, pts: 0, wins: 0, avg: 0,
-    });
+    };
+    pool.push(sn);
   }
+  dressPool(pool);
   return pool;
 }
 
 /**
- * A rating, worked out from a mean points per race so one bad race is not a
- * collapse - a win is worth about 1200, a second about 800, a third about 400.
+ * A rating from a race, and it is one number and a clamp.
  *
- * But a rating that jumps straight to wherever the average says you ought to
- * be puts you a whole tier up the ladder on the back of one race, and back
- * down again on the back of the next, which is not a ladder so much as a
- * yo-yo. So a race only moves you RATING_EASE of the way to the target the
- * average implies, and never more than RATING_STEP in one go. You walk up the
- * ladder over a season instead of being catapulted onto it, and a first race
- * is worth something whether it goes well or badly.
+ * **It is the table and not a target, and the target is why it was a target.**
+ * The old one read a snail's mean points per race and eased a quarter of the
+ * way toward it, which meant a flawless season converged on sixty and rank one
+ * was a number no play could produce. Now a race moves you by what place you
+ * finished in - `RATING_GAIN`, eighteen for a win and nine lost for last - the
+ * podium's floor goes under it, and the whole is multiplied by the cup's
+ * `payMult`, so the Snail GP pays for the same placing and the ladder is the
+ * same ladder in every season.
+ *
+ * **A player's career record no longer derives a rating and the rivals' do not
+ * either.** `p.races`, `p.pts`, `p.wins` and `p.avg` stay on every rival: the
+ * season draw leans on `races`, and a ladder that had forgotten what a snail
+ * had done would be a number with no memory behind it.
  */
-function ratingFor(pts, races, prev) {
-  if (!races) return START_RATING;
-  const target = START_RATING + (pts / races) * RATING_PER_WIN;
+function ratingFor(place, prev, payMult) {
+  const gain = Math.max(RATING_GAIN[place - 1] || 0, PODIUM_FLOOR[place - 1] || 0) * (payMult || 1);
   const from = prev == null || !isFinite(prev) ? START_RATING : prev;
-  const eased = from + (target - from) * RATING_EASE;
-  return clamp(Math.round(from + clamp(eased - from, -RATING_STEP, RATING_STEP)), 5, 1280);
+  return clamp(Math.round(from + clamp(gain, -RATING_STEP, RATING_STEP)), RATING_MIN, RATING_MAX);
 }
 const state = {
   season: 1,
   name: 'Wilma',
   gold: START_GOLD,
   stats: freshSnail(),
-  body: 0xe0b183, shell: 0xc8a05a, style: 'bands',
+  body: 0xe0b183, shell: 0xc8a05a,
+  // **The wardrobe, and it is four fields and not one.** `face` and `hat` are
+  // what the snail is wearing, `owned` is everything the shop has handed over
+  // and not spent, and `beatAdversary` is the one bit of the duel that has to
+  // survive a reload. Four is a lot for a cosmetic and all four are here for
+  // the same reason: a field that is written in the `state` literal and nowhere
+  // else is a field that is `undefined` on the first screen and nobody can say
+  // why.
+  face: 'plain', hat: 'none', owned: [], beatAdversary: false,
   tier: seasonFor(START_RATING).id,            // which season you are racing this one
   order: seasonPicks(seasonFor(START_RATING).id).slice(),
   field: null,                               // ...and the seven in it with you
@@ -343,7 +678,14 @@ const state = {
 /* ================================================================== *
  * The race
  * ================================================================== */
-const env = makeEnv(78, 300);
+// **and `true` for the lamp bank, which is this env's whole claim on the sixteen**
+// - a course has lamps for the lights to stand on, so its bank is in the scene's
+// light list from the first frame and `litLamps()` only ever moves the glass and
+// writes the intensity. **It is written out at both call sites and not defaulted**,
+// because the number of lights in a scene is baked into every program drawn in it
+// and a parameter whose default decides that would be a quiet answer to a
+// question nobody asked.
+const env = makeEnv(78, 300, true);
 const scene = env.scene;
 // **Three of the registry's fields, filled here and now rather than by a module
 //  further down**, because the post chain asks for all three before anything has
@@ -355,6 +697,13 @@ scene.add(backdrop);
 const race = {
   catId: null, tr: null, group: null, racers: [], player: null,
   t: 0, phase: 'idle', cd: 3.0, result: null, ripples: null, autoSurge: false,
+  // **and the duel, which is here because a field written in one place and
+  // nowhere else is `undefined` on the first screen** - which is how `buildCourse()`
+  // was reading a stale `race.duel` on an inspector opened after a duel and
+  // building a two-crate apron on an eight-snail road. It is an **object and not a
+  // boolean**: it is `CAT_BY_ID[catId].duel` or `null`, so it is truthy exactly
+  // when there is a duel in progress and every number it decides comes off it.
+  duel: null,
 };
 const waterMeshes = [];
 // **And the three that ask for the pools, the field and the course's root** -
@@ -460,6 +809,12 @@ function ladderAt(rating) {
   const tied = sorted.filter((p) => p.rating === rating).length;
   return {
     rank, of: state.pool.length + 1, tied,
+    // **and the top of the pool, which is what The Adversary's own rating is written
+    // off.** The ladder modal puts them in its list as a row without putting them in
+    // its counts, and this is the number that row is drawn from - so the two can
+    // never disagree about how high they are, which is the failure a second hard-coded
+    // rating in `app.js` would have been.
+    top: sorted.length ? sorted[0].rating : 0,
     // `rank - 1` is how many rate above, so it is also the index of the first
     // that does not: the first of the tied, or the first below where there are
     // none of those.
@@ -607,8 +962,13 @@ const _f2 = newFrame();
  * inspector there is no field, so every crate is stood in its own lane slot where
  * it starts, and the eight of them are a row of boxes on the road exactly where
  * the race will find them.
+ *
+ * **`n` is the field's own size and is a parameter**, for the same reason
+ * `laneSlot()` takes one: a duel is a two-snail race on a course with crates in it,
+ * and eight crates stood at an eight-snail pitch would be four crates on each side
+ * of two snails with nobody pushing any of them.
  */
-function buildCrates(tr, grp) {
+function buildCrates(tr, grp, n = FIELD) {
   const geo = props['push-crate'];
   // the material is the crate's own file's, wearing its own sets, because it is
   // in `CONVERTED` - and the name is not `mat`, because `const mat = matFor(…
@@ -635,7 +995,7 @@ function buildCrates(tr, grp) {
     trackAt(tr, c.startS, fr);
     const w = fr.w;
     const meshes = [];
-    for (let i = 0; i < FIELD; i++) {
+    for (let i = 0; i < n; i++) {
       const g = new THREE.Group();
       const m = new THREE.Mesh(geo, wood);
       m.castShadow = true;
@@ -648,7 +1008,7 @@ function buildCrates(tr, grp) {
         g.add(k);
       }
       g.rotation.order = 'YZX';
-      standCrate(g, tr, c, c.startS, crateLane(i, w));
+      standCrate(g, tr, c, c.startS, crateLane(i, n, w));
       grp.add(g);
       meshes.push(g);
     }
@@ -656,23 +1016,66 @@ function buildCrates(tr, grp) {
   }
   return rows;
 }
-/** The lane slot a racer in the field's `i`th place holds, and the same number
- *  `startRace()` gives it - one formula, because two of them is how eight crates
- *  end up on eight lanes that are not the eight lanes. And it is a *share* of the
- *  half-width rather than a distance off the centre line, because the road's
- *  half-width is not the same number at both ends of a course's crate - a slot
- *  written down in metres cannot follow the road it is standing on. */
-const laneSlot = (i) => (i - (FIELD - 1) / 2) / ((FIELD - 1) / 2);
-const crateLane = (i, w) => laneSlot(i) * (w - 0.5);
+/**
+ * The lane slot a racer in slot `i` of a field of `n` holds, as a share of the
+ * half-width from -1 to +1. One formula, and every caller gives it both halves,
+ * because two of them is how eight crates end up on eight lanes that are not the
+ * eight lanes. **And it is a share and not a distance off the centre line**, because
+ * the road's half-width is not the same number at both ends of a course's crate - a
+ * slot written down in metres cannot follow the road it is standing on.
+ *
+ * **The field's own size is an argument and not the `FIELD` constant**, and that is
+ * the whole of why a duel works. This was `(i - (FIELD-1)/2) / ((FIELD-1)/2)` with
+ * the eight baked in, which divides by three and a half and puts a two-snail field's
+ * lanes at -0.29 and +0.29 - **both racers inside a quarter of the road, one on the
+ * same side of the pack as nobody and the other in the middle of the lane.** A duel
+ * would have looked like a snail walking beside a snail, with a road either side of
+ * them that nothing was using. At `n = 2` the slots are -1 and +1, which is the two
+ * ends of the road and is what a two-snail race looks like.
+ */
+const laneSlot = (i, n) => (i - (n - 1) / 2) / ((n - 1) / 2 || 1);
+const crateLane = (i, n, w) => laneSlot(i, n) * (w - 0.5);
 
 /** A whole course, built and standing in the scene: the ground, the bed, the
- * skirt, the water, everything scattered on it, the lamps and the two gates.
- * A race and the inspector both want exactly this, so neither of them builds
- * it - a course looked at on the course card is the same course that gets
- * raced, and the only way to be sure of that is to build it the same way.
+ *  skirt, the water, everything scattered on it, the lamps and the two gates.
+ *  A race and the inspector both want exactly this, so neither of them builds
+ *  it - a course looked at on the course card is the same course that gets
+ *  raced, and the only way to be sure of that is to build it the same way.
+ *
+ *  **The biome is the first line and it has to be.** `useBiome()` writes the
+ *  sixteen `PAL` colours the surfaces are about to bake into their vertex
+ *  colours and rebuilds the four `triplanarSets()` programs from the biome's
+ *  four roles, and **vertex colours are baked** - so a surface built before the
+ *  call is a surface wearing the last biome's colours with this one's grain on
+ *  it, which is a wrong picture rather than a broken one. Nothing downstream of
+ *  this line has to remember what a biome is: `surfaces.js` reads `PAL`,
+ *  `scenery.js` reads `biomeNow()` and `populate()` walks its table.
+ *
+ *  **And the duel is read off the course rather than off `race.duel`, which
+ *  kills a staleness bug for free.** The flag was written in `startRace()` and
+ *  nowhere else - not in the `race` literal, and `wipeSave()` did not clear it -
+ *  so an inspector opened after a duel built a **two-crate apron** on an
+ *  eight-snail road. Reading it off `cat` is right for the inspector too, and
+ *  right for `startRace()`, and there is only one answer left to be wrong.
  */
 function buildCourse(catId) {
-  const tr = buildTrack(catId, trackSeed(catId, state.season), seasonScale(state.tier));
+  const cat = CAT_BY_ID[catId];
+  const duel = cat.duel || null;
+  // **and the season's length scale, unless the duel names its own.** A duel is
+  // one course and two snails, and its length should not be a reward for climbing
+  // the ladder: at the GP's 2.3 the old marathon was 824 m of two-snail road and
+  // at the Sunday Cup's 0.8 it was 287, so the same fight was a sprint or a
+  // marathon depending on which button the player could reach. `lenScale: 1` on the
+  // entry is that answer written down.
+  const tr = buildTrack(catId, trackSeed(catId, state.season),
+    duel ? (duel.lenScale || 1) : seasonScale(state.tier));
+  useBiome(cat.biome);
+  // **and the far country, which is a rebuild and not a tint.** The course's
+  // backdrop is one module-scope group the frame loop repositions every frame, so
+  // it is rebaked in place and nothing downstream moves; `rebuildBackdrop()`
+  // disposes what it replaces, which is the one leak this file would otherwise
+  // open on every course change.
+  rebuildBackdrop(biomeNow());
   const grp = new THREE.Group();
   grp.add(buildGround(tr));
   grp.add(buildRoad(tr));
@@ -712,7 +1115,7 @@ function buildCourse(catId) {
   // standing where a tree wants to be is a tree through a crate, and the shove
   // run in front of it is three and a half metres of lane the scatter would
   // otherwise put a hedge in
-  const crates = buildCrates(tr, grp);
+  const crates = buildCrates(tr, grp, duel ? duel.field : FIELD);
   populate(tr, grp);
   grp.add(gateGroup(tr, START_S, false));
   grp.add(gateGroup(tr, tr.finish, true));
@@ -735,7 +1138,23 @@ function dropCourse(grp) {
   });
 }
 
+/**
+ * A race, or a duel.
+ *
+ * **`duel` is read off the course and not passed in**, which is the whole of what
+ * this function changed: `startRace(DUEL_CAT, true)` was a race with two racers in
+ * it and the two came from a flag the caller had to remember to set, and three of
+ * the six things that flag changed were numbers written as literals here - the
+ * field's size, the countdown, and which course it was. All three are on the
+ * course's own `duel` entry now, and the flag is `CAT_BY_ID[catId].duel || null`,
+ * so it is an object rather than a boolean and `race.duel` is truthy exactly when
+ * there is a duel to be in. **The whole of a duel is "there are two of you"**,
+ * and a second copy of a hundred and fifty lines that is one constant different is
+ * a hundred and fifty lines to keep in step with itself.
+ */
 function startRace(catId) {
+  const duel = CAT_BY_ID[catId].duel || null;
+  race.duel = duel;
   // tear the last course down
   dropCourse(race.group);
   race.group = null;
@@ -756,8 +1175,13 @@ function startRace(catId) {
   // to make - the cache they clear is the hour's, and the hour is written here
   world.forceTimeOfDay();
 
-  const rivals = pickField();
-  const field = [{ player: true, name: state.name, stats: state.stats, body: state.body, shell: state.shell, style: state.style, skill: 1, greed: 0, jitter: 0 }].concat(rivals);
+  const rivals = duel ? [adversary()] : pickField();
+  // **The player's own row of the field, in the same shape as a rival's.** The
+  // two things that are only the player's are here - its stats and the fact it
+  // is the player - and the rest is a snail like any other, which is the whole
+  // point of building a racer out of a `def`: the face and the hat are named on
+  // the same object a rival's are and `makeSnail()` cannot tell them apart.
+  const field = [{ player: true, name: state.name, stats: state.stats, body: state.body, shell: state.shell, face: state.face, hat: state.hat, skill: 1, greed: 0, jitter: 0 }].concat(rivals);
   // the grid is drawn at random, so the player never starts from a set place
   for (let i = field.length - 1; i > 0; i--) {
     const j = (rand() * (i + 1)) | 0;
@@ -765,16 +1189,19 @@ function startRace(catId) {
   }
   const racers = [];
   const startY = tr.sm[0].y;
+  // **the field's own size, once**, and every lane below is read off it. `FIELD`
+  // is still what an eight-snail race gets; a duel gets two.
+  const n = field.length;
   field.forEach((sn, i) => {
     const model = makeSnail(sn);
     model.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     model.group.rotation.order = 'YZX';
     model.group.scale.setScalar(SNAIL_SCALE);
     grp.add(model.group);
-    const lane = laneSlot(i) * (tr.sm[0].w - 0.5);
+    const lane = laneSlot(i, n) * (tr.sm[0].w - 0.5);
     racers.push({
-      sn, model, isPlayer: !!sn.player, s: START_S + 0.7 + (FIELD - 1 - i) * 0.13, v: 0,
-      lane, laneF: laneSlot(i), y: startY, cond: RUN, state: 'run',
+      sn, model, isPlayer: !!sn.player, s: START_S + 0.7 + (n - 1 - i) * 0.13, v: 0,
+      lane, laneF: laneSlot(i, n), y: startY, cond: RUN, state: 'run',
       stam: 1, stamMax: 1, spent: false, surging: false, aiOn: false, aiTimer: 0,
       leapIdx: 0, leap: null, airStart: 0, airT: 0, sh: null, airY: 0,
       // and its own crate, mesh and all, by index: a snail is never pushing
@@ -801,7 +1228,15 @@ function startRace(catId) {
   }
 
   Object.assign(race, {
-    catId, tr, group: grp, racers, t: 0, phase: 'countdown', cd: 3.0,
+    catId, tr, group: grp, racers, t: 0, phase: 'countdown',
+    // **and a duel is given five seconds where a race is given three.** Two snails
+    // and 285 metres of course is about four seconds of racing; three of countdown
+    // leaves one, which is not long enough to see where they are. Five is the same
+    // three-second count with the two extra seconds the shorter field earns - and
+    // it is the duel's own entry now rather than a literal here, for the same
+    // reason the field's size is: **a number a course can say about itself does
+    // not have to be kept in step with itself.**
+    cd: duel ? (duel.countdown || 3.0) : 3.0,
     result: null, waitAll: false,
     player: racers.find((r) => r.isPlayer), snails: racers.map((r) => r.model),
   });
@@ -1368,19 +1803,134 @@ function finishRace() {
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     return a.finished ? a.finishT - b.finishT : b.s - a.s;
   });
+  // **And the season's own multiplier, read once.** `POINTS` keeps its eight
+  // entries so `r.points` is still indexed by place, and everything a place is
+  // worth - the points, the rating, and the gold, which is the points - is the
+  // table at `payMult`. So a GP win is 63 against 25 in the Sunday Cup, and
+  // there is one number deciding all three rather than three tables that can
+  // disagree.
+  const payMult = seasonDef(state.tier).payMult || 1;
+  /**
+   * And `r.points` for a duel is the duel's own table and not `POINTS`. A win is
+   * worth a hundred gold - the whole of a first-place purse in the Snail GP, which
+   * is what beating them is - and a loss is worth nothing, because the rating branch
+   * below already decides what a duel costs and points that meant something else
+   * would be two answers to one question. **The pair is the course's**, for the same
+   * reason the field's size and the countdown are: it used to be `i === 0 ? 100 :
+   * 0` written here and a hundred written again in the results screen's own copy.
+   */
+  const duelPts = (race.duel && race.duel.points) || [0, 0];
   const entries = order.map((r, i) => {
     r.place = i + 1;
-    r.points = i < POINTS.length ? POINTS[i] : 0;
+    r.points = race.duel ? (duelPts[i] || 0) : (i < POINTS.length ? Math.round(POINTS[i] * payMult) : 0);
     return r;
   });
   const me = race.player;
+  /**
+   * **A duel branches here, before the season ledger and not after it.**
+   *
+   * The ledger below writes `state.results`, `state.pts`, `state.races`,
+   * `state.gold`, `state.wins` and every rival's career counters - and it reaches
+   * for `p = state.pool[r.sn.id]` on every row that is not the player. The Adversary
+   * is `id: -1`, so `state.pool[-1]` is `undefined` and the first line of the ledger
+* that touches them is `p.races++` on nothing: **a `TypeError` on the last frame of
+    * a duel the player has already won.** Branching after the ledger would mean
+    * writing it and then undoing it, which is worse, and branching after `entries`
+    * would mean indexing `POINTS` for a place they cannot hold.
+   *
+   * So a duel gets its own record, its own two rows and its own rating rule, and
+   * **none of the season's own bookkeeping is touched at all**: a duel is not a
+   * round and it does not move the ladder by the table.
+   */
+  if (race.duel) {
+    const d = race.duel;
+    const won = me.place === 1;
+    const wasRating = state.rating;
+    const top = state.pool.reduce((a, b) => (b.rating > a.rating ? b : a), state.pool[0]);
+    /**
+     * **A loss costs the place, and the place is the only thing there is to
+     * take.** It is written `min(wasRating, top - 1)` and **the `min` is the whole
+     * of it**: you end one below the best snail in the county *if you were above
+     * them*, which is the most work a duel could possibly have been, and you end
+     * exactly where you were if you were not - because there was no place of yours
+     * to lose. The first version of this was `top - 1` on its own and it read as a
+     * **reward for losing**: a snail on 10 who clicked the button, lost, and came
+     * back on 665 - a jump of six hundred and fifty-five points, handed out for
+     * finishing second in a two-snail race.
+     *
+     * So there is no `RATING_GAIN` row for this and no scale. A duel is not a race,
+     * and a losing one must not read as a bad one - the ladder's promise is about
+     * *being first*, and "you are no longer first" is a sentence with no number in
+     * it for anyone who never was.
+     */
+    // **and the win is the course's own `ratingWin`, not a literal.** A duel is
+    // not a placing, so there is no `RATING_GAIN` row for it, which is exactly why
+    // the number belongs somewhere a course can be written down in rather than in a
+    // function three screens away.
+    state.rating = won
+      ? clamp(Math.round(wasRating + (d.ratingWin == null ? 60 : d.ratingWin)), RATING_MIN, RATING_MAX)
+      : Math.min(wasRating, Math.max(RATING_MIN, top.rating - 1));
+    const dRating = state.rating - wasRating;
+    // **and the unlock, once, on the duel branch and not in the shop.** `face-devil`
+    // and `hat-devil-horns` are `locked` in `FACE_SET` / `HAT_SET` and `wardrobePress()`
+    // returns on a locked item without saying why - this is the only place in the
+    // county that puts them on a snail, and it puts them on the player's own.
+    let unlocked = null;
+    if (won && !state.beatAdversary) {
+      state.beatAdversary = true;
+      const pair = d.unlocks || [];
+      for (const n of pair) if (state.owned.indexOf(n) < 0) state.owned.push(n);
+      unlocked = pair.slice();
+      state.face = d.face;
+      state.hat = d.hat;
+    }
+    const rec = {
+      // **and the player's own place's points, off the entry** - which is `me.points`
+      // and not the winner's. It was `duelPts[0]` here, which is a **losing duel
+      // paying out a winner's purse**, and the smoke test found it the only way it
+      // could: a duel is run twice by that spec, once each way, and the losing run
+      // came home a hundred gold richer. `r.points` was already right; this line was
+      // reading the table's first entry instead of the racer's own.
+      catId: race.catId, duel: true, place: me.place, points: me.points,
+      time: me.finishT, length: race.tr.length,
+      won, unlocked,
+      // **the duel's own hour**, which is the same line the app's clock reads
+      hour: raceHour(raceHourKeyOf(race.catId) === 'finale') + me.finishT * HOURS_PER_SECOND,
+      field: entries.map((r) => ({
+        name: r.sn.name, id: r.sn.id, place: r.place, points: r.points, player: r.isPlayer,
+        time: r.finished ? r.finishT : 0, dRating: r.isPlayer ? dRating : 0,
+        rating: r.isPlayer ? state.rating : r.sn.rating,
+        wasRating: r.isPlayer ? wasRating : r.sn.rating,
+      })),
+    };
+    race.result = rec;
+    // **the purse, and only the purse.** A duel pays - `rec.points` is the whole of
+    // it and it is a hundred, the value of a first place in the Snail GP - and it
+    // pays out of the same `state.gold` the shop spends. **It does not touch
+     // `state.pts`**, which is the season's own points column and is what the
+     // results strip and the ladder's career figures are built out of; a duel added
+     // to it and a player who beat the Adversary would come out of a season with
+     // more points than a player who had won it.
+    state.gold += rec.points;
+    $('goldOut').textContent = state.gold;
+    save();
+    // **the plinth, not the race.** A duel leaves you wearing their face and horns
+    // the instant you take them, and the snail on the stable is built once and lives
+    // for the session - so `world.applyLook()` is the only way it finds out, and it
+    // is the app's function because the app owns the plinth.
+    world.applyLook();
+    world.showResults(rec);
+    return;
+  }
   // the season ledger
   const rec = {
     catId: race.catId,
     place: me.place, points: me.points, time: me.finishT,
     length: race.tr.length,
-    // the hour on the clock when the flag fell, which is the race's own
-    hour: raceHour(race.catId === seasonFinaleId(state.tier)) + me.finishT * HOURS_PER_SECOND,
+    // the hour on the clock when the flag fell, which is the race's own - and
+    // **through `raceHourKeyOf()` rather than the tier's finale**, so a course
+    // that names its own hour gets it. The finale is still the finale.
+    hour: raceHour(raceHourKeyOf(race.catId) === 'finale') + me.finishT * HOURS_PER_SECOND,
     field: entries.map((r) => ({
       name: r.sn.name, id: r.sn.id, place: r.place, points: r.points, player: r.isPlayer,
       time: r.finished ? r.finishT : 0, dRating: 0, rating: 0, wasRating: 0,
@@ -1398,12 +1948,11 @@ function finishRace() {
   state.gold += me.points;
   $('goldOut').textContent = state.gold;
   if (me.place === 1) state.wins++;
-  // A rating is a running average of the points you have scored, so every
-  // finish moves it up or down - including the ones that cost you. The change
-  // is recorded per snail, yours and theirs, because a field that only ever
-  // climbs is not a field you can read.
+  // A rating moves by the place you finished in and by the cup you raced it in,
+  // and the change is recorded per snail, yours and theirs, because a field that
+  // only ever climbs is not a field you can read.
   const wasRating = state.rating;
-  state.rating = ratingFor(state.pts, state.races, wasRating);
+  state.rating = ratingFor(me.place, wasRating, payMult);
   for (let i = 0; i < entries.length; i++) {
     const r = entries[i], row = rec.field[i];
     if (r.isPlayer) {
@@ -1418,7 +1967,7 @@ function finishRace() {
     p.pts += r.points;
     p.wins += r.place === 1 ? 1 : 0;
     p.avg = (p.avg * (p.races - 1) + r.place) / p.races;
-    p.rating = ratingFor(p.pts, p.races, was);
+    p.rating = ratingFor(r.place, was, payMult);
     row.dRating = p.rating - was;
     row.rating = p.rating;
     row.wasRating = was;
@@ -1467,6 +2016,52 @@ function load() {
     if (state.order.length !== picks.length) state.order = picks.slice();
     state.results = (Array.isArray(state.results) ? state.results : []).filter((r) => r && CAT_BY_ID[r.catId]);
     if (!Array.isArray(state.field)) state.field = null;
+    // **And the four cosmetic fields, filled rather than rejected.** A save
+    // written before faces and hats existed has a pool whose entries carry
+    // neither, and `state.face` itself is missing - so `dressPool()` gives every
+    // rival the two names the current derivation gives it and the player gets
+    // the starters. **This is the additive case the rule above carves out and
+    // it is why it is here rather than in a version bump**: a hat is not a
+    // renamed stat, nothing in the sim reads a field that is not there, and
+    // `d.v !== 2 || pool.length !== POOL_SIZE` still passes on a save written
+    // before any of it. Bumping the version would throw away every save in the
+    // county over a cosmetic.
+    state.face = FACE_BY_NAME[state.face] ? state.face : 'plain';
+    state.hat = HAT_BY_NAME[state.hat] ? state.hat : 'none';
+    state.owned = (Array.isArray(state.owned) ? state.owned : [])
+      .filter((n) => FACE_SET.some((f) => f.name === n) || HAT_SET.some((h) => h.name === n));
+    if (!state.beatAdversary) state.beatAdversary = false;
+    /**
+     * **And every rival is brought back inside the rules, attributes first.**
+     *
+     * The rating is a curve over the animal and not a number the save is trusted to
+     * hold, so an episode's pool carries both written by whatever rules were current.
+     * The old ones were `total * 10` and a split that could not divide a total of
+     * 158 between five attributes of at most 16 - so an old pool holds snails with
+     * attributes up to 40 and ratings to 1580, and `effTraits()` does not clamp them
+     * on the way into the sim. Recomputing the rating alone leaves those attributes
+     * out of range and a `ratingOf(169)` is 1148: a pool top above the ceiling, a
+     * player at the foot of it, and an adversary nine hundred points clear.
+     *
+     * **So the attributes are clamped into `[1, ATTR_MAX]` and the rating is derived
+     * from the clamped ones.** This is a migration and not a version bump, and the
+     * distinction is the whole of it: the values are in the save and
+     * `ratingOf()` is a pure function of them, so the current answer can be
+     * re-derived exactly on load rather than approximated. A rival that was out of
+     * range is now in range, which is what a pool built by today's `makePool()` would
+     * have produced for it anyway.
+     *
+     * **`state.rating` itself is not touched.** A player's rating is a career number
+     * with no inputs to derive it from, and the old scale topped out at 60, so a
+     * returning snail keeps the rating it had and climbs the new ladder from there.
+     */
+    for (const p of state.pool) {
+      if (p.attrs) for (const a of ATTRS) p.attrs[a.key] = clamp(Math.round(p.attrs[a.key] || 1), 1, ATTR_MAX);
+      let total = 0;
+      for (const a of ATTRS) total += (p.attrs && p.attrs[a.key]) || 1;
+      p.rating = ratingOf(total);
+    }
+    dressPool(state.pool);
     return true;
   } catch (e) { void e; return false; }
 }
@@ -1478,12 +2073,12 @@ function load() {
 export {
   state, race, waterMeshes, env, scene,
   makePool, ratingFor, inTier, rankOf, ladderAt,
-  buildCrates, buildCourse, dropCourse, startRace,
+  buildCrates, buildCourse, dropCourse, startRace, adversary, duelCatId, raceHourKeyOf,
   makeFxPool, buildSurgeFx, takeFx, updateFx, surgeFx,
   buildRipples, spawnRipple, updateRipples, leapShot, flightY, flightPitch,
   markLiveOrder, leapAt, touchDown, stepCrate, standCrate, placeAll,
   stepRacer, stepRace, finishRace, save, load, SAVE_KEY, crateSpanS,
-  makeSnail, SNAIL_SCALE, shellFor, NAMES, HUES, STYLES, rndColor, BODY_Y,
+  makeSnail, SNAIL_SCALE, shellFor, NAMES, HUES, rndColor, BODY_Y,
   poolByIds, seasonField, forgetSeasonFields, seasonRivals, pickField, drawSeasonField,
   lastSeasonField, crateTopAt, crateMeshY, laneYAt,
 };

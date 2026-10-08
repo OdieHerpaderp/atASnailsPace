@@ -80,6 +80,49 @@ export const MAPS = {
   // its own grain rather than the county's granite
   seashell: ['shell-n', 'shell-rgh'],
 
+  /* ---- the ashlands ---------------------------------------------------- *
+   * Eight pieces standing in the second biome, and **two of them want maps for
+   * the same reason and not the same reason.** A `basalt-column` wears the
+   * cliff's own three because it is the cliff's joint pattern in three
+   * dimensions and it is the piece that proves the map is right - a thing you
+   * can walk round and a thing you can only see edge-on have to agree. An
+   * `obsidian-shard` wears two because **obsidian is the one thing in the county
+   * that is shiny**: a roughness map is the only way a surface can vary its own
+   * finish across its own face, the oxide skin and the conchoidal fracture inside
+   * it are two finishes, and a bare material cannot say so. Its low value is in
+   * its vertex colours rather than in a map, because a base-colour map on a
+   * near-black prop can only make it blacker.
+   *
+   * `obsidian-n` is the only new *file* this biome brings, and `obsidian-rgh` is
+   * half of a `-rgh` pair with an empty metalness channel like every other in the
+   * library - obsidian is a glass, and three.js has no transmission here, so it is
+   * a dielectric at 0.18 with a very low roughness and the sky is what makes it
+   * read as glass. See the piece's own comment in `build-scenery.html`.
+   */
+  'basalt-column': ['basalt-albedo', 'basalt-n', 'basalt-rgh'],
+  'obsidian-shard': ['obsidian-n', 'obsidian-rgh'],
+  /** The other three are **in their vertex colours**, and each for a stated
+   *  reason rather than as a default. An `ash-tree` has no bark left to grain
+   *  and the cliff's map on a charred trunk is a stone grain standing on end.
+   *  An `ash-tuft` is the meadow's `tuft` with a different material and no map on
+   *  it for exactly the reason the meadow's has none: `mat.grass` and
+   *  `mat.ashFoliage` are both `triplanarDetail()` and a tuft has no uv to
+   *  sample with. And a `vent` is **the one piece in the biome that is not grey**
+   *  - the only place a hue is allowed at all - so its colour is the point of it
+   *  and a map over the top would be taking the choice away. */
+  'ash-tree': [], 'ash-tuft': [], 'vent': [],
+  /* **And the three that came after them, which are bare for the reason the
+   * `ash-tree` is and not as a new decision**: `ash-scrub`, `ash-fallen` and
+   * `snag` are charred wood standing in the same sixteen greys the ash-tree is,
+   * and `snag` is built out of the ash-tree's own trunk lathe - so a map over any
+   * of them is the cliff's grain on a burnt tree again, on a piece that has to
+   * *agree* with the tree it is standing next to. **A map is also the only way a
+   * surface gets its grain, so this is a decision rather than an omission**, and
+   * the reason it is the right one here is the reason the ash-tree's is: these
+   * are four-centimetre read surfaces at most, and what has to read is a
+   * silhouette. */
+  'ash-scrub': [], 'ash-fallen': [], 'snag': [],
+
   // The half-way tower, and it is here beside the stones rather than beside the
   // farmstead because that is what it is wearing: a full-colour albedo, a normal
   // and a roughness, for the same reason `rock` has all three - one surface, and
@@ -128,36 +171,49 @@ export const MAPS = {
    * this repository, and a committed binary cannot be given a uv by anybody:
    * without one there is nothing for a tiling map to be sampled with. They
    * draw in their vertex colours, as they always have, and they need a builder
-   * before they can be converted.                                            */
+   * before they can be converted.
+   *
+   * **`cherry-tree` is the sixth and it is the same answer reached from the other
+   * side** - it has a builder and it is still bare, and the reason is not that a
+   * tree has no grain. A cherry is a near-black trunk and a pink crown, and one
+   * isotropic normal tiled at the county's 34 cm across both of them says that
+   * the blossom is ridged at four centimetres, which is the one thing the crown is
+   * not. Its `cherryBarkPale` on the outer third of every limb is doing the work a
+   * bark map would otherwise do: **a half-metre cloud of blossom and a two-centimetre
+   * twig want two different grains and the county has no uv on either**, so the
+   * decision here is that it gets none rather than one that is wrong about both.
+   */
+  'cherry-tree': [],
   bush: ['leaf-n', 'leaf-rgh'],
+
   lily: ['leaf-n', 'leaf-rgh'],
   'lily-pad': ['leaf-n', 'leaf-rgh'],
   reeds: ['leaf-n', 'leaf-rgh'],
   'corn-plot': ['leaf-n', 'leaf-rgh'],
   'sprout-plot': ['leaf-n', 'leaf-rgh'],
 
-  /* ---- the mushrooms -------------------------------------------------- *
-   * All three are three surfaces wearing three pairs, and the shape of the
+/* ---- the mushrooms -------------------------------------------------- *
+   * All five are three surfaces wearing three pairs, and the shape of the
    * argument is in the pale one below. `mushroom-n` and `mushroom-rgh` stay on
    * disk for nothing and are no longer declared: they were one isotropic noise
    * drawn across a cap and a stem and a set of gills, and an isotropic noise can
    * only draw a scratch. A cap made of them came out as a dusty disc.
    *
    * The `-tone` on each is not a colour and is the reason there is a `map` slot
-   * on any of them at all - see `SLOT_OF`. All three mushrooms wear all three.
+   * on any of them at all - see `SLOT_OF`. All five mushrooms wear all three.
    */
-  'mushroom-giant': {
-    '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
-    cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
-    gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
-  },
-  'mushroom-rooted': {
-    '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
-    cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
-    gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
-  },
-  /**
-   * The pale one is three surfaces and so three maps, and that is the only
+   'mushroom-giant': {
+     '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
+     cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
+     gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
+   },
+   'mushroom-rooted': {
+     '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
+     cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
+     gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
+   },
+   /**
+    * The pale one is three surfaces and so three maps, and that is the only
    * reason it is worth the trouble: a surface of revolution is unwrapped with
    * the **angle** for its u, so a line of constant u in a map is a line of
    * constant angle on the model - and a gill, a fibre and a cap wrinkle are all
@@ -167,18 +223,36 @@ export const MAPS = {
    * So the three parts are `''` (the stalk, which is the piece itself), `cap`
    * and `gills`, and each wears its own set. The keys are the part names the
    * loader builds out of the mesh names in the file: `mushroom-pale`,
-   * `mushroom-pale-cap` and `mushroom-pale-gills`. The other two are written out
-   * at their alphabetic places above and are the same three keys.
+   * `mushroom-pale-cap` and `mushroom-pale-gills`. The other four are written
+   * out at their alphabetic places above and are the same three keys.
    */
-  'mushroom-pale': {
-    '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
-    cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
-    gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
-  },
+'mushroom-pale': {
+     '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
+     cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
+     gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
+   },
+   // And the two small ones, which are the same three surfaces at two sizes:
+   // a cap that has been out in the weather is the same cap at ten centimetres
+   // across as it is at six metres, which is the whole reason one map serves
+   // all five mushrooms in the county. They are the only two in the library
+   // that are one surface of revolution and nothing else - no skirt, no
+   // flecks, no strands - and `mushroomCap()` builds their underside for them:
+   // the dish the pale one has is the dome turned back to the rim at the same
+   // zero it lands on, and the gills are the blades lying in it.
+   'mushroom-red': {
+     '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
+     cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
+     gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
+   },
+   'mushroom-brown': {
+     '': ['mushroom-stem-n', 'mushroom-stem-rgh', 'mushroom-stem-tone'],
+     cap: ['mushroom-cap-n', 'mushroom-cap-rgh', 'mushroom-cap-tone'],
+     gills: ['mushroom-gill-n', 'mushroom-gill-rgh', 'mushroom-gill-tone'],
+   },
 
   /* ---- the lanterns ---------------------------------------------------- *
-   * These are the two props that cannot be drawn with the material out of
-   * their own file, and the reason is in the game: `mat.paper` and
+   * These are the three props that cannot wholly be drawn with the material out
+   * of their own file, and the reason is in the game: `mat.paper` and
    * `mat.lampGlass` are driven by the hour, by name, and a material the hour
    * does not know about cannot be lit. So the frame is drawn in the file's own
    * material and the paper and the glass are drawn in the game's, and the maps
@@ -193,6 +267,31 @@ export const MAPS = {
     paper: ['lantern-em', 'glass-n'],
   },
   'lamp-glass': ['lamp-em'],
+
+  /* ---- the candle lantern, which is the same argument with a part more --- *
+   * A hurricane lantern is **three surfaces and not one**, and the three are not
+   * a matter of taste. The frame is the county's only metal on a piece the
+   * player walks past, so it is converted and wears `metal-*` like the crate's
+   * brackets and for the same reason: a metalness of zero is a dark grey plastic
+   * frame, and no amount of value in `ironBody` makes a frame read as wrought.
+   *
+   * The other two are drawn in the game's own materials and **cannot** be drawn
+   * in the ones out of their own file, which is the whole reason the three props
+   * above are declared at all. The wax burns, so it is `mat.paper` with the
+   * lantern's emissive map, and the panes are `mat.lanternPane`, which the hour
+   * does not touch - a pane has nothing of its own to give out, it is lit
+   * through by the flame in the middle of it, which is the whole of why the
+   * reference's cyan lantern is a cyan *box* and not a cyan bulb.
+   *
+   * The maps are therefore handed to all three by hand, where the hour and the
+   * glass can see them, and they are declared here because this is where the
+   * audit reads them. */
+  'candle-lantern': {
+    frame: ['metal-albedo', 'metal-n', 'metal-rgh'],
+    candle: ['lantern-em'],
+    pane: ['glass-n'],
+    flame: ['lantern-em'],
+  },
 
   /* ---- the timber, which four things share ----------------------------- *
    * `timber-albedo` is a **colour** and not a `-tone`, and the difference is
@@ -307,27 +406,104 @@ export const MAPS = {
     '': ['plankChest-albedo', 'plankChest-n', 'plankChest-rgh'],
     metal: ['metal-albedo', 'metal-n', 'metal-rgh'],
   },
+  /** The bower's hoop, and it is the county's only wrought-iron archway. `metal-*`
+   * is the map pair `candle-lantern`'s frame and `push-crate`'s brackets already
+   * wear, because it is one metal and a second file for it would be a map nothing
+   * else wears. */
+  'bower-arch': ['metal-albedo', 'metal-n', 'metal-rgh'],
 
 
   /* ---- no uv, no map --------------------------------------------------- *
-   * Ten props that are committed glbs with no builder in this repository.
+   * Nine props that are committed glbs with no builder in this repository.
    * A tiling map is sampled by uv, and a binary nobody can open cannot be
    * given one, so these draw in their vertex colours and are ready for a
    * builder. Listing them here rather than leaving them out is the point: the
-   * audit should be able to say "these ten are not done and here is why". */
-  conifer: [], evergreen: [], broadleaf: [], tuft: [], marker: [],
+   * audit should be able to say "these nine are not done and here is why". */
+  conifer: [], evergreen: [], broadleaf: [], tuft: [], marker: [], cactus: [], 'cactus-barrel': [],
   'lamp-post': [], 'lantern-post': [], 'lantern-glass': [],
-  'mushroom-red': [], 'mushroom-brown': [],
+  /** The pine, and it is in its own entry rather than on the list above because
+   * **it is the one tree in the county with a builder and a map, and the list
+   * above is a list of trees without either.** It was on that list with three
+   * maps written into its empty array, which said two opposite things at once:
+   * that it drew in its vertex colours, and that it did not.
+   *
+   * And the maps were on **both** of its parts, because an array entry answers
+   * every part the same way - `mapsFor()` hands the whole list back whatever part
+   * is asked for. So the trunk wore a needle map, and a needle map on a trunk is
+   * a brown cylinder multiplied by a green, which is the argument the entry below
+   * is written to close: the wood takes no map at all and the needles take all
+   * three, **which is the same split `watchtower` and `push-crate` are drawn
+   * with**, and for the same reason - a prop split into parts is split by surface,
+   * and a needle is not bark. */
+  pine: { '': [], leaves: ['pine-albedo', 'pine-n', 'pine-rgh'] },
+  /* **And this one is not "no uv" - it has a uv and has chosen not to wear a map.**
+   * The bower's canopy is two densities of one plant, so it is two meshes in one
+   * file and `partList()` is the mechanism for that; the empty arrays are the
+   * declaration and they are **load-bearing**. `converted()` is "does any part of
+   * this prop name a map", so two empty arrays leave `bower-foliage` unconverted,
+   * `propMatFor` has nothing for it, and the placement's material resolution falls
+   * through to `mat.foliage` - which is on `WIND_MATS`, so the canopy bends.
+   * **Omit the key entirely and the prop is not in `MAPS` at all**, which is a
+   * different failure with the same symptom and nothing anywhere saying so. */
+  'bower-foliage': { mass: [], spray: [] },
+  /**
+   * **And the litter, which is a file of its own and not a third part**, because it
+   * takes a different material: dead leaves lie on the ground and **must not take
+   * the wind**, and the wind is a property of the material, so a brown leaf in
+   * `mat.foliage` is a leaf in the air. Green in `mat.foliage` and bending, brown
+   * in `mat.vcol` and still - which is the whole of the split, and the reason it is
+   * a model rather than a part.
+   *
+   * Empty for the same reason and under the same rule as the foliage above:
+   * **empty means unconverted**, which means `propMatFor` has nothing for it and
+   * the placement's own material argument is what draws it.
+   */
+  'bower-litter': [],
 
   /* ---- the tintable three: low-chroma, hue left to the game ------------- *
    * The snail and the three shells are recoloured by the editor, so they get
    * detail and no colour: a map under `applyLook()` turns the tint into a hue
    * shift, and the whorl patterns stay in the vertex colours, which multiply
-   * the tint.                                                                */
-  'shell-bands': ['shell-n', 'shell-rgh'],
-  'shell-swirl': ['shell-n', 'shell-rgh'],
-  'shell-spots': ['shell-n', 'shell-rgh'],
-  snail: ['snail-n', 'snail-rgh'],
+   * the tint.
+   *
+   * **And the `-tone` is grey and near-white and not an `-albedo`, which is the
+   * only way a base-colour slot is legal on a piece the editor recolours.** The
+   * snail is sixty-five racers in sixty-five colours off one file, so anything a
+   * map puts down here is put down on all of them: a hue in this pair is a hue
+   * the player never chose, and a full-range one darkens every racer by a third.
+   * A `-tone` moves the value of the tint by about a tenth and cannot touch its
+   * hue, which buys the one thing a normal map cannot draw - **where the dirt
+   * sits**, in the ring and in the pore, and in the suture. See `tone()` in the
+   * texture builder for the window and the bound.
+   *
+   * **And the snail's entry is the one that used to be dead.** The loader skips
+   * the snail file outright - `if (name === 'snail') { snailTemplate = root;
+   * continue; }` - because the snail is a *tree* and every other file is one
+   * mesh, so `applyMaps()` is never called on it and this entry bound to nothing
+   * at all. `race.js` builds its four materials by hand and hands them the maps
+   * itself now; the entry is here because it is the record of what a snail wears
+   * and because `tools/inspect.html` audits it.                                        */
+  'shell': ['shell-n', 'shell-rgh', 'shell-tone'],
+  snail: ['snail-n', 'snail-rgh', 'snail-tone'],
+
+  /* ---- the wardrobe: no maps at all, and that is a decision ------------- *
+   * Sixteen empty entries, one per face and hat, and **an empty array is the
+   * documented "not converted yet" state** - so they fetch no texture, they draw
+   * in their vertex colours exactly as the unconverted props do, and
+   * `allMaps()` is unchanged, which is what keeps `info.targets` at 23.
+   *
+   * A face is a four-centimetre object and a hat is a silhouette, so a tiling
+   * map would be a map sampled at a scale nobody could see: the ear of a straw
+   * is two millimetres of geometry and a normal map on it is a normal map on
+   * one triangle. If any of these ever does want a map the answer is a whole
+   * colour per hat in the vertex colours, out of `meshes/palette.js`, and not a
+   * grain - and declaring it here is the only half of that change. */
+  'face-plain': [], 'face-cheer': [], 'face-dollar': [], 'face-keen': [],
+  'face-smug': [], 'face-grim': [], 'face-tidal': [], 'face-winged': [],
+  'face-wild': [], 'face-googly': [], 'face-fangs': [], 'face-grin': [], 'face-crest': [],
+  'face-devil': [],
+  'hat-straw': [], 'hat-top-hat': [], 'hat-propeller': [], 'hat-sunglasses': [],
+  'hat-bonnet': [], 'hat-wizard': [], 'hat-devil-horns': [],
 };
 
 /**
@@ -337,6 +513,19 @@ export const MAPS = {
  * and the glass of a lantern, because the hour drives those by material name.
  * They are excluded from `CONVERTED`, so `scatter()` leaves their materials
  * alone, and the maps are attached by hand where the hour can see them.
+ *
+ * **`candle-lantern` is deliberately not on this list, and the reason is its
+ * first part rather than its other three.** A prop here has *every* part drawn
+ * in a material the game owns, because the exclusion is what stops the generic
+ * path swapping them back - and the candle lantern's frame is none of the game's
+ * business: it is the county's only metal on a piece the player walks past, it
+ * wears `metal-albedo`/`metal-n`/`metal-rgh` like the crate's brackets, and it
+ * wants its own file's material with a metalness of one on it. Put the prop here
+ * and `matFor()` hands back `mat.rock` and the frame comes up a dark grey
+ * plastic box with a lantern in it. So the candle lantern is converted like any
+ * other piece of metal and **names its materials per part at the one call site
+ * that places it**, which is `placeLamps()`, on the same argument the paper
+ * lanterns name theirs in `lanternParts()`.
  */
 export const GAME_MATERIAL = new Set(['lantern-pole', 'lantern-arch', 'lamp-glass']);
 
@@ -373,6 +562,14 @@ export const SLOT_OF = {
   '-tone': 'map',
   '-n': 'normalMap',
   '-n2': 'ripple2',
+  // not a material slot: a height field the course surface's own POM injection
+  // reads by name out of `MAPS_TEX`, the same shape as `ripple2` - the water's
+  // second normal is handed to the shader rather than the material, and three
+  // has no `heightMap` field, so a `-h` texture is fetched into the one map
+  // table and read by `detailOf(r.key, 'heightMap')` only. `mapSlots()`
+  // answers `['heightMap']`, which is not in `MATERIAL_SLOTS`, so the loader
+  // never tries to assign a `m.heightMap` field.
+  '-h': 'heightMap',
   '-rgh': 'roughnessMap',
   '-ao': 'aoMap',
   '-em': 'emissiveMap',
@@ -449,7 +646,7 @@ export function mapSlots(mapName) {
  * the colour is the stem the light is coming off.
  */
 export const SURFACE = {
-  ground: ['ground-n', 'ground-rgh', 'grass-albedo'],
+  ground: ['ground-n', 'ground-rgh', 'grass-albedo', 'grass-h'],
   /**
    * The track, and it is `track-n` plus a **colour** and not a tint of the
    * cliff's.
@@ -478,7 +675,7 @@ export const SURFACE = {
    * painted about the clay's own red would multiply the clay by the clay and
    * the track would come up a stop and a half hot.
    */
-  track: ['track-n', 'track-rgh', 'track-albedo'],
+  track: ['track-n', 'track-rgh', 'track-albedo', 'track-h'],
   /**
    * The cliff, and it is here rather than on `track` because a flank and a road
    * are two surfaces that happen to be drawn in strips of the same width a few
@@ -502,7 +699,7 @@ export const SURFACE = {
    * not change when the lane's vertex colours are re-tuned for a race that is
    * not running.
    */
-  cliff: ['cliff-n', 'cliff-rgh', 'cliff-albedo'],
+  cliff: ['cliff-n', 'cliff-rgh', 'cliff-albedo', 'cliff-h'],
   /**
    * The cobbled road, and **nothing in the county wears it.**
    *
@@ -525,6 +722,35 @@ export const SURFACE = {
    * what takes the weather off it.
    */
   cobble: ['cobblestone-n', 'cobblestone-rgh', 'cobblestone-albedo'],
+  /**
+   * The bower's setts, and **this is a second cobbled road and not a repair of the
+   * first.** `cobble` above is a different surface the county declares and nothing
+   * wears; `bowerSetts` exists because the bower's road is the one place in the
+   * county whose detail albedo carries **hue** - the per-stone warm/cool spread
+   * of `references/cobble.jpg` is the loudest thing in the reference, and
+   * `materials.js`'s `diffuseColor.rgb *= dc / dsum` is a *multiply*, so a multiply
+   * cannot widen the chroma of what is under it. Red clay under a blue-grey sett
+   * is a dark desaturated red, and the spread collapses. `buildRoad()` therefore
+   * desaturates the road's own vertex colour to its own **luminance** where the
+   * setts are, so the map's hue passes through untouched - which is a vertex's
+   * own value and not a seventeenth `PAL` key.
+   *
+   * **That is the whole reason this entry exists and it inverts `track`'s note
+   * above** ("it carries no hue of its own", stated as an invariant), so it is
+   * worth saying plainly which half of the pair is load-bearing: the map carries
+   * the chroma **and** the colour underneath goes neutral, and neither alone is a
+   * subtle degradation - one gives red stones, the other gives grey ones.
+   *
+   * **And it is deliberately a new name.** `cobblestone-albedo` is declared twice
+   * in the drawer's one object literal and the second wins, so the file under that
+   * name is a cracked limestone and not a road; pointing a `triplanarSets()` at
+   * `cobble` would have meant inheriting it. **That is a real bug and it is not
+   * fixed here** - fixing it changes what an existing texture means, on a surface
+   * this one does not use. It is reported by the drawer gate in `tools/check.sh`,
+   * which is left red on purpose, and the new name has nothing behind it, so the
+   * collision cannot touch it.
+   */
+  bowerSetts: ['bowerSetts-n', 'bowerSetts-rgh', 'bowerSetts-albedo', 'bowerSetts-h'],
   /**
    * The dressed limestone, and it is **`limestoneBrick` and not `limestone`
    * because the name went to the other one.**
@@ -574,9 +800,81 @@ export const SURFACE = {
    * `roughnessMap` is read by uv, so one hung here would be sampled at (0,0) for
    * every fragment and would be a single texel of it for ever.
    */
-  sand: ['sand-n', 'sand-albedo'],
+  sand: ['sand-n', 'sand-albedo', 'sand-h'],
   water: ['water-n', 'water-n2'],
-  grass: ['grass-n', 'grass-albedo'],
+  grass: ['grass-n', 'grass-albedo', 'grass-h'],
+
+  /* ---- the ashlands --------------------------------------------------- *
+   * The four roles the second biome names, and each is one field in the texture
+   * builder feeding two or three maps, because a bump that is not under the pale
+   * bed that made it pale is two textures laid over each other. All three of each
+   * is the county's rule and not this block's: the course surface has no uv, so
+   * `roughnessMap` cannot be hung on it (it is read by uv, and a missing
+   * attribute is `(0,0)` - one texel, for ever) - and these are declared for the
+   * audit and for the builder, not because anything reads them as a prop's.
+   *
+   * They are **declared rather than dropped in** because a biome's role has to
+   * name a key this table has heard of, and `tools/plan-test.mjs --biomes` is
+   * what checks it: a role pointing at nothing is a surface with no map on it and
+   * nothing in the console, because `detailOf()` answers `null` and
+   * `triplanarSets()` filters a null map out and keeps its other sets.            */
+  /**
+   * The ash turf, and it is **fine grey ash over a broad crust**: a stem's width
+   * in the relief and a meter's in the value, because that is what a mat of ash
+   * is - the crust is a value change across a metre and the ash on it is a
+   * centimetre of relief, and a map that has only the second reads as a smooth
+   * card and one that has only the first reads as a field of chips of stone.
+   *
+   * The tile is the meadow's five metres and the strength is a shade over its
+   * 0.30, on the meadow's argument: a detail map's strength is a function of its
+   * tile, and the tile is the one the ground's is.
+   */
+  ashGrass: ['ashGrass-n', 'ashGrass-albedo', 'ashGrass-h'],
+  /**
+   * The basalt, and it is **columnar, and the columns are the whole of it.**
+   *
+   * Columnar basalt's columns are the cliff's joint pattern in three
+   * dimensions, and this is the face that carries it - and `basalt-column.glb`
+   * is the prop that proves the map is right, because a thing you can walk round
+   * and a thing you can only see edge-on have to agree.
+   *
+   * **It is drawn the way the cliff is drawn and not the way the cobbles are**,
+   * and that is the one line in this file that will be got wrong by anybody
+   * copying the nearest example: a cellular lattice closes every cell on all
+   * four sides, so a face built out of one is a net of closed cells however good
+   * the cells are, and a net of closed cells is the cobbled road under a new
+   * name - the same word as crazing and the same failure, which is what made
+   * `cliff` and `cobble` two files in the first place. So the joints here are a
+   * **one-dimensional lattice of grooves**, six to the tile, each with its own
+   * width and its own place inside its own cell, and each **thresholded shut over
+   * part of its own length** so a joint dies and restarts and a good part of the
+   * face carries no joint at all. The flat planes come from a coarse lattice used
+   * the one way a cell can be used without becoming a net: every cell gets a flat
+   * value of its own and the boundary between two of them is a change of plane,
+   * with `plate` absent from `crack` and kept absent - a value discontinuity is an
+   * edge and a *darkened* one is a joint.
+   */
+  basalt: ['basalt-n', 'basalt-rgh', 'basalt-albedo', 'basalt-h'],
+  /**
+   * The cinder, which is the ashlands' shore and is **coarse gravel, a hand's
+   * width of a crest and nothing finer.** It sits between the turf and the cliff
+   * in value, because ash falls on things and a shore is where it lands.
+   *
+   * It carries no roughness for the reason every other course surface does not:
+   * the ground is built along the spline and has no uv.
+   */
+  cinder: ['cinder-n', 'cinder-albedo', 'cinder-h'],
+  /**
+   * The ashlands road, and it is **packed ash and grit, swept, and the sweep is
+   * the thing you read.** A road's detail has to say where the lane is from four
+   * hundred metres, and in the meadow that is `clay`'s red doing it with a
+   * chalk line on top; out here the road is a dark grey and the *sweep* - the
+   * paler grit raked down the middle of it and the packed, near-black ash either
+   * side - is the only contrast the surface has. So it is `uv: true` on the same
+   * argument as the clay's, at the same tile, and it carries a colour for the
+   * same reason the clay's does.
+   */
+  ashTrack: ['ashTrack-n', 'ashTrack-rgh', 'ashTrack-albedo', 'ashTrack-h'],
 };
 
 /** Every map name the whole library declares, de-duplicated and in order. */

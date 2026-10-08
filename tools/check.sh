@@ -58,10 +58,37 @@ done
 # the graph, and only on a whole run - one file on its own is not a graph
 if [ "$#" -eq 0 ]; then
   if (cd "$ROOT" && node "$HERE/wired.mjs" \
-        src/*.js meshes/palette.js meshes/maps.js); then
+        src/*.js meshes/palette.js meshes/maps.js meshes/biomes.js); then
     printf '  wired   %d modules\n' "$(ls -1 "$ROOT"/src/*.js | wc -l)"
   else
     fail=1
+  fi
+
+  # Two drawers writing one map name, and **a duplicate key in an object literal
+  # is legal JavaScript with no warning and no error**: `Object` takes the last
+  # assignment, the page draws the second field, and the file on disk is the
+  # second field and nobody knows the first one exists. `tools/inspect.html`
+  # audits `meshes/maps.js` and the folder, and **both of those are downstream of
+  # the drawer** - the manifest is right and the bytes are wrong, which is the one
+  # combination the audit cannot see.
+  #
+  # **This prints `cobblestone-albedo`, `cobblestone-n` and `cobblestone-rgh`
+  # today, and it is meant to.** It is a real defect in `meshes/build-textures.html`
+  # and it is left red on purpose, with the reason beside it, because **a gate
+  # taught to pass is the failure this whole county is written against**. It is
+  # also the gate that catches the next one, and the next one is more likely than
+  # the first.
+  #
+  # So it reports and it does not fail the run: the duplicate is a naming bug on a
+  # surface nothing wears, and the fix - renaming the limestone drawer - would
+  # change what an existing texture's name means to every surface that declares it.
+  # The bower's setts are a **new name** (`bowerSetts-*`) precisely because of it.
+  dup="$(awk '/^const DRAW = \{/,/^\};/' "$ROOT/meshes/build-textures.html" \
+          | grep -oE "'[a-zA-Z0-9]+-(albedo|n|rgh|em|tone)'" | sort | uniq -d | tr '\n' ' ')"
+  if [ -n "$dup" ]; then
+    printf '  note    two drawers write one map name, and the first is dead code: %s\n' "$dup"
+  else
+    printf '  drawers every map name is written once\n'
   fi
 fi
 

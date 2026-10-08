@@ -32,6 +32,7 @@
  * ================================================================== */
 import { COUNTY as C, FLOWER_COLORS as FLOWER_HEX, GREEN as GREEN_T, STONE as STONE_T } from '../meshes/palette.js';
 import { CONVERTED, MAPS, SURFACE, allMaps, allParts, mapSlots, mapsFor, slotFor } from '../meshes/maps.js';
+import { BIOMES, SET_ROLES } from '../meshes/biomes.js';
 import { THREE, $, clamp, smoothstep } from './core.js';
 import { LAMP_COLOUR } from './graphics.js';/* ================================================================== *
  * The meshes live in meshes/ as .glb files: a prop is written once and
@@ -41,17 +42,68 @@ import { LAMP_COLOUR } from './graphics.js';/* =================================
  * the water and the start and finish furniture all come from the track.
  * ================================================================== */
 const MESH_FILES = [
-  'conifer', 'evergreen', 'broadleaf', 'bush', 'rock', 'mossy-rock', 'tuft', 'marker', 'lily', 'lily-pad', 'reeds', 'seashell',
+  'conifer', 'evergreen', 'broadleaf', 'cherry-tree', 'bush', 'cactus', 'cactus-barrel', 'rock', 'mossy-rock', 'tuft', 'marker', 'lily', 'lily-pad', 'reeds', 'seashell',
   'lamp-post', 'lamp-glass', 'lantern-post', 'lantern-glass',
   'mushroom-red', 'mushroom-brown',
   'mushroom-giant', 'mushroom-pale', 'mushroom-rooted',
-  'lantern-pole', 'lantern-arch',
+  'lantern-pole', 'lantern-arch', 'candle-lantern',
+  // **And the bower's two**, beside the lantern arches and not in a block of
+  // their own: a piece in the county is not in a biome, and the table says so
+  // where the ashlands' eight are listed. `bower-arch` is one mesh and wears
+  // `metal-*`; `bower-foliage` is two meshes in one file, because it is two
+  // densities of one plant.
+  'bower-arch', 'bower-foliage', 'bower-litter',
   'hut', 'windmill', 'barn', 'well', 'scarecrow', 'crate', 'push-crate', 'fence',
   'corn-plot', 'sprout-plot',
   'palm', 'fountain',
   'watchtower',
-  'shell-bands', 'shell-swirl', 'shell-spots',
+  // **And one shell, and there is no `shell-` prefix to it.** The snail wore three
+  // whorls - `shell-bands`, `shell-swirl`, `shell-spots` - cut here from three numbers,
+  // and the shop had a row of three buttons that chose between them. The shell is now
+  // the reference model's own coil, cut out of `references/snailRef.glb` by
+  // `meshes/build-shell.html` and **one file**, so the key is the bare name: a key that
+  // is built by concatenation is a place where the file could be called something the
+  // loader never fetched, and `props['shell-' + style]` was exactly that shape.
+  'shell',
+  // **And the ashlands' eight**, and they are on this list rather than behind a
+  // branch: a file that is not named here is not loaded at all, so a biome that
+  // named a prop the loader never heard of would place nothing and say nothing -
+  // `scatter()` filters a null geometry out and the arrangement comes up a piece
+  // light. `tools/plan-test.mjs --biomes` is the gate that says so before a
+  // browser is ever asked, and `tools/e2e/biome.spec.js` is what checks the count
+  // in one.
+  'ash-tree', 'basalt-column', 'ash-tuft', 'vent', 'obsidian-shard',
+  'ash-scrub', 'ash-fallen', 'snag', 'pine',
   'snail',
+];
+/**
+ * **The wardrobe is the same library in two folders, and `MESH_FILES` does not
+ * become a list of paths.** The part-key logic below decides a prop's parts by
+ * slicing `name + '-'` off each mesh's own name, so a name has to be the file's
+ * bare name for that to work at all - and it is also the name `mapsFor()`,
+ * `propMatFor`, `matFor()` and `allParts()` are keyed by. So a set carries the
+ * folder it lives in and the prefix its names share, and the loader fetches
+ * `meshes/<dir>/<file>.glb`, validates it against `prefix + '-' + file`, and
+ * registers it under **the flat `'face-' + file`**. **The flat key is the whole
+ * of it**: nothing downstream learns that a second namespace exists, a face is
+ * looked up exactly the way a shell is, and `makeSnail()`'s `faceFor`/`hatFor`
+ * are one concatenation.
+ *
+ * Nothing here is scattered, so nothing here needs a placement call, and every
+ * geometry is marked `userData.shared` as usual - sixty-five racers and one
+ * plinth snail share sixteen buffers, and `dropCourse()` cannot free a
+ * face's geometry out from under a snail on the stable.
+ */
+const MESH_SETS = [
+  {
+    dir: 'faces', prefix: 'face',
+    files: ['plain', 'cheer', 'dollar', 'keen', 'smug', 'grim', 'tidal', 'winged', 'wild',
+      'googly', 'fangs', 'grin', 'crest', 'devil'],
+  },
+  {
+    dir: 'hats', prefix: 'hat',
+    files: ['straw', 'top-hat', 'propeller', 'sunglasses', 'bonnet', 'wizard', 'devil-horns'],
+  },
 ];
 const props = {};
 const propMat = {};
@@ -100,11 +152,23 @@ async function loadMeshes() {
   const loader = new GLTFLoader();
   const tex = await loadMapTextures();
   const live = CONVERTED_SET;
-  const loaded = await Promise.all(MESH_FILES.map(async (name) => {
+  // **Every file the county draws, as `{ name, path }` pairs.** The flat list and
+  // the two wardrobe sets are the same shape here, which is the point: the fetch
+  // asks for `path`, and everything below - the part slicing, the maps, the
+  // registry keys, the `foot` figure - sees only `name`, which is the bare file
+  // name for a prop and `'face-' + file` for a wardrobe piece. One loop over one
+  // list is why a face needs no special case anywhere in this function.
+  const jobs = MESH_FILES.map((name) => ({ name, path: 'meshes/' + name + '.glb' }));
+  for (const set of MESH_SETS) {
+    for (const file of set.files) {
+      jobs.push({ name: set.prefix + '-' + file, path: `meshes/${set.dir}/${file}.glb` });
+    }
+  }
+  const loaded = await Promise.all(jobs.map(async (job) => {
     $('boot').textContent = 'loading the meshes…';
-    return [name, await loader.loadAsync('meshes/' + name + '.glb')];
+    return [job.name, job.path, await loader.loadAsync(job.path)];
   }));
-  for (const [name, gltf] of loaded) {
+  for (const [name, path, gltf] of loaded) {
     const root = gltf.scene.getObjectByName(name) || gltf.scene.children[0];
     if (name === 'snail') { snailTemplate = root; continue; }
     // Most of these are one mesh. A lantern is two, because its paper is the
@@ -128,10 +192,10 @@ async function loadMeshes() {
       parts[''] = o.geometry; mats[''] = o.material;
     });
     const keys = Object.keys(parts);
-    if (!keys.length) throw new Error('no mesh in meshes/' + name + '.glb');
+    if (!keys.length) throw new Error('no mesh in ' + path);
     // a piece with parts and a mesh that is not one of them would draw as half
     // of itself, which is worse than not drawing at all
-    if (strays) throw new Error(`meshes/${name}.glb: ${strays} mesh(es) not named "${name}-part"`);
+    if (strays) throw new Error(`${path}: ${strays} mesh(es) not named "${name}-part"`);
     // every part of a piece draws in the first part's material unless its own
     // says otherwise, so a file with one material is one material and a file
     // with two gets two. The maps are named in the manifest, not embedded, and
@@ -233,7 +297,8 @@ function applyMaps(m, list, tex) {
 try {
   MAPS_TEX = await loadMeshes();
 } catch (err) {
-  $('boot').textContent = `Could not load the meshes from meshes/ (${MESH_FILES.length} files) — is the folder being served with the page?`;
+  const total = MESH_FILES.length + MESH_SETS.reduce((n, s) => n + s.files.length, 0);
+  $('boot').textContent = `Could not load the meshes from meshes/ (${total} files) — is the folder being served with the page?`;
   throw err;
 }
 /* ------------------------------------------------------------------ *
@@ -253,6 +318,33 @@ try {
 const gfxU = {
   uCloudAmt: { value: 0 }, uCloudTime: { value: 0 },
   uWindAmp: { value: 0 }, uWindTime: { value: 0 },
+  // The parallax march on the course surface's own -h map. One shared uniform
+  // object rather than one per material, because the march is fragment-bound
+  // and lives in the material's own program - the bottom tier gets it on the
+  // direct path and `needsComposer()` is unchanged. `uPomSteps` is 0 on the
+  // off and two-sided cells (the two-sided path takes two samples and not a
+  // loop), and the step count on the march cells. `uPomTwoSided` is 1 only on
+  // the two-sided cell, because the two-sided sample count and the march step
+  // count are different questions and one cell writes both.
+  //
+  // **And `uPomBisect` is its own uniform, and it could not be anything else.**
+  // The first cut derived it from the step count - `uPomSteps > 4.0` - on the
+  // argument that the bisection is on exactly the parallax cells and the cells
+  // are the only place it is decided. **Two cells are parallax and relief with
+  // the same step count**: relief 8 and parallax 8 both write 8, so a flag read
+  // off the number cannot tell them apart and relief 8 was silently drawing
+  // the parallax picture. It is the same sentence this county keeps arriving
+  // at - *the value that decides whether a resource is wanted is the setting*,
+  // and a setting two buttons share is a setting that cannot say which button
+  // is pressed.
+  //
+  // All three are written in `applyEffects()` in `post.js` the same
+  // one-line-per-effect shape as `uCloudAmt`, so a cell press is a uniform
+  // write and not a recompile, and the off path
+  // (`uPomSteps == 0.0 && uPomTwoSided == 0.0`) is byte-identical to today's
+  // d computation - a multiply-by-zero off is the answer, the same bargain
+  // `uCloudAmt` and `uWindAmp` make.
+  uPomSteps: { value: 0 }, uPomTwoSided: { value: 0 }, uPomBisect: { value: 0 },
 };
 const GLSL_NOISE = `
   float gfxHash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
@@ -275,6 +367,61 @@ const GLSL_WIND = `
         transformed.x += ( sin( uWindTime * 1.7 + vGfxW.x * 0.55 + vGfxW.z * 0.31 )
                          + 0.45 * sin( uWindTime * 4.3 - vGfxW.z * 0.9 ) ) * uWindAmp * bend;
         transformed.z += ( cos( uWindTime * 1.3 + vGfxW.z * 0.47 - vGfxW.x * 0.22 ) ) * uWindAmp * 0.55 * bend;`;
+
+/**
+ * **Whether the wind is compiled in at all**, and it is a compile-time decision
+ * and not a uniform - which is the whole of the change, and it is the third time
+ * this file has had to answer the same question about a gate.
+ *
+ * `uWindAmp` is written to zero by `applyEffects()` on every preset but the top
+ * two, and for a long time **the three lines above were in the program the whole
+ * time**: two `sin`, one `cos`, a `max` and three multiplies, run on every vertex
+ * of every wind-marked vertex in the county, multiplied by nothing. **Six thousand
+ * course tufts, the stable's own five thousand one hundred, and every foliage
+ * instance on the course** - and on a bower, whose foliage is the densest
+ * wind-marked geometry the county has. **A multiply by zero is an honest off for a
+ * value and it is not an honest off for a shader**: a uniform of zero leaves the
+ * instructions in and the work still done, which is the sentence `gfxU`'s own note
+ * above writes as a bargain and this is the case it does not hold for.
+ *
+ * **So the flag goes in `customProgramCacheKey` and the GLSL is omitted when it
+ * is off**, and the key is not optional. A `MeshStandardMaterial` and three's own
+ * `MeshNormalMaterial` both carry a `shaderID`, and three's program cache key is
+ * built from **that** plus the parameter booleans plus `customProgramCacheKey()` -
+ * **never from the injected source**. So two variants of one material with
+ * different wind in them are the same key, and the second `onBeforeCompile` to run
+ * would find the first one's program already in the cache and be handed it: **the
+ * meadow's grass would bend while the AO said it did not**, which is the ghost
+ * `gtaoWind()` was written to remove, arriving through the cache instead of
+ * through a hook. This is `useBiome()`'s own bug - the biome name in the key for
+ * exactly this reason - and it is the third time this file has had to answer it.
+ *
+ * **What it costs is one recompile when a player presses the wind cell**, on the
+ * three wind materials and the two occlusion ones - and the bargain is the one
+ * `app.js` already states for the lamp count: **a count that decides what gets
+ * compiled may not be a count the camera moves, and this one is a setting.** Both
+ * variants stay in three's cache afterwards, so pressing it back is a lookup.
+ */
+let windOn = 0;
+/** The materials whose program carries the wind, so a press of the cell recompiles
+ *  them and nothing else. Populated by `gfxSurface()` and `gtaoWind()` at the two
+ *  places the injection is put on. */
+const WIND_PROGRAMS = new Set();
+
+/**
+ * The wind cell's whole effect on the county's programs. **`0` at boot**, which is
+ * right: `GFX_DEFAULTS` has `fxWind: 0` and only Very high and Ultra switch it on,
+ * so a fresh install and four presets of six draw no wind at all - and the
+ * injection reads this at compile time, so the first frame is already the right
+ * shape.
+ */
+function setWindEnabled(on) {
+  const v = on ? 1 : 0;
+  if (v === windOn) return false;
+  windOn = v;
+  for (const m of WIND_PROGRAMS) m.needsUpdate = true;
+  return true;
+}
 
 /** The materials the wind is actually on, so a piece can be asked whether it
  * sways rather than the shader deciding it - see `windMark()`. */
@@ -317,6 +464,18 @@ function afterCompile(m, fn) {
  * the line the county's own triplanar injection has already replaced; going in
  * after it means this works whether or not the material had one, and it is still
  * before the model-view matrix is built.
+ *
+ * **And it is put on once and put back on after, rather than added to.** That is
+ * `useBiome()`'s doing: it re-runs `triplanarSets()` on this same material, and
+ * `triplanarSets()` **assigns** `onBeforeCompile` where this function chains
+ * behind whatever is there - so the wind and the cloud shade have to be re-chained
+ * after every course change or they are gone, and *chaining them a second time*
+ * puts a second `varying vec3 vGfxW;` and a second `uniform float uCloudAmt` in
+ * one shader. That is a redeclaration and not a warning: the material loses its
+ * program and draws wrong with nothing in the console but a compile error about
+ * something else entirely. So what the material carried before the injection is
+ * kept on it in `gfxBase` and the chain is rebuilt from that, which is the same
+ * bargain `waterFresnel()` strikes with its uniform and for the same reason.
  */
 function gfxSurface(m, wind) {
   // **Registered here and not in the injection below.** `onBeforeCompile` runs at
@@ -324,32 +483,84 @@ function gfxSurface(m, wind) {
   // piece in the first county built - would ask an empty set and go unmarked,
   // which is a wind that comes and goes with the density row.
   if (wind) WIND_MATS.add(m);
-  return afterCompile(m, (sh) => {
-    sh.uniforms.uCloudAmt = gfxU.uCloudAmt;
-    sh.uniforms.uCloudTime = gfxU.uCloudTime;
-    sh.uniforms.uWindAmp = gfxU.uWindAmp;
-    sh.uniforms.uWindTime = gfxU.uWindTime;
-    // the wind's own three lines are rewritten only for a surface that has it,
-    // so a ground material's program is not carrying a dead branch that reads a
-    // uniform and multiplies by zero on every vertex of a hundred-metre mesh
-    const bend = wind ? GLSL_WIND : '';
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>
+  if (m.userData.gfxBase === undefined) m.userData.gfxBase = m.onBeforeCompile || null;
+  const base = m.userData.gfxBase;
+  m.onBeforeCompile = function (sh, renderer2) {
+    if (base) base.call(this, sh, renderer2);
+    gfxInject(sh, wind);
+  };
+  // **And the wind flag goes into the cache key**, chained behind whatever key the
+  // material already carries rather than replacing it - the same bargain
+  // `gfxBase` strikes for `onBeforeCompile`, for the same reason: `useBiome()`
+  // writes a fresh key over these materials on every course build, and a key this
+  // function owned outright would be overwritten by the next biome and take the
+  // wind flag with it.
+  if (wind && !m.userData.gfxWindKeyed) {
+    m.userData.gfxWindKeyed = true;
+    WIND_PROGRAMS.add(m);
+    const prevKey = m.customProgramCacheKey ? m.customProgramCacheKey.bind(m) : () => '';
+    m.customProgramCacheKey = () => prevKey() + ':wind' + windOn;
+  }
+  return m;
+}
+/** The wind and the cloud shade on their own, so the chain above can be rebuilt
+ *  round them without keeping a second copy of them - and so `gfxSurface()` still
+ *  reads as one call at its four call sites. */
+function gfxInject(sh, wind) {
+  sh.uniforms.uCloudAmt = gfxU.uCloudAmt;
+  sh.uniforms.uCloudTime = gfxU.uCloudTime;
+  /* **The two wind uniforms are declared and assigned whatever the cell says, and
+   *  only the three lines of GLSL are gated** - and that split is the whole of a
+   *  bug that cost an evening.
+   *
+   *  Gating the uniforms on the same flag as the GLSL looks tidier and is wrong,
+   *  because of **what a cache hit does**: three builds the program cache key from
+   *  `customProgramCacheKey()` and, when the key it wants is already in
+   *  `materialProperties.programs`, it takes it **without calling
+   *  `onBeforeCompile` at all**. So the injection does not run, nothing is assigned,
+   *  and the material keeps whatever uniform set its *previous* build left on it.
+   *
+   *  And the previous build is the one that has just replaced it: three does
+   *  `materialProperties.uniforms = parameters.uniforms` on every fresh program, so
+   *  the no-wind build had just installed a uniform set with **no `uWindAmp` in it**.
+   *  The wind-on program came back out of the cache carrying three lines that read
+   *  a uniform which was no longer bound, an unbound uniform reads **0**, and the
+   *  canopy stood perfectly still with the cell lit: `uWindAmp * bend` with no
+   *  `uWindAmp`. **Pressing the wind cell a second time did nothing at all**, and
+   *  there was no GL error, no warning and no console line anywhere - which is the
+   *  whole of this project's complaint about quiet failures, arrived at from the
+   *  other direction.
+   *
+   *  So the uniforms are unconditional. **A uniform nobody references is stripped
+   *  by the compiler and costs nothing**, and an unconditional assignment is the
+   *  one that cannot be stale: whichever program three hands back, the two wind
+   *  uniforms are bound to the shared objects, and a program with the wind in it
+   *  moves and one without it does not. */
+  sh.uniforms.uWindAmp = gfxU.uWindAmp;
+  sh.uniforms.uWindTime = gfxU.uWindTime;
+  // **and the three lines themselves, which are the vertex work this is all about,
+  // are left out of the program entirely when the cell is off.** The cloud is a
+  // *fragment* cost behind a branch on one uniform, which is the bargain `gfxU` is
+  // written for and which holds; the wind is per-vertex work with no branch, so a
+  // uniform of zero leaves the instructions in and the work being done.
+  const bend = (wind && windOn) ? GLSL_WIND : '';
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>
         varying vec3 vGfxW;
         uniform float uCloudAmt, uCloudTime, uWindAmp, uWindTime;`)
-      .replace('#include <project_vertex>', `
+    .replace('#include <project_vertex>', `
         #ifdef USE_INSTANCING
           vGfxW = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
         #else
           vGfxW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
         #endif${bend}
         #include <project_vertex>`);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>
         varying vec3 vGfxW;
         uniform float uCloudAmt, uCloudTime;
         ${GLSL_NOISE}`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
+    .replace('#include <color_fragment>', `#include <color_fragment>
         if ( uCloudAmt > 0.0 ) {
           vec2 cp = vGfxW.xz * 0.014 + vec2( uCloudTime * 0.008, uCloudTime * 0.004 );
           float c = gfxNoise( cp ) * 0.62 + gfxNoise( cp * 2.7 ) * 0.28 + gfxNoise( cp * 6.1 ) * 0.10;
@@ -357,7 +568,6 @@ function gfxSurface(m, wind) {
           // edge: a soft multiply over the whole ground is a dirty lens
           diffuseColor.rgb *= mix( 1.0, 0.52, uCloudAmt * smoothstep( 0.46, 0.72, c ) );
         }`);
-  });
 }
 
 /**
@@ -373,6 +583,20 @@ function gfxSurface(m, wind) {
  * **The wind goes on the last two and not on the first three**, and see
  * `gfxSurface()` for the measurement of what it does when it goes on all five.
  *
+ * **And `mat.ashFoliage` is on the wind list beside `mat.grass`, and that is the
+ * whole of why it is a separate material at all.** The obvious move for a biome
+ * is to swap the turf set on `mat.grass` with the rest of them - and `mat.grass`
+ * is used in exactly two places: the course tufts `populate()` scatters, and the
+ * stable's own lawn, which plants five thousand one hundred more of them. So a
+ * biome swap on `mat.grass` is a lush green meadow rebuilt with an ash tuft's
+ * grain, on the stable, in the lobby, at the plinth - and the tell is a grey lawn
+ * that the course inspector does not have. **A material in this county is
+ * per-surface for the life of the page**: `dropCourse()` disposes geometry and
+ * instanced meshes and has never disposed a material, and a standing material
+ * nothing wears costs nothing. So the jar grows rather than mutates, which is the
+ * same call that made `mat.ramp` a second material instead of a flag on
+ * `mat.road`.
+ *
  * Called once at material setup and never again: the uniforms are shared, so
  * nothing about the program changes when a tier moves.
  */
@@ -380,9 +604,20 @@ let gfxSurfacesDone = false;
 function gfxSurfaceTargets() {
   if (gfxSurfacesDone) return;
   gfxSurfacesDone = true;
-  // the three surfaces of the ground, and the two that grow
+  // **and the biome first, before anything else on this list.** `useBiome()` writes
+  // `PAL` - the sixteen colours the surfaces are about to bake into their vertex
+  // colours - and it rebuilds the four `triplanarSets()` programs off the biome's
+  // four roles. It is here and not at the foot of the module **because `PAL` is
+  // declared below the module's own setup block**, and reading a `let` above its
+  // own declaration is a temporal dead zone: a `ReferenceError` on the module's
+  // first line, at boot, with nothing else wrong anywhere. This function is already
+  // "the only thing in this file that has to run exactly once and in one order -
+  // after the jar is built and before a frame is drawn", and standing the biome is
+  // exactly such a thing, because it needs the jar.
+  useBiome('temperate');
+  // the three surfaces of the ground, and the three that grow
   for (const m of [mat.course, mat.road, mat.ledge]) gfxSurface(m, false);
-  for (const m of [mat.grass, mat.foliage]) gfxSurface(m, true);
+  for (const m of [mat.grass, mat.foliage, mat.ashFoliage]) gfxSurface(m, true);
 }
 
 /**
@@ -398,49 +633,194 @@ function gfxSurfaceTargets() {
  * The bend is the same `GLSL_WIND` the surfaces wear, off the same two shared
  * uniforms, so the two programs cannot disagree about where the field is.
  *
- * **What cannot be shared is which pieces bend**, because the override material
- * is on the entire scene: a stone is instanced too, and a stone that sways in
- * the occlusion buffer and not in the colour is the same ghost a hand smaller.
- * So `uWindObj` is a per-object uniform, and `onBeforeRender` is the only hook a
- * vertex shader has for one - hence `windMark()`, which marks the pieces from
- * the same answer the beauty pass is given: the material they were planted in is
- * one the wind was injected into.
+ * **Which pieces bend is an attribute and not a uniform**, because a uniform is
+ * the one thing that cannot carry it. `WebGLRenderer.setProgram()` uploads a
+ * material's own uniforms inside `if ( refreshMaterial )`, and `refreshMaterial`
+ * is raised by `material.id !== _currentMaterialId` - *the material changing*.
+ * The occlusion buffer is one material for the whole county, because the
+ * override is set once and `renderer.render()` is called once with it, and
+ * `_currentMaterialId` is cleared once per `render()` and nowhere else. So a
+ * uniform written from `object.onBeforeRender` reached the GPU **once per pass**,
+ * carrying whichever piece happened to be first in the render list: either the
+ * entire county bent in the AO - the ground with it, and the top of Crag
+ * Ascent's lane carries a bend of 35.9, which at an amplitude of `0.055` is
+ * **1.98 m of the terrain itself**, the exact failure `gfxSurfaceTargets()`
+ * splits the wind off three materials to prevent - or nothing bent at all, which
+ * is the ghost this function was written to remove. **It was never a shader and
+ * never a hook**: the injection was right, the hook was right, and the hook had
+ * nowhere to write that the frame would read back.
+ *
+ * An attribute is the one thing a vertex shader can be told per piece that three
+ * really does re-read per piece, because the vertex array is bound on every draw.
+ * So the answer is **one float per vertex**, stamped on the geometry - which is
+ * the coarsest thing a piece has and the right one: a geometry wears one material
+ * in this county, `matFor()` and `partMat()` make a converted prop's material a
+ * function of its own geometry, and the seven unconverted props that wear a wind
+ * material are planted in one material each. It is also why `USE_INSTANCING` was
+ * never the gate it looked like - a stone is instanced too, and a stone that
+ * sways in the occlusion buffer and not in the colour is the same ghost a hand
+ * smaller.
+ *
+ * **The zero is a default and not an omission.** The county's own pieces carry
+ * the attribute; the ground, the road, a stone, the snail and three.js's own
+ * geometry do not, and `material.defaultAttributeValues` is how three says *this
+ * program reads a float the geometry may not carry*. It is the same fact
+ * `triplanarDetail()` lives with on the other side of this file: a missing
+ * attribute is not an error in WebGL, it is the value nobody wrote.
  */
-const gtaoWindU = { value: 0 };
 function gtaoWind(m) {
+  // the material's own defaults are kept and not replaced, on the same terms
+  // `waterFresnel()` keeps a material's uniform: a material outlives a pass
+  m.defaultAttributeValues = Object.assign({ gfxWind: [0] }, m.defaultAttributeValues);
+  // **Same registration and the same cache key as `gfxSurface()`**, and it has to
+  // be the same: this is the one material that makes the county's wind and its
+  // occlusion agree, so a press of the cell that recompiled the three surfaces and
+  // left this one would put the two back out of step - which is the ghost this
+  // function exists to remove, arriving because half the fix was applied.
+  if (!m.userData.gfxWindKeyed) {
+    m.userData.gfxWindKeyed = true;
+    WIND_PROGRAMS.add(m);
+    const prevKey = m.customProgramCacheKey ? m.customProgramCacheKey.bind(m) : () => '';
+    m.customProgramCacheKey = () => prevKey() + ':wind' + windOn;
+  }
   return afterCompile(m, (sh) => {
+    // **And the two uniforms are assigned in both states, for the reason
+    // `gfxInject()` sets out at length: three does not call `onBeforeCompile` when
+    // it takes a program from its cache, and the build before it replaced the
+    // material's uniform set with one that had no wind in it.** Here it is the
+    // occlusion buffer that would go stiff rather than the colour pass, and it is
+    // the worse of the two because the whole point of this function is that the
+    // two cannot disagree.
     sh.uniforms.uWindAmp = gfxU.uWindAmp;
     sh.uniforms.uWindTime = gfxU.uWindTime;
-    sh.uniforms.uWindObj = gtaoWindU;
+    // **The attribute, the varying and the three lines are injected only when the
+    // wind is on**, so with the cell off the occlusion pass's vertex shader is
+    // three's own and the county's six thousand tufts cost it nothing. Without
+    // the key above this material's two variants would be one program - three's
+    // `MeshNormalMaterial` carries a `shaderID`, so the key is built from that and
+    // never from the injected source - and the tufts would bend in the colour and
+    // stand still in the occlusion, which is the ghost, from the cache.
+    if (!windOn) return;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
+        attribute float gfxWind;
         varying vec3 vGfxW;
-        uniform float uWindObj, uWindAmp, uWindTime;`)
+        uniform float uWindAmp, uWindTime;`)
       .replace('#include <project_vertex>', `
         #ifdef USE_INSTANCING
           vGfxW = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
         #else
           vGfxW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
         #endif
-        if ( uWindObj > 0.5 ) {${GLSL_WIND} }
+        if ( gfxWind > 0.5 ) {${GLSL_WIND} }
         #include <project_vertex>`);
   });
 }
-/** Set round the piece rather than on the program, so the uniform is read after
- *  `afterCompile` has run - the very first frame of a pass's life draws its G-buffer
- *  before the shader exists, and a hook that wrote a uniform it had not got would
- *  drop the wind for that frame and for no other. */
-function gtaoWindOn() { gtaoWindU.value = 1; }
-function gtaoWindOff() { gtaoWindU.value = 0; }
-/** The mark itself, put on at the two places a piece is planted - `scatter()`
+/** The stamp itself, put on at the two places a piece is planted - `scatter()`
  *  for a course and `planted()` for the stable - beside the shadows row's flag
  *  and for the same reason: a flag applied by walking has to be reapplied every
- *  time the county is rebuilt, and a flag applied at the build is simply there. */
+ *  time the county is rebuilt, and a flag applied at the build is simply there.
+ *
+ *  One float per vertex for a whole InstancedMesh is wasteful and it is the
+ *  right trade: the geometry is shared by every racer and every course that draws
+ *  it, so a stamp on the mesh would have to be seven geometries instead of one,
+ *  and `dropCourse()` disposes geometry and would then have to know which of them
+ *  were clones. `userData.gfxWind` is the memory of the stamp, which is what makes
+ *  a second call free - `planted('conifer', ...)` runs twice on the stable, and a
+ *  `Float32Array` refilled over the whole vertex list each time is a buffer
+ *  upload for an answer that did not change. */
+function windGeom(geo) {
+  if (geo.userData.gfxWind !== undefined) return;
+  geo.userData.gfxWind = 1;
+  geo.setAttribute('gfxWind', new THREE.BufferAttribute(
+    new Float32Array(geo.attributes.position.count).fill(1), 1));
+}
 function windMark(im) {
   if (!WIND_MATS.has(im.material)) return im;
-  im.onBeforeRender = gtaoWindOn;
-  im.onAfterRender = gtaoWindOff;
+  windGeom(im.geometry);
   return im;
+}
+/**
+ * The reflection mask, and it is the same bargain as the wind's attribute one
+ * call lower: **one float per vertex, stamped where a piece is planted, read by
+ * the override material through the alpha of the buffer that render draws into.**
+ *
+ * **The number is the surface's reflectance looking straight into it - F0 - and
+ * not a strength, and that is the whole difference between a reflection and a
+ * mirror.** A dielectric reflects two to four per cent head-on, so a mark that
+ * meant "one, and reflect all of it" on a painted crate would be a lie the
+ * Fresnel term then undoes; with F0 in the mark, the crate's 0.04 and a mirror's
+ * 0.92 are the same shader and one number apart, and the thing being reflected is
+ * weighted by the surface's own physics rather than by a taste. **Water's is 0.02
+ * and that is the index of 1.33**, which is a constant and not a choice.
+ *
+ * **And it is the same number the material's own albedo carries for a metal**,
+ * because a metal's albedo *is* its reflectance - which is why the test cube on
+ * the stable is a polished metal and not a shiny ball, and why its mark and its
+ * colour are one number written twice. A mark that disagreed with the material
+ * would be a reflection the frame does not believe.
+ *
+ * **The sign is a flag.** A negative mark is a surface this pass has no normal
+ * for in the G-buffer - the water, which is `transparent` and writes no depth and
+ * is hidden out of that buffer on purpose - and it takes the world's up instead.
+ * The alternative was a second attribute and a second vertex buffer binding for
+ * one bit that is decided by *what kind of thing it is*, which is fixed at the
+ * plant site and written once per vertex like the value.
+ *
+ * **And the kind goes on the geometry rather than into a register**, which is the
+ * half that took two attempts. A `Set` of kinds, emptied at the top of each course
+ * build, cannot describe two screens that both stand at once: the lobby's pool and
+ * a course's are in different scenes and only one is drawn, so the register was
+ * either emptied below the thing that filled it (the tooltip said "no water on
+ * this course" on every course in the county) or accurate for one screen and
+ * about the other. **The report walks the scene that is being drawn** and asks each
+ * piece in it, so there is nothing to keep in step and nothing to clear.
+ */
+function reflectMark(geo, f0, kind) {
+  if (geo.userData.gfxReflect !== undefined) return geo;
+  const n = geo.attributes.position.count;
+  geo.userData.gfxReflect = f0;
+  geo.userData.gfxKind = kind;
+  geo.setAttribute('gfxReflect', new THREE.BufferAttribute(
+    new Float32Array(n).fill(f0), 1));
+  return geo;
+}
+
+/**
+ * The mark, read by the override material the county renders its flat colour
+ * buffer with, **and written into the alpha** - which is free and the beauty
+ * buffer's alpha is not, for a reason worth recording because it looks free:
+ * `GTAOPass`'s `blendMaterial` in `OUTPUT.Default` is `CustomBlending` with
+ * `blendSrcAlpha: DstAlphaFactor` and `blendDstAlpha: ZeroFactor`, so destination
+ * alpha is multiplied by itself every frame the pass runs and decays to nothing.
+ *
+ * **The geometry's own vertex colours are what the render writes to the colour
+ * channels**, so a piece with no `color` attribute comes out white - which is
+ * true of the bounce's buffer today and is not a mask's business.
+ *
+ * **The zero is a default and not an omission**, for the reason `gtaoWind()` gives
+ * at length: the ground, the road, a stone, the snail and three.js's own geometry
+ * carry no attribute, and the same program reads every one of them. A missing
+ * attribute in WebGL is not an error, it is the value nobody wrote - so a mark
+ * defaults to *nothing reflects*, which is the answer a county of opaque things
+ * wants.
+ */
+function gtaoReflect(m) {
+  m.defaultAttributeValues = Object.assign({ gfxReflect: [0] }, m.defaultAttributeValues);
+  return afterCompile(m, (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float gfxReflect;
+        varying float vGfxReflect;`)
+      .replace('#include <project_vertex>', `
+        vGfxReflect = gfxReflect;
+        #include <project_vertex>`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying float vGfxReflect;`)
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+        gl_FragColor.a = abs( vGfxReflect );`);
+  });
 }
 /** Once per material, and a material is longer-lived than a probe. The
  *  reflection row makes a probe and takes it away again, and this injection has
@@ -704,6 +1084,39 @@ function rippleWater(m, one, two) {
  */
 function triplanarSets(m, sets) {
   const live = sets.filter((s) => s && s.map);
+  /**
+   * **A set that named a map and did not get one is a quiet answer, and this is
+   * the branch that makes it quiet.** The filter above is what silently drops it:
+   * a surface that declares four sets and gets three files on disk comes up as a
+   * three-set material, `n` is one smaller, and `customProgramCacheKey` answers
+   * with a key **another material in the county already owns** - a `mat.road` that
+   * lost its third set answers `triplanarSets2Uv`, which is `mat.ledge`'s key. So
+   * the road draws with the flank's program, the setts never appear, and nothing
+   * anywhere is red: `meshes/maps.js` declared the names correctly and
+   * `plan-test.mjs --biomes` resolves them.
+   *
+   * **This is not hypothetical** - it is exactly what happens when a `SURFACE`
+   * entry is declared before the drawer that writes its PNGs has run. The warning
+   * is the noise it makes in a browser and `__snail.setsOf('mat.road')` is the
+   * assertion, because **a set list of two where three were declared is the whole
+   * failure in one number.**
+   */
+  sets.forEach((s, i) => {
+    if (s && s.name && !s.map) console.warn(`triplanarSets: set ${i} '${s.name}' has no map`);
+  });
+  /** The set names actually running, in order, for `__snail.setsOf()`. A test asks
+   *  the material and not the biome's table, because the table is what was asked
+   *  for and this is what was built. */
+  m.userData.setNames = live.map((s) => s.name || '?');
+  /** And whether each set actually got a height map, in the same order, for
+   *  `__snail.setHeightsOf()`. A set that declared a `-h` and got none - the
+   *  loader's quiet-failure path, where `detailOf` answers `null` and
+   *  `triplanarSets()` filters the set's height out and keeps its normal -
+   *  shows up here as a `false` in the register rather than in a picture: a
+   *  surface that marched on the normal alone is the same as a surface that
+   *  never had a `-h` at all, and the material's own register is the one
+   *  place that says so. */
+  m.userData.setHeights = live.map((s) => !!s.height);
   if (!live.length) return m;
   const n = live.length;
   for (let i = 0; i < n; i++) {
@@ -715,7 +1128,11 @@ function triplanarSets(m, sets) {
       console.warn(`triplanarSets: set ${i} colour scale ${s.colourScale} is not the normal's ${s.scale}`);
     }
   }
-  const K = ['X', 'Y', 'Z'];
+  /** The weight a vertex gives a set is the set's **letter**, and there are four
+   *  letters now. **`'W'` is not the fourth axis** - `detailW` is a *weight*, not
+   *  a vector, and the `w` of `vDetailW` is the fourth set's share of this
+   *  vertex and nothing to do with world space. */
+  const K = ['X', 'Y', 'Z', 'W'];
   /** Whether a set is projected by the lane's own frame rather than triplanar. */
   const byUv = (s) => !!s.uv;
   const anyUv = live.some(byUv);
@@ -727,37 +1144,202 @@ function triplanarSets(m, sets) {
     const s = v === undefined ? String(d) : String(v);
     return /[.eE]/.test(s) ? s : s + '.0';
   };
+/**
+   * The POM march, written out once per material and shared by every set that
+   * carries a `-h` map. It is a helper rather than inline so that the off path
+   * is byte-identical to today's `d` computation: a set with no height map,
+   * or the whole branch off (`uPomSteps == 0.0 && uPomTwoSided == 0.0`),
+   * answers `vec2(0.0)` and the normal map is sampled at its current uv.
+   *
+   * **A march that does not know where the eye is is not a parallax march.**
+   * It is a hill-climb along a fixed diagonal: the same offset from every
+   * angle, which is a bias in the normal lookup rather than depth, and it is
+   * why the first cut of this read as lacklustre with every cell measurably
+   * different from every other and none of them standing up off the surface.
+   * So the two things below are the whole of the fix, and they are the two
+   * halves of one question - **which way the eye's ray runs across the tile,
+   * and how far along it the ray travels before it leaves the relief.**
+   *
+   * `ray` answers the first: the view ray in the set's own two axes. It is the
+   * world ray from `cameraPosition` less the part of it that runs *into* the
+   * surface, which is the surface's own frame the march then reads - the
+   * dominant world plane's axes for a triplanar set, and **the lane's own**
+   * (`fwd`, `right`) for a uv set, which is what `trackR` carries and is the
+   * reason the ribbon and the flank grew the attribute.
+   *
+   * `walk` answers the second: `tl / vn` is the tangent of the angle between
+   * the ray and the surface normal, so it is 0 looking straight down and grows
+   * without bound at a grazing angle. **Which is why it is capped**: a march
+   * that walks off its own tile is a seam, and the cap is the same bargain the
+   * SSR pass strikes with its `uThick`.
+   */
+  const POM_STEPS_MAX = 12;
+  const pomHelperGLSL = (i, s) => {
+    const k = K[i];
+    if (!s.height) return `vec2 pomO${i}( vec3 an ) { return vec2( 0.0 ); }`;
+    const T = g1(s.thickness, 0.05);
+    const S = g1(s.scale, 1);
+    // **The eye's ray, in the set's own two axes.** `cameraPosition` is three's
+    // own uniform and `vTriW` is this material's world position, so the ray is
+    // exact rather than reconstructed; `vTriWN` is the surface's own world
+    // normal, which is what takes the into-the-surface part out of it.
+    const ray = s.uv ? `
+      vec3 pw = normalize( cameraPosition - vTriW );
+      vec3 nw = normalize( vTriWN );
+      vec3 vt = pw - nw * dot( pw, nw );
+      float rl = length( vTrackR );
+      if ( rl < 0.0001 ) return vec2( 0.0 );
+      vec3 rg = vTrackR / rl;
+      // course.js builds right as cross(fwd, up), so fwd is the other way round
+      // the same cross and a uv set's x is arc length along the lane
+      vec3 fw = cross( vec3( 0.0, 1.0, 0.0 ), rg );
+      vec2 dir = vec2( dot( vt, fw ), dot( vt, rg ) );`
+      : `
+      vec3 pw = normalize( cameraPosition - vTriW );
+      vec3 nw = normalize( vTriWN );
+      vec3 vt = pw - nw * dot( pw, nw );
+      vec2 dir = vt.zy;
+      if ( an.y > an.x && an.y > an.z ) dir = vt.xz;
+      if ( an.z > an.x && an.z > an.y ) dir = vt.xy;`;
+// **The unit direction and the uv distance the ray covers across the whole
+      // thickness.** `tl / vn` is the **tangent** of the angle between the ray
+      // and the surface normal - not its cotangent, which is the half of this
+      // that is easy to get backwards and the half that makes the effect look
+      // like nothing: a ray straight down the normal runs no distance across
+      // the surface at all, so a floor seen from directly above has **no**
+      // parallax, and a ray along the floor crosses the whole thickness many
+      // times over. `vn / tl` is the other way round and gives a floor its
+      // largest displacement from directly overhead, which is the exact
+      // inverse of what a relief is.
+      //
+      // Both guards are `return` rather than a divide: a ray that runs down
+      // the normal has no tangential part, and the honest answer there is no
+      // offset - which is what a flat-looking surface seen from above is
+      // supposed to look like.
+    const walk = `
+      float vn = abs( dot( pw, nw ) );
+      float tl = length( dir );
+      if ( tl < 0.0001 || vn < 0.0001 ) return vec2( 0.0 );
+      vec2 dn = dir / tl;
+      float mx = min( ${T} * tl / vn, ${T} * 8.0 );`;
+    // The two-sided cell: two samples and the ray's own line between them, so
+    // the crossing is where `h0 + (h1 - h0) * f` meets `1 - f` - one division,
+    // no loop, no bisection. It breaks down at an oblique angle, which is why
+    // it is the floor and not the ceiling.
+    const twoSided = `
+      vec2 pomTwoSided${i}( vec2 uv, vec3 an ) {
+        if ( uPomTwoSided <= 0.0 ) return vec2( 0.0 );
+        ${ray}
+        ${walk}
+        float h0 = texture2D( dH${k}, uv ).r;
+        float h1 = texture2D( dH${k}, uv + dn * mx ).r;
+        return dn * ( mx * clamp( ( 1.0 - h0 ) / max( 0.0001, h1 - h0 + 1.0 ), 0.0, 1.0 ) );
+      }`;
+    // The coarse walk, and the bisection on the parallax cells only. The walk
+    // steps `mx` across in `uPomSteps` pieces, testing each against **the ray's
+    // own height at that step** (`1 - t`) rather than against the previous
+    // sample - a march that compares samples with each other is a hill-climb
+    // and finds a local maximum, not the place the ray goes under the surface.
+    // The bisection then halves the last interval four times, which is what a
+    // parallax map buys over a relief one: the crown resolves to a fraction of
+    // a step rather than to half of one.
+    const march = `
+      vec2 pomMarch${i}( vec2 uv, vec3 an ) {
+        if ( uPomSteps <= 0.0 ) return vec2( 0.0 );
+        ${ray}
+        ${walk}
+        float dt = 1.0 / uPomSteps;
+        float t = 0.0;
+        vec2 hit = uv;
+        bool found = false;
+        for ( int i = 0; i < ${POM_STEPS_MAX}; i ++ ) {
+          if ( float( i ) >= uPomSteps ) break;
+          t = dt * ( float( i ) + 1.0 );
+          vec2 suv = uv + dn * ( mx * t );
+          if ( texture2D( dH${k}, suv ).r >= 1.0 - t ) { hit = suv; found = true; break; }
+        }
+        // **A ray that never goes under the relief within the thickness has no
+        // intersection**, and the honest answer is no offset rather than the
+        // far end of the walk - a march that always returns something is a
+        // smear with a uniform tint rather than a surface with depth on it.
+        if ( !found ) return vec2( 0.0 );
+        if ( uPomBisect > 0.5 ) {
+          float lo = max( 0.0, t - dt ), hi = t;
+          for ( int j = 0; j < 4; j ++ ) {
+            float md = 0.5 * ( lo + hi );
+            if ( texture2D( dH${k}, uv + dn * ( mx * md ) ).r >= 1.0 - md ) hi = md; else lo = md;
+          }
+          hit = uv + dn * ( mx * hi );
+        }
+        return hit - uv;
+      }`;
+    // The dominant plane of a triplanar set, and the march on it: the two
+    // non-dominant projections keep the plain normal-map offset, which is the
+    // whole of what a triplanar set's march is. A uv set marches in the lane's
+    // own frame - one uv, one march, no dominance question.
+    // `an` is the normalised absolute world normal, **a parameter and not a
+    // global**, because a triplanar set's ray is read on whichever of the three
+    // planes is dominant and that is a question only the caller's `an` answers;
+    // a helper that reached out for it would be reaching for a local that is
+    // not in scope in every block that asks for a march.
+    const dominant = s.uv
+      ? `return pomTwoSided${i}( vTrackUv * ${S}, an ) + pomMarch${i}( vTrackUv * ${S}, an );`
+      : `
+        vec2 uv = vTriW.zy * ${S};
+        if ( an.y > an.x && an.y > an.z ) uv = vTriW.xz * ${S};
+        if ( an.z > an.x && an.z > an.y ) uv = vTriW.xy * ${S};
+        // The triplanar sets march the dominant plane only: the two
+        // non-dominant projections keep the plain normal-map offset, which is
+        // the whole of what a triplanar set's march is. The march runs on the
+        // dominant plane's uv - the one that is the surface's own frame - and
+        // the two other projections are plain.
+        return pomTwoSided${i}( uv, an ) + pomMarch${i}( uv, an );`;
+    return twoSided + '\n' + march + `
+      vec2 pomO${i}( vec3 an ) {
+        if ( uPomSteps <= 0.0 && uPomTwoSided <= 0.0 ) return vec2( 0.0 );
+        ${dominant}
+      }`;
+  };
   const slope = (i) => {
     if (i >= n) return '';
     const s = live[i], k = K[i];
-    // **A set with a `uv` is sampled once, in the lane's frame.** A triplanar set
-    // is sampled three times and blended by the surface's three axes, which is
-    // the right thing for a surface that is metres across and was built out of a
-    // height field: there is no direction in it to prefer. A track has one. It is
-    // a strip that bends, and a track's grain, its sweep and the direction a
-    // snail runs all lie along it, so a world-projected map stamps the same
-    // pattern at the same place in space whatever the lane is doing there, and
-    // on a corner the grain runs across the racing line.
-    //
-    // So the road and its flank carry `trackUv` - **arc length along the lane in
-    // `x` and metres out from the centre line in `y`**, both in metres and both
-    // fed through the same `scale` as a projected coordinate, so a set's tile is
-    // the same length whichever way it is drawn - and a uv set is one fetch
-    // instead of three, taken in a frame that turns with the track.
-    if (byUv(s)) return `
+      // **A set with a `uv` is sampled once, in the lane's frame.** A triplanar set
+      // is sampled three times and blended by the surface's three axes, which is
+      // the right thing for a surface that is metres across and was built out of a
+      // height field: there is no direction in it to prefer. A track has one. It is
+      // a strip that bends, and a track's grain, its sweep and the direction a
+      // snail runs all lie along it, so a world-projected map stamps the same
+      // pattern at the same place in space whatever the lane is doing there, and
+      // on a corner the grain runs across the racing line.
+      //
+      // So the road and its flank carry `trackUv` - **arc length along the lane in
+      // `x` and metres out from the centre line in `y`**, both in metres and both
+      // fed through the same `scale` as a projected coordinate, so a set's tile is
+      // the same length whichever way it is drawn - and a uv set is one fetch
+      // instead of three, taken in a frame that turns with the track.
+      //
+      // **When the set carries a `-h` map and the march is wanted**, the normal's
+      // uv is offset by the POM walk on that set, and the two-sided path offsets
+      // it by the crossing between two samples instead. The `pOff` half is that
+      // offset: zero when the set has no height map or the march is off, and the
+      // march's answer otherwise. The non-dominant projections keep the plain
+      // offset - the march runs on the dominant plane only, which is the whole
+      // of what a triplanar set's march is, and a uv set marches in the lane's
+      // own frame.
+      if (byUv(s)) return `
           if (vDetailW.${k.toLowerCase()} > 0.002) {
-            d += (texture2D(dN${k}, vTrackUv * dS${k}).xy * 2.0 - 1.0)
+            d += (texture2D(dN${k}, vTrackUv * dS${k} + pOff${i}).xy * 2.0 - 1.0)
                * (vDetailW.${k.toLowerCase()} * dK${k});
           }`;
-    return `
+      return `
           if (vDetailW.${k.toLowerCase()} > 0.002) {
             vec2 t = vec2(0.0);
-            t += (texture2D(dN${k}, vTriW.zy * dS${k}).xy * 2.0 - 1.0) * an.x;
-            t += (texture2D(dN${k}, vTriW.xz * dS${k}).xy * 2.0 - 1.0) * an.y;
-            t += (texture2D(dN${k}, vTriW.xy * dS${k}).xy * 2.0 - 1.0) * an.z;
+            t += (texture2D(dN${k}, vTriW.zy * dS${k} + pOff${i}).xy * 2.0 - 1.0) * an.x;
+            t += (texture2D(dN${k}, vTriW.xz * dS${k} + pOff${i}).xy * 2.0 - 1.0) * an.y;
+            t += (texture2D(dN${k}, vTriW.xy * dS${k} + pOff${i}).xy * 2.0 - 1.0) * an.z;
             d += t * (vDetailW.${k.toLowerCase()} * dK${k});
           }`;
-  };
+    };
   const tint = (i) => {
     if (i >= n) return '';
     const s = live[i], k = K[i];
@@ -765,15 +1347,15 @@ function triplanarSets(m, sets) {
     if (byUv(s)) return `
           if (vDetailW.${k.toLowerCase()} > 0.002) {
             float f = vDetailW.${k.toLowerCase()} * ${g1(s.colourAmount, 1)};
-            dc += texture2D(dC${k}, vTrackUv * dS${k}).rgb * (f * ${g1(s.colourGain, 1)});
+            dc += texture2D(dC${k}, vTrackUv * dS${k} + pOff${i}).rgb * (f * ${g1(s.colourGain, 1)});
             dsum += f;
           }`;
     return `
           if (vDetailW.${k.toLowerCase()} > 0.002) {
             vec3 t = vec3(0.0);
-            t += texture2D(dC${k}, vTriW.zy * dS${k}).rgb * an.x;
-            t += texture2D(dC${k}, vTriW.xz * dS${k}).rgb * an.y;
-            t += texture2D(dC${k}, vTriW.xy * dS${k}).rgb * an.z;
+            t += texture2D(dC${k}, vTriW.zy * dS${k} + pOff${i}).rgb * an.x;
+            t += texture2D(dC${k}, vTriW.xz * dS${k} + pOff${i}).rgb * an.y;
+            t += texture2D(dC${k}, vTriW.xy * dS${k} + pOff${i}).rgb * an.z;
             float f = vDetailW.${k.toLowerCase()} * ${g1(s.colourAmount, 1)};
             dc += t * (f * ${g1(s.colourGain, 1)});
             dsum += f;
@@ -783,6 +1365,7 @@ function triplanarSets(m, sets) {
     const k = K[i];
     const d = [`uniform sampler2D dN${k};`, `uniform float dS${k};`, `uniform float dK${k};`];
     if (s.colour) d.push(`uniform sampler2D dC${k};`);
+    if (s.height) d.push(`uniform sampler2D dH${k};`);
     return d.join('\n        ');
   }).join('\n        ');
   m.onBeforeCompile = (sh) => {
@@ -792,17 +1375,40 @@ function triplanarSets(m, sets) {
       sh.uniforms['dS' + k] = { value: s.scale };
       sh.uniforms['dK' + k] = { value: s.strength === undefined ? 1 : s.strength };
       if (s.colour) sh.uniforms['dC' + k] = { value: s.colour };
+      if (s.height) {
+        sh.uniforms['dH' + k] = { value: s.height };
+        // **The thickness is a GLSL literal and not a uniform**, the way
+        // `colourGain` is: it is a property of the map - the biome's own
+        // measured crown-to-joint distance in tile fractions - and a march
+        // whose depth is a number the machine can change is a march whose
+        // depth is no longer the map's. So there is no `dT` uniform to write,
+        // and that is the whole of why there is not one.
+      }
     });
+    // The march's three shared uniforms, written onto every course-surface
+    // program the same way `gfxInject()` writes `uCloudAmt`: one call at
+    // both chain sites, so the off path (`uPomSteps == 0.0 && uPomTwoSided ==
+    // 0.0`) is byte-identical to today's `d` computation and a cell press is
+    // a uniform write and not a recompile.
+    sh.uniforms.uPomSteps = gfxU.uPomSteps;
+    sh.uniforms.uPomTwoSided = gfxU.uPomTwoSided;
+    // **And the third of the three**, which is the one a first cut leaves out:
+    // a uniform the shader declares and nobody hands it reads zero forever, so
+    // the bisection is silently off on every cell and relief 8 and parallax 8
+    // come back **byte-identical** - a wrong picture with no error anywhere,
+    // and the only thing that can see it is two cells measured against each
+    // other rather than against the row's off cell.
+    sh.uniforms.uPomBisect = gfxU.uPomBisect;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-        attribute vec3 detailW;
-        ${anyUv ? 'attribute vec2 trackUv;\nvarying vec2 vTrackUv;' : ''}
-        varying vec3 vDetailW;
+        attribute vec4 detailW;
+        ${anyUv ? 'attribute vec2 trackUv;\nattribute vec3 trackR;\nvarying vec2 vTrackUv;\nvarying vec3 vTrackR;' : ''}
+        varying vec4 vDetailW;
         varying vec3 vTriW;
         varying vec3 vTriWN;`)
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
         vDetailW = detailW;
-        ${anyUv ? 'vTrackUv = trackUv;' : ''}
+        ${anyUv ? 'vTrackUv = trackUv;\nvTrackR = trackR;' : ''}
         #ifdef USE_INSTANCING
           vTriWN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal);
         #else
@@ -816,22 +1422,54 @@ function triplanarSets(m, sets) {
         #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vDetailW;
-        ${anyUv ? 'varying vec2 vTrackUv;' : ''}
+        varying vec4 vDetailW;
+        ${anyUv ? 'varying vec2 vTrackUv;\nvarying vec3 vTrackR;' : ''}
         varying vec3 vTriW;
         varying vec3 vTriWN;
-        ${decls}`)
-      .replace('#include <normal_fragment_maps>', `
-        {
-          vec3 an = abs(normalize(vTriWN));
-          an /= (an.x + an.y + an.z);
-          // The same three projections, once per set, and each one weighted by
-          // its share of the vertex. Weighting the **slope** rather than the
-          // finished normal is what makes this a blend: two sets' slopes sum,
-          // and a normal is taken of the sum at the end, so half a vein and half
-          // a blade is a surface with half of each in it rather than two surfaces
-          // averaged.
-          vec2 d = vec2(0.0);${slope(0)}${slope(1)}${slope(2)}
+uniform float uPomSteps, uPomTwoSided, uPomBisect;
+         ${decls}
+         // **And the marches themselves, held in globals rather than in a local.**
+         // They are worked out in the colour include and read again in the
+         // normal's, because three runs the colour include first
+         // and a value a local cannot outlive is a value one of the two has to
+         // march for itself - **and a march per fragment is a march whose
+         // colour and whose normal can disagree**, which is the one thing the
+         // displacement must not do: a sett's crown is pale and its joint is
+         // dark, so displacing the normal alone paints the relief of one stone
+         // onto the colour of another and reads as a smear rather than as a
+         // floor. One march, two reads.
+         ${live.map((_, i) => `vec2 pOff${i};`).join('\n         ')}
+         // The POM march, one helper for every set that carries a -h map. It is
+         // gated by the two shared uniforms so that the off path
+         // (uPomSteps == 0.0 && uPomTwoSided == 0.0) returns vec2(0.0) and the
+         // normal map is sampled at its current uv - byte-identical to today's
+         // d. pomMarch is the coarse walk and bisection on the parallax cells
+         // only, and uPomBisect is what says which those are rather than the
+         // step count doing it; pomTwoSided is two samples and a crossing on
+         // the two-sided cell.
+         // The triplanar sets march the dominant plane only - the two
+         // non-dominant projections keep the plain normal-map offset - and a
+         // uv set marches in the lane's own frame: one uv, one march, no
+         // dominance question.
+         ${live.map((s, i) => pomHelperGLSL(i, s)).join('\n        ')}
+       `)
+       .replace('#include <normal_fragment_maps>', `
+         {
+           vec3 an = abs(normalize(vTriWN));
+           an /= (an.x + an.y + an.z);
+           // The POM branch, gated by the two shared uniforms so that the off
+           // path (uPomSteps == 0.0 && uPomTwoSided == 0.0) samples the normal
+           // at its current uv and is byte-identical to today's d. When a
+           // march is wanted, each set's normal uv is shifted by its own
+           // pOff, which the colour include has already worked out; the two-sided
+           // path shifts it by one crossing instead, and the parallax cells add
+           // the bisection. The triplanar sets march the dominant plane
+           // only - the two non-dominant projections keep the plain
+           // normal-map offset - and a uv set marches in the lane's own
+           // frame. The pOff for a set with no -h map is zero and its
+           // slope is the plain normal-map one, so the off path is today's
+           // d and not a second copy of it.
+          vec2 d = vec2(0.0);${live.map((_, i) => slope(i)).join('')}
           vec3 wn = normalize(normalize(vTriWN) + vec3(d, 0.0));
           normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
         }`)
@@ -839,8 +1477,12 @@ function triplanarSets(m, sets) {
         {
           vec3 an = abs(normalize(vTriWN));
           an /= (an.x + an.y + an.z);
+          // **The marches, here rather than in the normal's block**, because
+          // three puts the colour first and both halves of a set's surface have
+          // to be displaced by the same amount - see the globals' note above.
+          ${live.map((s, i) => `pOff${i} = ${s.height ? `pomO${i}( an )` : 'vec2(0.0)'};`).join('\n          ')}
           vec3 dc = vec3(0.0);
-          float dsum = 0.0;${tint(0)}${tint(1)}${tint(2)}
+          float dsum = 0.0;${live.map((_, i) => tint(i)).join('')}
           // and the same for the colour: a weighted mean of the sets' detail
           // rather than a chain of multiplies, so a surface that is half turf and
           // half stone is half of each map and not one map laid over the other
@@ -858,6 +1500,24 @@ function triplanarSets(m, sets) {
   m.customProgramCacheKey = () => 'triplanarSets' + n + (anyUv ? 'Uv' : '');
   return m;
 }
+
+/**
+ * The biome that is standing. **It is declared here rather than beside the four
+ * functions that write it**, because the module-scope block at the foot of this
+ * file calls `useBiome()` to establish `temperate`, and **a `let` read above its
+ * own declaration is a temporal dead zone**: a `ReferenceError` on the module's
+ * first line, at boot, with nothing else wrong anywhere. The functions live where
+ * they do because they are only ever called from here and from `race.js`; the
+ * variable has to be above the first caller.
+ *
+ * It is a `let` and a getter and not an exported pair of assignable bindings
+ * because **a module's live bindings are read-only from outside** - see
+ * `clearRegister()`/`standingReport()` and `stageOf()`/`buildStable()` for the rest
+ * of this rule in this county.
+ */
+let standingBiome = null;
+/** And the biome that is standing, read. */
+const biomeNow = () => standingBiome || BIOMES.temperate;
 
 const mat = {
   /**
@@ -951,6 +1611,91 @@ const mat = {
     vertexColors: true, roughness: 0.35,
     emissive: LAMP_COLOUR, emissiveIntensity: 0, transparent: true, opacity: 0.9,
   }),
+  /* ---- the four panes of a candle lantern, and they are the only surface
+   * in the county that is drawn at a third of itself ------------------------ *
+   * `lampGlass` above is a lamp's **globe** and this is a lantern's **window**,
+   * and the difference is 0.9 against 0.34 and not a taste. A globe is a solid
+   * of blown glass with a burner inside it and you are meant to read the light
+   * off it; a pane is four millimetres of flat glass with a candle behind it, and
+   * at 0.9 the candle is behind two panes of tint and the lantern is a coloured
+   * box with something you half expect to see and cannot.
+   *
+   * **`depthWrite` is off and that is what makes four of them work.** The panes
+   * are unwelded - welded into one box, the far pane draws behind the near one -
+   * so each one is drawn in buffer order against a depth buffer that holds only
+   * the frame and the wax. A pane writes no depth, so all four test against the
+   * *solid* parts of the lantern and blend over each other, and looking through
+   * a corner of the lantern is two panes of tint, which is what looking through
+   * a corner of a lantern is. Switch the depth write on and the fourth pane
+   * drawn wins the whole box: the lantern turns inside out and shows you its own
+   * back wall from the inside.
+   *
+   * And **it has no emissive and no emissive map, which is the second half of
+   * what this material is for.** `mat.paper` and `mat.lampGlass` both burn in
+   * `LAMP_COLOUR`, which is the warm cream every street lamp in the county is -
+   * and an emissive is *not* multiplied by the vertex colour, so a pane carrying
+   * one would glow cream on a cyan lantern and the tint would only be on the
+   * glass's own surface. The reference's cyan lantern is cyan all the way out to
+   * its corners because the light behind it is cyan, and the light is coloured by
+   * name off `lampPosts[].colour`; so a pane needs no light of its own, it needs
+   * to be lit by the one in the middle of it, and the only thing that costs is
+   * the transparent pass. This is the same rule the county's grass is on from the
+   * other end: **a surface either gives out light or is given it, and never
+   * both.** */
+  /* ---- the wax in a candle lantern, and it is `mat.paper` with one line
+   * taken out of it ------------------------------------------------------- *
+   * **A material's emissive is not multiplied by its vertex colour**, which is a
+   * fact about three's fragment shader and not a matter of taste: `vec3
+   * totalEmissiveRadiance = emissive;` and `emissiveColor` are the only two
+   * things that touch it, and `vColor` is not one of them. `vColor` reaches
+   * `diffuseColor` and stops there. So every lit thing in the county that wears
+   * an instance tint - a paper lantern, a lamp globe - takes its colour in the
+   * *diffuse* and burns warm cream out of the *emissive*, and it has been fine
+   * until now because a paper lantern's own glow is a small warm lift on a
+   * surface the hour is already lighting.
+   *
+   * A candle's wax is the one surface in the county where that stops working, and
+   * the numbers are why. The point light in a candle lantern sits on the wick,
+   * **on the axis of the wax and above it**, and a light on the axis of a closed
+   * cylinder gives that cylinder nothing on its sides: the surface normal points
+   * outwards and the light is inwards of it, so `N · L` is negative over the
+   * whole of the flank however bright the lamp is. Raised the flame does not help
+   * and lowering it into the wax does not either - the dot product is negative
+   * either way, and inside the wax it is negative for the top as well. So the
+   * one surface the reference photographs as the brightest thing in the lantern -
+   * a glowing pillar of coloured wax - is the one surface the engine cannot
+   * light, and it came out **a dark cylinder standing in a lit glass box**.
+   *
+   * A wax is translucent and the light that lights it goes *into* it at the top
+   * and comes out of the flank, and that is a second bounce three does not have.
+   * So it is written down instead: `totalEmissiveRadiance *= vColor` under
+   * `emissivemap_fragment`, which puts the instance tint back into the glow the
+   * one place it was missing, and the wax is a **tinted emitter** - a red
+   * lantern's candle really is red and a cyan one really is cyan.
+   *
+   * **The flame does not get it**, and that is the other half of the reference.
+   * A candle's core is paler than everything around it whatever colour the wax
+   * is, so the flame stays in `mat.paper` and burns its own untinted cream: hot
+   * core, coloured body. And it is the reason this is a separate material rather
+   * than a flag on `mat.paper` - `mat.paper` is on every paper lantern in the
+   * county and turning its glow into its tint would repaint all of them. */
+  candleWax: afterCompile(new THREE.MeshStandardMaterial({
+    color: 0xffffff, vertexColors: true, roughness: 0.9,
+    emissive: LAMP_COLOUR, emissiveIntensity: 0,
+  }), (sh) => {
+    if (!/emissivemap_fragment/.test(sh.fragmentShader)) return;
+    sh.fragmentShader = sh.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      '#include <emissivemap_fragment>\n'
+      + '#if defined( USE_COLOR ) || defined( USE_INSTANCING_COLOR )\n'
+      + '\ttotalEmissiveRadiance *= vColor;\n'
+      + '#endif'
+    );
+  }),
+  lanternPane: new THREE.MeshStandardMaterial({
+    color: 0xffffff, vertexColors: true, roughness: 0.12,
+    transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide,
+  }),
   wood: new THREE.MeshStandardMaterial({ color: 0xe6dfcc, roughness: 0.85 }),
   vcol: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }),
   // Iron, and it is the county's only metal and **the fallback and not the answer**
@@ -960,6 +1705,31 @@ const mat = {
   // with it is grey plastic, and that is the picture the setting is here to catch.
   metal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.34, metalness: 1.0 }),
   grass: new THREE.MeshStandardMaterial({ color: 0x7c9a4a, roughness: 1.0, side: THREE.DoubleSide }),
+  /**
+   * The ashlands' tuft, and **it is a second material and not a swap of the
+   * first** because `mat.grass` is the stable's as well as the courses' - see
+   * `gfxSurfaceTargets()`, which is where the wind goes on it, and the whole
+   * argument for not moving `mat.grass` at all.
+   *
+   * **Its colour is a dark grey and not a pale one, and the number is the
+   * meadow's own ratio rather than a taste.** A tuft wears its instance tint
+   * *multiplied* over its own vertex colours, and the blades run `ashStem` to
+   * `ashStemTip` - mean about 0.44 linear, the ashlands' own mean. The meadow's
+   * arithmetic says where the material's colour has to sit: the meadow's ground is
+   * `grassA` (0.238) times `grass-albedo` (0.544) times its gain of 1.20, which is
+   * **0.156 linear**, and the meadow's tufts are `mat.grass` (0.19-0.30) times a
+   * blade mean of 0.17 times the same albedo and gain, which is **0.034** - so a
+   * meadow tuft is **a fifth of its own ground**, and that is why a meadow reads as
+   * a mat with a dark fringe on it rather than as a field of bright wire. **The ash
+   * ground is 0.324 linear, and `ashDark` at 0.145 puts the ash tuft at 0.047 -
+   * a seventh of it.** An ash tuft brighter than the ash it stands in is a meadow
+   * in a dead valley's clothes, and this is the one place in the biome where the
+   * second biome's failure is a *value* rather than a hue.
+   *
+   * `6a6867` is `ashDark` out of the jar, decoded; it is written as a literal
+   * because a material literal cannot read the palette.
+   */
+ashFoliage: new THREE.MeshStandardMaterial({ color: 0x6a6867, roughness: 1.0, side: THREE.DoubleSide }),
   flower: new THREE.MeshStandardMaterial({ roughness: 0.9 }),
   cloud: new THREE.MeshStandardMaterial({
     color: 0xf6f9fc, emissive: 0xdde8f2, emissiveIntensity: 0.6,
@@ -1052,97 +1822,81 @@ function poolWaterMat() {
   // racing line and the sweep has no direction at all. The cliff's set stays
   // projected, because a face has no lane to follow: its bedding is level in the
   // world and it should stay that way whichever way the cliff is cutting.
-  triplanarSets(mat.road, [
-    // The track's gain is **1.41** and it is the map's mean, not a taste: the
-    // albedo's weighted field is put under one on purpose (see `trackTone()` in
-    // the builder) so its highlight half survives the eight-bit canvas, which
-    // costs the whole of it above the clamp, and this puts the mean back. At 1.0
-    // the road arrives a third of a stop dark and reads as a brown card.
-    { map: detailOf('track', 'normalMap'), scale: 0.85, strength: 0.7, colour: detailOf('track', 'map'), colourGain: 1.41, uv: true },
-    { map: detailOf('cliff', 'normalMap'), scale: 0.55, strength: 1.0, colour: detailOf('cliff', 'map'), colourGain: 1.3 },
-  ]);
-
-  // The flank hanging off the edge of the ribbon, which is the same two sets
-  // again with the cliff at its own gain of **1** rather than the ramp's 1.3: a
-  // flank is a face and takes the weather as it stands, and a ramp is not. Same
-  // two sets, same two numbers but for the gain, and the reason it is a separate
-  // material rather than the road's is that one gain.
+  // And so the three materials that wear the sets. **The two sets on the ribbon,
+  // the flank's three and the countryside's three are written down here in prose
+  // and built by `useBiome()` below**, because a biome's whole contribution to
+  // them is which `SURFACE` key and which number each slot is given, and a
+  // literal in the material block is a literal a biome cannot reach:
   //
-  // **And a third, which is the shore's pair.** The flank of a track is not more
-  // clay: it is the edge of a built surface, and the county's edge for that is
-  // sand - the same sand a pool has round it, at the same tile and the same
-  // gain, which is why it is declared here rather than written out. Where the
-  // ribbon is a ramp the flank is a face and the cliff's set takes the weight,
-  // so the third set's share is `1 - rampShare()` and the two cross-fade on the
-  // same numbers the ribbon's do. That is the whole of what it is for: without
-  // it the flank was the road's colour at 0.78 and read as a band of wet earth
-  // round every course, and a painted line with a trench under it is not a
-  // court.
+  //   - **road**, two sets. The **track's own grain** at a tile of 0.85 m,
+  //     `uv: true`, on a gain that is the map's mean rather than a taste - the
+  //     albedo's weighted field is put under one on purpose so its highlight half
+  //     survives the eight-bit canvas, and at 1.0 the road arrives a third of a
+  //     stop dark and reads as a brown card. And the **cliff's**, projected rather
+  //     than in the lane's frame, at the ramp's gain. So the strip of clay and the
+  //     strip of ramp on the climbing half of it meet in a **gradient** across a
+  //     quad rather than in a material boundary; see `mat.ramp`'s block for why
+  //     the ramp is the cliff's map with the weather left off and the cliff's set
+  //     here for why the face is not.
   //
-  // The sand and the track's own set are both `uv`, so the flank's grain turns
-  // with the lane exactly as the ribbon's does and the corner between the two
-  // is a corner between two surfaces rather than a corner between two frames.
-  triplanarSets(mat.ledge, [
-    { map: detailOf('track', 'normalMap'), scale: 0.85, strength: 0.7, colour: detailOf('track', 'map'), colourGain: 1.41, uv: true },
-    { map: detailOf('cliff', 'normalMap'), scale: 0.55, strength: 1.0, colour: detailOf('cliff', 'map'), colourGain: 1.0 },
-    { map: detailOf('sand', 'normalMap'), scale: 1.1, strength: 0.9, colour: detailOf('sand', 'map'), colourGain: 1.35, uv: true },
-  ]);
-
-  // The meadow, and the whole of the countryside either side of the lane, in one
-  // material with **three** sets: turf, cliff and shore. This is the one that
-  // removes the seams the ground mesh used to be split into three groups for.
+  //     `uv: true` is the difference between a map that follows the lane and one
+  //     that does not. The ribbon is a strip that bends; its grain, the sweep the
+  //     broom leaves and the direction a snail runs all lie along it, and a
+  //     triplanar projection stamps the same pattern at the same place in world
+  //     space whatever the lane happens to be doing there - so on a corner the
+  //     clay's grain runs across the racing line and the sweep has no direction at
+  //     all. The cliff's set stays projected, because a face has no lane to
+  //     follow: its bedding is level in the world and it should stay that way
+  //     whichever way the cliff is cutting.
   //
-  // The set numbers are the three the three single materials used, unchanged:
+  //   - **ledge**, the same two again plus the **shore's**, with the cliff at its
+  //     own gain rather than the ramp's: a flank is a face and takes the weather as
+  //     it stands. The third set is why the flank of a track is not more clay - it
+  //     is the edge of a built surface, and the county's edge for that is sand, at
+  //     the same tile and the same gain. Where the ribbon is a ramp the flank is a
+  //     face and the cliff's set takes the weight, so the third set's share is
+  //     `1 - rampShare()` and the two cross-fade on the same numbers the ribbon's
+  //     do. Without it the flank was the road's colour at 0.78 and read as a band
+  //     of wet earth round every course, and a painted line with a trench under it
+  //     is not a court. The shore is `uv` as well, so the flank's grain turns with
+  //     the lane exactly as the ribbon's does and the corner between the two is a
+  //     corner between two surfaces rather than a corner between two frames.
   //
-  //   - **turf** at 0.2 and 0.3 with a gain of 1.20. Five metres a tile, and that
-  //     is the number that answers "this map reads at a hundred paces and then
-  //     stops": a course verge is two hundred and forty metres across, so a
-  //     two-metre tile went past a hundred times in a single row and the stems
-  //     lined up into corduroy visible from the start line. The map was redrawn
-  //     for the tile — the lattice that gives a four-centimetre stem is about
-  //     125, not the 53 it was built on, so the tile grew and the stems did not.
-  //     The strength is 0.3 and the map itself is at 1024 with the relief in
+  //   - **course**, **three** sets - turf, cliff and shore - and this is the one
+  //     that removed the seams the ground mesh used to be split into three groups
+  //     for. The turf is five metres a tile, and that is the number that answers
+  //     "this map reads at a hundred paces and then stops": a course verge is two
+  //     hundred and forty metres across, so a two-metre tile went past a hundred
+  //     times in a single row and the stems lined up into corduroy visible from the
+  //     start line. The strength is 0.3 and the map is at 1024 with the relief in
   //     thin lines rather than in lobes, so those two are one change: the old
-  //     numbers together gave two and a half degrees of slope across a whole
-  //     county of grass, which is nothing, because two degrees of tilt is a
-  //     value change and a vertex colour already has one. A detail map's strength
-  //     is a function of its tile, and the rule the old 0.6 broke is still true.
-  //     The gain is the map's own mean put back, because it is built under one.
-  //     The colour is on the **normal's** tile and not on its own, because
-  //     `TURF()` is one field feeding both maps: a pale blade in the albedo is
-  //     the blade the light is coming off.
+  //     numbers together gave two and a half degrees of slope across a whole county
+  //     of grass, which is nothing, because two degrees of tilt is a value change
+  //     and a vertex colour already has one. **A detail map's strength is a
+  //     function of its tile.** The cliff's tile is a little under two metres so a
+  //     slab is about the size of a slab, and its strength is well above the
+  //     bed's because the point of it is the **edges**. The shore's is nine tenths
+  //     of a metre, so a crest is about a hand's width, and its strength is well
+  //     under the cliff's because that is a *strength* question on a fine grain:
+  //     sand that stands up like a rock face is not a shore. Each colour is on its
+  //     normal's own tile, because each field is one function feeding both maps and
+  //     a pale plate in the colour has to be the plate the normal has raised.
   //
-  //   - **cliff** at 0.55 and 1.0 with a gain of 1, on one tile for the two
-  //     halves. A little under two metres so a slab is about the size of a slab,
-  //     and the strength well above the bed's because the point of it is the
-  //     **edges** — a fractured face is edges — and at the bed's 0.7 the steps
-  //     between plates are a fifth of a degree of light. The gain is 1 and not the
-  //     1.5 it first went on with: the map is built under one precisely so the
-  //     mean can be put back, and putting back 1.5 means brightening the face by
-  //     half, which is how a weathered cliff came out paler than the road above
-  //     it. The tile is the normal's 0.55 and not the ground's 0.7 it used to be
-  //     on — a comment claimed the two were in agreement about scale and the
-  //     numbers said 0.55 and 0.7, so the pale plate in the colour was a quarter
-  //     smaller than the plate the normal had raised and the face was two textures
-  //     laid over each other.
+  // Every one of those numbers is now a field in `meshes/biomes.js`, and the
+  // **set count and the order do not move**: the weight a vertex gives a set is
+  // the set's *letter*, so a biome that left one out would change what the rest
+  // multiply and three would find a different program under one material name.
   //
-  //   - **shore** at 1.1 and 0.9 with a gain of 1.35, one tile for the two halves
-  //     for the cliff's reason: `SAND()` is one field feeding both maps, so a
-  //     crest that is pale in the colour is the crest that is raised in the
-  //     normal. Nine tenths of a metre a tile, so a crest is about a hand's
-  //     width. The strength is well under the cliff's because this is a
-  //     *strength* question on a fine grain, and sand that stands up like a rock
-  //     face is not a shore.
-  //
-  // One material rather than three, and each set guarded on its own weight, so
-  // open meadow pays for one set of three projections and a pool's edge pays for
-  // two. The turf is the one set that is never absent, because the ground is
-  // meadow for nine hundred and ninety-nine parts in a thousand of its width.
-  triplanarSets(mat.course, [
-    { map: detailOf('grass', 'normalMap'), scale: 0.2, strength: 0.3, colour: detailOf('grass', 'map'), colourGain: 1.20 },
-    { map: detailOf('cliff', 'normalMap'), scale: 0.55, strength: 1.0, colour: detailOf('cliff', 'map'), colourGain: 1.0 },
-    { map: detailOf('sand', 'normalMap'), scale: 1.1, strength: 0.9, colour: detailOf('sand', 'map'), colourGain: 1.35 },
-  ]);
+  // **And the biome itself is `useBiome('temperate')`, and the call is not here.**
+  // It is the first act of `gfxSurfaceTargets()` above, because `useBiome()` writes
+  // `PAL` - the sixteen colours these surfaces are about to bake into their vertex
+  // colours - and **`PAL` is declared below this block**, so a call here would read
+  // a `let` above its own declaration, which is a temporal dead zone and a
+  // `ReferenceError` on the module's first line at boot with nothing else wrong
+  // anywhere. That function is already "the only thing in this file that has to run
+  // exactly once and in one order - after the jar is built and before a frame is
+  // drawn", and standing the biome is exactly such a thing: it needs the jar.
+
   rippleWater(mat.water, detailOf('water', 'normalMap'), detailOf('water', 'ripple2'));
 
   // The roughness halves of those pairs are drawn and shipped but are not hung
@@ -1191,19 +1945,61 @@ function poolWaterMat() {
   triplanarDetail(mat.grass, detailOf('grass', 'normalMap'), 0.7, 0.5,
     detailOf('grass', 'map'), 0.7, 1, 1.20);
 
-  // The two things that give out light. They are the one pair in the project
-  // that cannot be drawn in the material out of their own file, because the hour
-  // drives their emissive by material name - and a material the hour does not
-  // know about stays dark at midnight. So the maps are handed to `mat.paper` and
-  // `mat.lampGlass` here, where the hour can see them, and `GAME_MATERIAL` in
-  // the manifest keeps `scatter()` from swapping them back out.
+  /**
+   * And the ashlands' tuft, which is **the same call on `mat.ashFoliage`** and
+   * for the same three reasons: a tuft has no uv, so the detail is projected the
+   * way the course surface's is; it takes both halves of the pair, because a stem
+   * a shade paler than the mat is what makes it a clump and not a cone; and the
+   * tile is **a metre and a half for the county's own reason** - a tuft is a third
+   * of a metre across and a stem in the map is a hundredth of the tile, so the
+   * tile that puts a centimetre-and-a-half stem on a tuft is one and a half
+   * metres.
+   *
+   * The ash map's stems are **finer than the meadow's**, because ash is not
+   * blades: the field behind it is fine grey grit over a broad crust, so the
+   * relief at a stem's width is a crust breaking up rather than a blade, and the
+   * strength is a shade over the meadow's for the reason the meadow's is at all -
+   * a third of a metre of it three metres off is four pixels.
+   *
+   * **And it is the wind's, which is why it is a material of its own rather than
+   * a tint**: see `gfxSurfaceTargets()`, which puts it on `WIND_MATS`, and
+   * `windMark()`, which stamps the geometry an `InstancedMesh` of it carries.
+   */
+  triplanarDetail(mat.ashFoliage, detailOf('ashGrass', 'normalMap'), 0.7, 0.55,
+    detailOf('ashGrass', 'map'), 0.7, 1, 1.05);
+
+// The maps the game hands out by hand, because the hour - or the glass - can
+  // only reach them from here. **The two things that give out light** are the
+  // pair in the project that cannot be drawn in the material out of their own
+  // file, because the hour drives their emissive by material name - and a
+  // material the hour does not know about stays dark at midnight. So the maps go
+  // to `mat.paper` and `mat.lampGlass` here, where the hour can see them, and
+  // `GAME_MATERIAL` in the manifest keeps `scatter()` from swapping them back
+  // out. The third row is the one that gives out nothing and is still here.
   //
   // An emissive map is read as a colour and multiplied into the emissive, so it
-  // is not a mask: it is what the lit thing looks like. The paper's is warm and
+  // is not a mask - it is what the lit thing looks like. The paper's is warm and
   // ribbed, and the ribs being *brighter* than the paper either side of them is
   // the whole trick - a rib is paper seen edge-on, so it is thinner, so it gives
   // out more. Without it a paper lantern is a glowing ball.
-  for (const [m, prop, part] of [[mat.paper, 'lantern-pole', 'paper'], [mat.lampGlass, 'lamp-glass', '']]) {
+  //
+// **And the candle lantern's two lit parts take the same two maps, and one of
+   // them is the wax and not the flame** - which is the fourth prop on this list
+   // and the only one whose game materials are not a paper and a globe. A candle
+   // is wax and a flame, and both burn: the wax in `mat.candleWax`, which is
+   // `mat.paper` with the instance tint put back into the glow, and the flame in
+   // `mat.paper` itself, because a flame's core is paler than everything around
+   // it whatever colour the wax is and so it does not want the tint. The pane
+   // takes `glass-n` and **no emissive at all**, for the reason
+   // `mat.lanternPane` carries none: a pane is lit by the flame in the middle of
+   // it, and giving out light of its own would put a cream box around a cyan
+   // lantern.
+  for (const [m, prop, part] of [
+    [mat.paper, 'lantern-pole', 'paper'],
+    [mat.lampGlass, 'lamp-glass', ''],
+    [mat.candleWax, 'candle-lantern', 'candle'],
+    [mat.lanternPane, 'candle-lantern', 'pane'],
+  ]) {
     for (const name of mapsFor(prop, part)) {
       if (!MAPS_TEX || !MAPS_TEX.has(name)) continue;
       for (const slot of mapSlots(name)) m[slot] = MAPS_TEX.get(name);
@@ -1238,6 +2034,152 @@ const FLOWER_COLORS = FLOWER_HEX;
 const MUSHROOM_RED = colour(C.mushroomRed);
 const MUSHROOM_BROWN = colour(C.mushroomBrown);
 
+/* ================================================================== *
+ * The standing biome
+ *
+ * **A biome is standing state, and standing state in this county comes out as a
+ * pair**, for the same reason `clearRegister()`/`standingReport()` are a pair and
+ * `stageOf()`/`buildStable()` are a pair: an exported `let` cannot be assigned
+ * from another file, and it cannot be emptied either, which is the worse half,
+ * because `standingBiome = null` reads as ordinary code and throws for everybody
+ * who draws it. So the module keeps the `let` and the two other modules get a
+ * call each.
+ *
+ * **`materials.js` is the right home for it on two counts that are not
+ * tidiness.** It already owns `PAL`, which `surfaces.js` and `stage.js` both
+ * import, so one call writes the sixteen colours and the four roles and there is
+ * no second module holding half of a biome. And it already owns
+ * `triplanarSets()`, so the swap is a call on the machinery that is standing
+ * rather than a set of writes into it from outside.
+ *
+ * **And it is not a member of the `world` registry**, which is the registry's
+ * own argument rather than a preference: every one of its fifteen functions is a
+ * function because it reads something reassigned after boot, and its eight data
+ * fields are the four scenes and the two cameras and the two water lists. A biome
+ * is none of those - it is a fact about the course being built, known at
+ * `buildCourse()` time from `cat.biome`, with every consumer downstream of that
+ * one call. A registry member for it would be a field written once and read four
+ * times, which is the shape the graph cannot see for itself and
+ * `tools/wired.mjs`'s third direction exists to catch.
+ *
+ * Two callers, and they are the only two, and each of them says which biome it
+ * is building rather than leaving it standing:
+ *
+ *     src/race.js   buildCourse(catId)   useBiome(CAT_BY_ID[catId].biome)
+ *     src/stage.js  buildStable()        useBiome('temperate')
+ *
+ * **`buildStable()` is the one that is not obvious, and skipping it is what a
+ * stale biome looks like.** The stable's lawn and plinth are built on fresh
+ * materials with `PAL` read at build time, so a stable rebuilt while an ashlands
+ * course is standing comes up with ash in its own vertex colours and no map that
+ * goes with it - and `restage()` rebuilds the stable on a density change, so the
+ * two are not "a race and then never again". Vertex colours are baked, so a stable
+ * already standing is untouched by a later `useBiome()`, which is the one thing
+ * that makes this safe and also the thing that hides the bug until somebody
+ * presses the density row.
+ * ================================================================== */
+
+/** The four `PAL` keys' standing values, written into the live colours. **A name
+ *  the jar has never heard of is a warning and not a throw**, because this runs
+ *  inside a course build and a thrown error there is a black screen with a course
+ *  half-built - and a `pal` of fifteen is the quiet answer with a plausible value
+ *  written all over it, so the sixteenth would silently keep temperate's colour.
+ *  The gate for it is `tools/plan-test.mjs --biomes`; this is the noise it makes
+ *  in a browser. */
+function applyPal(pal) {
+  for (const key of Object.keys(PAL)) {
+    const name = pal[key];
+    if (name === undefined) continue;
+    if (!C[name]) { console.warn(`biome ${standingBiome.name}: no colour called ${name} in the jar for ${key}`); continue; }
+    PAL[key].copy(colour(C[name]));
+  }
+}
+/** One set per role, in the order `SET_ROLES` gives, and the gain is the role's own
+ *  number rather than a literal - which is the whole reason the gains moved out of
+ *  the material block and into the biome table. */
+function setsFor(biome, which) {
+  return SET_ROLES[which].map(([role, gain, uv]) => {
+    const r = biome.surface[role];
+    return {
+      // **the `SURFACE` key, and it is the only way a test can name a set** - the
+      // warning above cannot fire without it, and `__snail.setsOf()` cannot say
+      // which one is missing without it
+      name: r.key,
+      map: detailOf(r.key, 'normalMap'),
+      // **The height map and its own thickness, and that is the whole of the
+      // POM branch.** `height` is the set's `-h` texture, read off the same
+      // `SURFACE` entry as the normal and the colour, and `thickness` is the
+      // map's own measured crown-to-joint distance in tile fractions, written
+      // into the biome table the way `scale` and `strength` are. The march is
+      // gated by two shared uniforms rather than the height map being present
+      // or not, so a set whose height map never got drawn keeps its normal
+      // and the branch simply has no `-h` to march on - the same quiet path
+      // a missing normal map has today, and `__snail.setsOf()` and
+      // `tools/inspect.html`'s declared-versus-present column are what say
+      // so.
+      height: detailOf(r.key, 'heightMap'),
+      thickness: r.thickness,
+      scale: r.scale,
+      strength: r.strength,
+      colour: detailOf(r.key, 'map'),
+      colourGain: r[gain],
+      uv,
+    };
+  });
+}
+
+/**
+ * Stand a biome, and **re-run the four sets rather than write into them**.
+ *
+ * `triplanarSets()` takes a list and builds a program: the tile is a
+ * `uniform float dS` and the strength a `uniform float dK` and both textures are
+ * `uniform sampler2D`, all four written fresh inside `onBeforeCompile` - **and
+ * the colour gain is not one of them.** `colourGain` is interpolated into the
+ * GLSL string as a literal, because it is a multiplier on a sum and the sum is
+ * per-set. So a biome cannot change a gain by writing to a uniform, and the
+ * honest answer is that it does not try: it builds the program again.
+ *
+ * Two of the four lines below are there because of a failure this project has
+ * already had, **and the second is the one that is easy to leave out.**
+ * `triplanarSets()` **assigns** `m.onBeforeCompile` rather than chaining behind
+ * what is there, and `gfxSurface()` chains - it saves what the material carried
+ * and wraps it. So calling `triplanarSets()` again at course-build time silently
+ * throws away the cloud shade and the wind on that material, which is not a crash
+ * and not a warning: the meadow stops leaning and the ground goes flat under a
+ * moving light. `gfxSurface()` has to be called again behind it, every time, and
+ * it is a one-line omission that reads as tidiness.
+ *
+ * **And the cache key has to name the biome, because the key is what stops three
+ * handing back the program it already built.** `triplanarSets()`'s own key is
+ * `'triplanarSets' + n + (anyUv ? 'Uv' : '')`, and its comment is explicit that
+ * two shaders under one material name break three's cache in a way that is very
+ * hard to read off a stack trace. Put the biome in and it is honest. Leave it out
+ * and `needsUpdate` recompiles `mat.course`, three finds `triplanarSets3` in its
+ * cache, hands back **the meadow's program**, and the ashlands ground is drawn
+ * with the turf's grain and the cliff's gain at the meadow's tile - a wrong
+ * picture rather than a broken one, which is the same failure the `anyUv` half of
+ * that key was written against.
+ *
+ * So: one program per biome per material, six for the three materials, built once
+ * each and cached by three thereafter, and the cost is on the course-change frame
+ * rather than on the frame loop.
+ */
+function useBiome(id) {
+  const biome = BIOMES[id] || BIOMES.temperate;
+  standingBiome = biome;
+  for (const which of ['road', 'ledge', 'course']) {
+    const m = mat[which];
+    triplanarSets(m, setsFor(biome, which));
+    // **and the injection behind it again** - see the note above
+    gfxSurface(m, false);
+    m.customProgramCacheKey = () => 'triplanarSets' + SET_ROLES[which].length
+      + (SET_ROLES[which].some((r) => r[2]) ? 'Uv' : '') + ':' + biome.name;
+    m.needsUpdate = true;
+  }
+  applyPal(biome.pal);
+  return biome;
+}
+
 // ------------------------------------------------------------------
 // The jar, the loader's tables and the four injections. `gfxSurfaceTargets()`
 // is here rather than at the boot call site because it is the only thing in
@@ -1250,5 +2192,7 @@ export {
   mat, detailOf, mapTex, poolWaterMat,
   triplanarDetail, triplanarSets, rippleU,
   colour, PAL, GREEN, STONE, FLOWER_COLORS, BARK, MUSHROOM_RED, MUSHROOM_BROWN,
-  gfxU, gfxSurfaceTargets, gtaoWind, windMark, waterFresnel,
+  gfxU, gfxSurfaceTargets, gtaoWind, windMark, waterFresnel, setWindEnabled,
+  reflectMark, gtaoReflect,
+  useBiome, biomeNow,
 };

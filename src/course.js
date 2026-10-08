@@ -534,7 +534,31 @@ function groundYAt(fr, d) {
     // **pool** you swim across has its lane at the water's own level, so the
     // clause does not fire and the ground under it is the floor and the water
     // has a depth.
-    if (fr.water != null && fr.y > fr.water + 0.04) {
+    //
+    // **And a sample with no water on it stands on the bank whatever its lane is
+    // doing**, which the guard used to say the opposite of. The basin's radius is
+    // stamped over a pool's whole gap and the water over the part of that gap the
+    // water is in, so the two do not end together: on Lily Deep the basin is
+    // **6.06** at the last wet sample and **0.16** a quarter of a metre later,
+    // which is over `bankRadius()`'s floor and so still a pool-shaped profile,
+    // while `trackAt()`'s nearer-sample rule has already handed the frame `null`
+    // for its water. The clause therefore did not fire, `basinY()` answered, and
+    // because `b0` collapses to the radius itself at a radius that small the
+    // profile is the **basin floor at the centre line and the country's own level
+    // one metre out**: on that one row the ground stood **0.086 m above the lane
+    // at `d = 0` and 0.370 and 0.374 above it at `d = ± 0.99w`**, which is a band
+    // of meadow lying across the whole width of the road with a step in the middle
+    // of it, and one of them at the exit of each of the course's four pools. It is
+    // the widest clip in the county and it is a quarter of a metre long, which is
+    // why it reads as the ground and not as a bug.
+    //
+    // The general form is the one `buildWater()` already answers the other half
+    // of: **a basin is a shape and the water is a separate fact about it**, and a
+    // stretch of lane with a basin and no water in it is the exit ramp of a pool
+    // and not a pool. The water mesh has always asked (`wy === null` skips the
+    // run), the ground did not, and the two disagreed about a quarter of a metre
+    // of road four times over.
+    if (fr.water == null || fr.y > fr.water + 0.04) {
       const drop = Math.max(0, fr.y - basinY(w));
       const sh = w + Math.min(3.4, Math.max(0.9, drop * 0.8));
       return lerp(fr.y - 0.06, basinY(Math.max(ad, sh)), smoothstep(w, sh, ad));

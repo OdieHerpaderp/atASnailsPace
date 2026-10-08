@@ -1,6 +1,16 @@
 # Playwright's per-run report and screenshots, written on a failing spec.
 test-results/
 
+# `tools/bench.mjs`'s results, and the reason they are not a baseline: **a frame
+# rate is a fact about a card, a window and a preset, and none of those three are
+# a property of the build.** The suite's own numbers are committed because
+# SwiftShader at 480x300 is the same rasteriser on every machine that runs it -
+# `tools/e2e/baseline.json` is comparable because it is pinned to one. A bench run
+# on an RX 6800 at 2560x1440 is not comparable to anything, and committing one
+# would invite the reading that it is a floor or a ceiling. It is neither: it is
+# one machine's answer on one afternoon.
+bench/
+
 # Half-finished extractions from the module split. `check.sh` globs `src/*.js` and
 # `wired.mjs` is handed the same list, so a file with any other extension sits in
 # the module folder and is read by no gate at all - which is how a one-line
@@ -11,16 +21,20 @@ test-results/
 
 # The prop library and its maps are build artefacts: `meshes/*.glb` and
 # `meshes/tex/*.png` are 77 MB written by the pages in `meshes/build-*.html` and by
-# the dev server's `/__save` hook. **Everything in `meshes/` that is not one of
-# those is source** - the two modules every builder page imports, and the four
-# builder pages themselves, which are the only way to regenerate the artefacts -
-# so the ignore is a deny with exceptions rather than a deny of the folder. A
-# clone with these in it can build the county; a clone without them cannot build
-# the game, cannot run `tools/check.sh`, and cannot run `tools/wired.mjs` at all,
-# since it is handed both modules by name.
-/meshes/*
+# the dev server's `/__save` hook - **and the two wardrobe folders are the same
+# thing**, `meshes/faces/*.glb` and `meshes/hats/*.glb`, written by
+# `build-face.html` and `build-hat.html` through the same hook with a `dir`.
+# **Everything in `meshes/` that is not one of those is source** - the three
+# modules every builder page imports, and the builder pages themselves, which are
+# the only way to regenerate the artefacts - so the ignore is a deny with
+# exceptions rather than a deny of the folder. A clone with these in it can build
+# the county; a clone without them cannot build the game, cannot run
+# `tools/check.sh`, and cannot run `tools/wired.mjs` at all, since it is handed
+# all three modules by name.
+#/meshes/*
 !/meshes/palette.js
 !/meshes/maps.js
+!/meshes/biomes.js
 !/meshes/build-*.html
 
 # `.kilo/` holds the session's plans and skills, and `references/` whatever was

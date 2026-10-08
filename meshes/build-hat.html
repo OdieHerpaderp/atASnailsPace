@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>build the hats</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 24px; background: #171a1c; color: #d8d4cc; }
+  h1 { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; }
+  button { font: inherit; padding: 7px 12px; margin: 0 6px 6px 0; background: #2b3134; color: #d8d4cc;
+           border: 1px solid #3d4548; border-radius: 3px; cursor: pointer; }
+  button:hover { background: #36403f; }
+  .note { color: #8b9195; max-width: 76ch; }
+  code { color: #b9c4a8; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8b9195; margin: 22px 0 6px; }
+  #log { color: #b9c4a8; }
+</style>
+<!-- three's addons import the bare name 'three' -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1>meshes/hats/&hellip;.glb</h1>
+<p class="note">
+  Seven hats and a null, one file each, all built in <b>head-local space</b>: the origin is
+  the centre of a snail's head, <code>+x</code> forward out of the face, <code>+y</code> up.
+  That is the frame <code>headG</code> is at in <code>meshes/snail.glb</code>, so a hat
+  drops onto it at the origin and there is no offset table to keep in step with one.
+  <br><br>
+  <b>The head is not a sphere with a hat on it.</b> It is an ellipsoid of radius
+  <b>0.112</b> scaled <code>1.00, 0.97, 1.02</code>, a snail's head is four centimetres
+  across, and the two feelers come out of it at
+  <code>headG + (0.045, 0.075, &plusmn;0.036)</code> and stand 78 mm above its centre. So
+  **every hat is authored with its own offset and none of them share one**: a straw hat
+  sits on the crown at <code>y = +0.070</code>, a bonnet sits back on the shell at
+  <code>y = -0.010</code> and behind the head at <code>x = -0.030</code>, and the
+  sunglasses sit on the eye line at <code>y = -0.018</code> &mdash; which is why a hat
+  file has to be written against the head it goes on and not against the last hat in the
+  set. `headTop()` below is the crown's height at a width, and it is the only reason the
+  hats can be written from one origin and still all sit right.
+  <br><br>
+  <b>Seven files and eight names.</b> `none` is a sentinel with no file behind it: it
+  means no mesh at all, and the game's `hatFor('none')` answers `null` for it. A hat that
+  does not exist and a hat that is `undefined` are the same picture, which is why the
+  plan of the set is in <code>HAT_SET</code> in <code>src/core.js</code> and the file
+  list is in <code>MESH_SETS</code> in <code>src/materials.js</code>, and
+  <code>tools/plan-test.mjs --faces</code> is what says the two agree.
+  <br><br>
+  One hat is one mesh named <code>hat-&lt;name&gt;</code>, except the propeller, which is
+  <b>two</b>: <code>hat-propeller</code> is the cap and <code>hat-propeller-rotor</code>
+  is what turns. That is the loader's own part convention &mdash; a piece of two
+  surfaces is <code>&lt;file&gt;</code> and <code>&lt;file&gt;-&lt;part&gt;</code> &mdash; and it
+  is the only hat in the county that moves.
+  <br><br>
+  Colour is out of the county's jar (<code>meshes/palette.js</code>) and nothing is
+  invented here. There is <b>no uv</b> on any of it: a hat is a silhouette, and a tiling
+  map on a two-millimetre hat band is a normal map on four triangles.
+</p>
+
+<h2>the hats</h2>
+<div id="row"></div>
+<button id="all">write all seven</button>
+<button id="prev">preview</button>
+<pre id="log"></pre>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFExporter } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js';
+import { mergeGeometries } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/utils/BufferGeometryUtils.js';
+import { COUNTY as C } from './palette.js';
+
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+const $ = (id) => document.getElementById(id);
+const TAU = Math.PI * 2;
+
+// ---------------------------------------------------------------- helpers
+// **The scenery page's argument order, not the snail page's.** `build-snail.html`
+// takes `rz, rx, ry` and `build-scenery.html` takes `rx, ry, rz`, and copying a call
+// between the two rotates about the wrong axis - which on a hat is a brim that is
+// edge-on to the light rather than a hat that is the wrong way round.
+const M = (x, y, z, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) =>
+  new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+    new THREE.Vector3(sx, sy, sz));
+
+/** A flat vertex colour. */
+function tint(g, c) {
+  const n = g.attributes.position.count, col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2]; }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+/**
+ * A shade running from the piece's floor to its top, in one colour. **A hat is the
+ * one place in the county that wants this most and least at once**: a straw hat lit
+ * from above with a flat colour is a disc, and the crown's own curve does not survive
+ * a single value. It is three lines and it is the whole of why the hat reads as a hat.
+ */
+function shaded(g, lo, hi, c) {
+  const p = g.attributes.position, col = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const t = Math.max(0, Math.min(1, (p.getY(i) - lo) / (hi - lo || 1)));
+    col[i * 3] = c[0] * (0.80 + 0.30 * t);
+    col[i * 3 + 1] = c[1] * (0.80 + 0.30 * t);
+    col[i * 3 + 2] = c[2] * (0.80 + 0.30 * t);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+const flat = (g) => (g.index ? g.toNonIndexed() : g);
+/** One primitive, transformed, flat vertex colour, no uv. */
+function part(geo, m, c) {
+  const g = flat(geo.clone());
+  g.applyMatrix4(m);
+  g.deleteAttribute('uv');
+  return tint(g, c);
+}
+/** The same, shaded up the piece from `lo` to `hi`. */
+function grad(geo, m, lo, hi, c) {
+  const g = flat(geo.clone());
+  g.applyMatrix4(m);
+  g.deleteAttribute('uv');
+  return shaded(g, lo, hi, c);
+}
+/**
+ * A ring about the head's own **y**, which is the axis a hat turns on. `lathe()` is
+ * three's `LatheGeometry` with the profile given as `[radius, y]` pairs - and the
+ * reason for writing it out rather than using three's is the shading: `LatheGeometry`
+ * is indexed, so `computeVertexNormals()` averages round the turn and a crown comes
+ * out as one curve, which is the whole difference between a lampshade and a hat.
+ */
+function lathe(profile, seg, c, lo = null, hi = null, xf = null) {
+  const pts = profile.map(([r, y]) => new THREE.Vector2(Math.max(0.0001, r), y));
+  const g = new THREE.LatheGeometry(pts, seg);
+  // **and the winding is settled by the surface, in code, and not by the profile's
+  // direction.** See `faceOut()` below for why a profile written from the top down came
+  // out inside out, and what it looked like.
+  faceOut(g);
+  g.deleteAttribute('uv');
+  return grad(g, xf || M(0, 0, 0), lo == null ? profile[0][1] : lo, hi == null ? profile[profile.length - 1][1] : hi, c);
+}
+
+/**
+ * **A lathe is a surface of revolution about `y`, so the radial direction is its own
+ * outward one, and three winds it from the profile's direction instead.**
+ *
+ * The straw hat's crown was written `[0.006, y+0.058]` first and `[0.062, y-0.006]`
+ * last — radius growing as the profile descends — and it came out **inside out**: the
+ * near wall culled, the far wall showing from the inside, and **a straw hat you can see
+ * the head's face through the crown of.** The bonnet on this same page is written the
+ * other way round and was always right, which is the whole of the trap: **two lathes,
+ * one rule, and the one that gets it wrong is a quiet answer** — nothing throws, no
+ * console line, and `computeVertexNormals()` hands back normals pointing into the shell
+ * of it, which looks like a shading fault and is not one.
+ *
+ * So the decision is measured per lathe, the same bargain `sweep()` strikes on the
+ * snail's body, and **the profile is then free to be written in whichever direction
+ * reads better** — which is the whole of what this buys.
+ *
+ * **The test is a majority and not a strict per-face one**, because a crown's own top is
+ * a cone whose faces point *up* and a cone's normal has nothing to say about the radius at
+ * the point it sits: the dot product is zero there however the crown is wound, and a
+ * strict test would call a correct hat wrong. The sides are what carry the vote, and they
+ * carry it hard.
+ *
+ * **And only the lathes get this.** Every other part on the page is three's own
+ * `CylinderGeometry`, `RingGeometry`, `BoxGeometry`, `SphereGeometry` or `TorusGeometry`,
+ * whose winding is three's business and correct by construction — **a gate that ran over
+ * those would be testing three and calling it a result.**
+ */
+/**
+ * **And `axis` is the spine each vertex was built around, one entry per vertex**, which
+ * is the snail's own arrangement and for the same reason: a hat whose spine has bent has
+ * no single axis, and a reference that is the head's `y` would call half its cone
+ * inside out. Omitted, the spine is the head's own `y` — which is right for a lathe and
+ * for nothing else on the page.
+ */
+function faceOut(g, axis = null) {
+  const p = g.attributes.position.array, ix = g.index.array;
+  const A = axis || Array.from({ length: g.attributes.position.count }, (_, i) => [0, p[i * 3 + 1], 0]);
+  let agree = 0, total = 0;
+  for (let t = 0; t < ix.length; t += 3) {
+    const a = ix[t], b = ix[t + 1], c = ix[t + 2];
+    const a3 = a * 3, b3 = b * 3, c3 = c * 3;
+    const ux = p[b3] - p[a3], uy = p[b3 + 1] - p[a3 + 1], uz = p[b3 + 2] - p[a3 + 2];
+    const vx = p[c3] - p[a3], vy = p[c3 + 1] - p[a3 + 1], vz = p[c3 + 2] - p[a3 + 2];
+    const nx = uy * vz - uz * vy, nz = ux * vy - uy * vx;
+    // the reference: the direction from this triangle's own spine point, flattened, and
+    // a face sitting on its spine has no outward direction at all
+    const rx = (p[a3] - A[a][0]) + (p[b3] - A[b][0]) + (p[c3] - A[c][0]);
+    const rz = (p[a3 + 2] - A[a][2]) + (p[b3 + 2] - A[b][2]) + (p[c3 + 2] - A[c][2]);
+    const len = Math.hypot(rx, rz);
+    if (len < 1e-4) continue;
+    total++;
+    if ((nx * rx + nz * rz) / len > 0) agree++;
+  }
+  if (total && agree * 2 < total) {
+    for (let t = 0; t < ix.length; t += 3) { const s = ix[t + 1]; ix[t + 1] = ix[t + 2]; ix[t + 2] = s; }
+    // **and it says so, by name**, because a silent repair is a repair nobody can see has
+    // happened: the straw hat's crown was written from the top down for as long as there
+    // was a straw hat, and the log is where that stops being a fact about the file and
+    // becomes a line in the build.
+    REVERSED.push(`${building} (${agree}/${total} faces agreed)`);
+  }
+  return agree * 2 >= total;
+}
+
+/** Which hat is being built, and which of them had a piece wound the wrong way. */
+let building = null;
+const REVERSED = [];
+
+/** A ring of boxes about y, and **each one turned to face outwards**. */
+function ring(geo, n, r, y, c, spin = 0) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = spin + (i / n) * TAU;
+    out.push(part(geo, M(Math.cos(a) * r, y, Math.sin(a) * r, 1, 1, 1, 0, -a, 0), c));
+  }
+  return out;
+}
+
+// ------------------------------------------------- the head, and the crown
+// The snail file's own numbers again - see `meshes/build-face.html`, which says the
+// same thing at greater length, and the two pages are mirrors of each other here.
+const HEAD_R = 0.112, HEAD_SY = 0.97, HEAD_SZ = 1.02;
+const HEAD_RY = HEAD_R * HEAD_SY, HEAD_RZ = HEAD_R * HEAD_SZ;
+const EYE = { y: -0.018, z: 0.054 };
+/** The head's own surface height at a width, which is the top of the crown at `z = 0`. */
+const headTop = (z) => HEAD_RY * Math.sqrt(Math.max(0.0004, 1 - (z / HEAD_RZ) ** 2));
+/** **And the half-width of the head at a height**, which is the number every hat on a
+ *  round head is really built against. A hat is not placed by how high the head is but
+ *  by how wide it is where the hat goes on. */
+const headHalfAt = (y) => HEAD_RZ * Math.sqrt(Math.max(0.0004, 1 - (y / HEAD_RY) ** 2));
+/**
+ * **Where a brim goes, and the reason is geometry and not taste.**
+ *
+ * A hat's brim is a flat horizontal annulus and the head is a sphere, so **the two
+ * touch along one circle and nowhere else** - and there is no height at which a flat
+ * brim can rest on a sphere the way a hat rests on a head. So a brim does not touch
+ * the head at all: it is placed *above* the widest part of it and passes down through
+ * the crown, and only the part outside the head's silhouette is ever seen. That is
+ * also how a hat looks on a head, and it is why the visible rim here is the outer few
+ * millimetres and nothing else.
+ *
+ * **That is the whole of why this is a constant and not a call into `headTop()`.** The
+ * first version of this page put every hat at `headTop(0) - 42% of the head's height`,
+ * which is a number *inside* the head: the straw hat's crown was 5 mm wider than the
+ * head at every height it occupied, so four of the six hats rendered as nothing at all
+ * and the bonnet rendered as a shell buried in the skull.
+ */
+const BRIM_Y = 0.082;
+
+/**
+ * **And two hats go higher than that, because a hat with a wall is placed by the head's
+ * width where the wall is and not by how high the head is.** A flat brim on a round head
+ * only reads once its outer edge is outside the head *at the brim's own height*, and
+ * `headHalfAt()` falls away fast above the crown's equator: at `BRIM_Y` it is 0.0749, at
+ * `0.096` it is 0.0540. So the two hats that have a **wall** — the top hat's brim at
+ * radius `BRIM_TOPHAT` and the propeller's cap at `0.056` — are placed at the height
+ * where that wall clears, and the two that are only an annulus stay at `BRIM_Y`.
+ *
+ * **The general form is that a hat is placed by the width of the head where it goes on
+ * and not by how high the head is**, which is the same sentence `headHalfAt()` is here to
+ * answer and the same one the straw hat's own brim at 0.096 was right by accident.
+ */
+const BRIM_TOPHAT = 0.080, BRIM_PROP = 0.096;
+
+/** A flat brim with a lip turned down off its outer edge, which is what makes it a rim. */
+function brim(inner, outer, y, c, lip = 0.008) {
+  return [
+    grad(new THREE.RingGeometry(inner, outer, 28, 1), M(0, y, 0, 1, 1, 1, -Math.PI * 0.5), y - 0.002, y + 0.002, c),
+    part(new THREE.CylinderGeometry(outer, outer * 0.98, lip, 28, 1, true), M(0, y - lip * 0.5, 0), c),
+  ];
+}
+
+/**
+ * A taper along a path, and it is how the horns are made. **One cylinder per leg,
+ * each turned to face along the leg**, because a cone standing upright on a curved
+ * path is a row of wedges and a row of wedges at four centimetres is a row of
+ * triangles. The quaternion is the whole of it: a cylinder's own axis is `+y`, so
+ * `setFromUnitVectors` is what aims it down the leg.
+ */
+function taper(pts, r0, r1, c, seg = 9, hot = null) {
+  const out = [];
+  const up = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = new THREE.Vector3(...pts[i]);
+    const b = new THREE.Vector3(...pts[i + 1]);
+    const len = a.distanceTo(b);
+    const q = new THREE.Quaternion().setFromUnitVectors(up, b.clone().sub(a).normalize());
+    const m = new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), q, new THREE.Vector3(1, 1, 1));
+    const ra = r0 + (r1 - r0) * (i / (pts.length - 1));
+    const rb = r0 + (r1 - r0) * ((i + 1) / (pts.length - 1));
+    out.push(grad(new THREE.CylinderGeometry(rb, ra, len * 1.08, seg, 1, true), m, -len * 0.5, len * 0.5, c));
+    if (hot) out.push(grad(new THREE.CylinderGeometry(rb * 0.30, ra * 0.30, len * 1.08, seg, 1, true),
+      m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, (ra + rb) * 0.42)), -len * 0.5, len * 0.5, hot));
+  }
+  const last = new THREE.Vector3(...pts[pts.length - 1]);
+  const prev = new THREE.Vector3(...pts[pts.length - 2]);
+  const l2 = last.distanceTo(prev);
+  const q2 = new THREE.Quaternion().setFromUnitVectors(up, last.clone().sub(prev).normalize());
+  out.push(grad(new THREE.ConeGeometry(r1, l2 * 1.1, seg),
+    new THREE.Matrix4().compose(last.clone().add(prev).multiplyScalar(0.5), q2, new THREE.Vector3(1, 1, 1)), -l2 * 0.5, l2 * 0.5, c));
+  return out;
+}
+
+/**
+ * A cone on a spine that bends, and **it is the only way to draw a wizard hat** out of
+ * the four primitives this page has.
+ *
+ * A `LatheGeometry` turns about one straight axis, and a wizard hat's axis is a curve:
+ * the cone leans out over the head and the last third of it folds over and droops, which
+ * is the entire silhouette. So this is a lathe with the origin moved per station — each
+ * ring is a horizontal circle whose centre is a point on the spine, and the radius and
+ * the height come off the same profile.
+ *
+ * **Horizontal rings and not rings in the plane normal to the spine**, and that is the
+ * choice that makes the droop read: a ring square to a spine that has folded through
+ * horizontal is a ring lying on its edge, and a cone whose rings do that is a paper hat
+ * folded flat. **A cross-section that stays level while the centre moves is a soft hat
+ * sagging**, which is what felt does.
+ *
+ * **And it is a closed solid** — a brim, a cone and a tip, one surface — because the
+ * profile runs out to a radius and comes back, so there is nothing to see through. That
+ * matters more here than anywhere else on the page: a hat that is a surface with a hole
+ * in it is a hat you can see the head through, and the straw hat's crown has already cost
+ * one round of work for exactly that reason.
+ *
+ * **The winding is measured and not written**, by the same `faceOut()` the lathes use and
+ * for the same reason: this is a surface of revolution about a *curved* axis, so the
+ * reference is the direction from the spine point rather than from the head's `y`.
+ */
+function bentCone(spine, seg, c, lo, hi) {
+  const rings = spine.length;
+  const pos = [], idx = [], axis = [];
+  for (let i = 0; i < rings; i++) {
+    const [r, y, xc, zc = 0] = spine[i];
+    for (let j = 0; j <= seg; j++) {
+      const a = (j / seg) * TAU;
+      pos.push(xc + Math.cos(a) * r, y, zc + Math.sin(a) * r);
+      axis.push([xc, y, zc]);
+    }
+  }
+  for (let i = 0; i < rings - 1; i++) {
+    for (let j = 0; j < seg; j++) {
+      const a = i * (seg + 1) + j, b = a + 1, c2 = a + seg + 1, d = c2 + 1;
+      idx.push(a, b, d, a, d, c2);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setIndex(idx);
+  faceOut(g, axis);
+  // **and its own normals**, because every other part on this page arrives from three with
+  // a `normal` already on it and `mergeGeometries()` refuses a set where one has it and
+  // one does not. **The message names the attribute and not the piece**, so a hand-built
+  // grid is the failure with the least helpful text on the page.
+  g.computeVertexNormals();
+  return grad(g, M(0, 0, 0), lo, hi, c);
+}
+
+/** One five-pointed star as a flat solid, lying in the `xz` plane and a millimetre thick. */
+function star(ro, ri, n, c, m) {
+  const pos = [], idx = [];
+  const a = (k) => (k / (n * 2)) * TAU - Math.PI * 0.5;
+  const rim = [];
+  for (let k = 0; k < n * 2; k++) rim.push(k % 2 ? ri : ro);
+  // the face, as a fan off its own centre
+  let at = 0;
+  pos.push(0, 0, 0);
+  for (const r of rim) { pos.push(Math.cos(a(at)) * r, 0, Math.sin(a(at)) * r); at++; }
+  for (let k = 0; k < rim.length; k++) idx.push(0, 1 + k, 1 + ((k + 1) % rim.length));
+  // and its underside, wound the other way so the star is a solid and not a decal
+  const under = pos.length / 3;
+  pos.push(0, -0.0011, 0);
+  for (const r of rim) { pos.push(Math.cos(a(at)) * r, -0.0011, Math.sin(a(at)) * r); at++; }
+  for (let k = 0; k < rim.length; k++) idx.push(under, 1 + ((k + 1) % rim.length) + rim.length + 1, 1 + k + rim.length + 1);
+  // and the rim, which is the half-millimetre of edge that makes it read as cut felt
+  for (let k = 0; k < rim.length; k++) {
+    const t = 1 + k, u = 1 + ((k + 1) % rim.length);
+    const t2 = t + rim.length + 1, u2 = u + rim.length + 1;
+    idx.push(t, t2, u2, t, u2, u);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const out = flat(g);
+  out.applyMatrix4(m);
+  out.deleteAttribute('uv');
+  return tint(out, c);
+}
+
+// ---------------------------------------------------------------- the hats
+/**
+ * **Six hats, and each is written against the head rather than against the last hat.**
+ * A hat is a silhouette, so what has to survive at race distance is the outline and
+ * not the detail - which is why there is a straw hat with a wide brim and a top hat
+ * with a narrow one, and not two hats that differ by a millimetre of crown.
+ */
+const HATS = {
+  /** The classic: a wide flat brim and a crown fifty millimetres tall. `hatStraw` and
+   *  `hatStrawShade` are two values of the county's own straw, and the band is
+   *  `hatStrawBand` - the one piece of a hat allowed to be a different material,
+   *  because a band is the thing that makes a straw hat a straw hat. */
+  straw: () => {
+    const y = BRIM_Y;
+    return [
+      ...brim(0.030, 0.096, y, C.strawHat, 0.009),
+      lathe([[0.006, y + 0.058], [0.030, y + 0.054], [0.050, y + 0.040], [0.059, y + 0.018], [0.062, y - 0.006]], 26, C.strawHat),
+      grad(new THREE.CylinderGeometry(0.0638, 0.0638, 0.014, 26, 1, true), M(0, y + 0.002, 0), y - 0.006, y + 0.010, C.strawHatBand),
+    ];
+  },
+  /** The top hat: **a narrow brim**, which is the difference from the straw, and a crown
+   *  tall enough to have a silhouette of its own above the shell. */
+  'top-hat': () => {
+    // **and the height is the head's own width answering a question, and not a taste.**
+    // The brim is a disc of radius `BRIM_TOPHAT`, and a disc only reads as a brim once it
+    // is *outside* the head at its own height: `headHalfAt(0.074)` is **0.0836**, so the
+    // brim this used to sit on was a hundred and thirty-six millimetres across inside a
+    // head a hundred and sixty-seven across at that station — **which is why it read as
+    // no brim at all**, and a top hat with no brim is a can. `headHalfAt` falls to 0.0540
+    // at `0.096`, which is where the hat goes.
+    const y = BRIM_TOPHAT;
+    return [
+      part(new THREE.CylinderGeometry(0.070, BRIM_TOPHAT, 0.010, 26), M(0, y + 0.004, 0), C.feltHat),
+      grad(new THREE.CylinderGeometry(0.052, 0.058, 0.096, 26, 1, true), M(0, y + 0.056, 0), y + 0.008, y + 0.104, C.feltHat),
+      // **the top, in the sheen colour**: a hat that is one value from its crown to its
+      // brim is a cylinder, and the lid is the only horizontal surface on it
+      part(new THREE.CylinderGeometry(0.052, 0.052, 0.008, 26), M(0, y + 0.108, 0), C.feltHatSheen),
+      grad(new THREE.CylinderGeometry(0.0595, 0.0595, 0.015, 26, 1, true), M(0, y + 0.026, 0), y + 0.018, y + 0.034, C.hatCloth),
+    ];
+  },
+  /** The propeller, **and it is two meshes** because it is the one hat in the county
+   *  that turns. The cap is the piece and the rotor is its part, exactly as a
+   *  windmill's sails are, and the game spins the part off the snail's own phase so it
+   *  winds down when the snail stops. `rotor()` bakes its own hub height in, which is
+   *  what makes the second mesh necessary rather than decorative: **the rotor turns
+   *  about the head's `y`, not the cap's**, so it cannot be a child of the cap. */
+  propeller: () => {
+    // **and the same measurement, for the same reason and with a different number in it.**
+    // The cap's wall is `0.056` and `headHalfAt(0.082)` is **0.0749**, so at `BRIM_Y` the
+    // wall was thirty-seven millimetres *inside* the head's own width — the cap's own
+    // side disappearing into the skull, which is what "it clips through the head" is.
+    // `headHalfAt` is `0.056` at `0.0946`, and the hat goes to `0.096`.
+    const y = BRIM_PROP;
+    return {
+      part: [
+        ...brim(0.028, 0.082, y, C.hatCloth, 0.008),
+        grad(new THREE.CylinderGeometry(0.056, 0.064, 0.030, 24, 1, true), M(0, y + 0.014, 0), y, y + 0.030, C.hatClothShade),
+        part(new THREE.CylinderGeometry(0.062, 0.062, 0.006, 24), M(0, y + 0.030, 0), C.hatClothShade),
+        part(new THREE.CylinderGeometry(0.008, 0.008, 0.044, 12), M(0, y + 0.054, 0), C.hatClothShade),
+      ],
+      rotor: rotor(y + 0.080),
+    };
+  },
+  /**
+   * The sunglasses, and **the only hat that is not on the crown.** It sits on the eye
+   * line at `EYE.y`, which is twenty millimetres *below* the head's centre, so it is
+   * pushed forward onto the face and each lens is its own piece placed on the
+   * ellipsoid - a lens flat across `z` at a fixed `x` stands off the face at its outer
+   * edges by four millimetres, which at four centimetres is a shelf.
+   */
+  sunglasses: () => {
+    const out = [];
+    const surfaceX = (y, z) => HEAD_R * Math.sqrt(Math.max(0.0004, 1 - (y / HEAD_RY) ** 2 - (z / HEAD_RZ) ** 2));
+    for (const s of [1, -1]) {
+      const z = s * EYE.z * 0.84, y = EYE.y + 0.004;
+      const x = surfaceX(y, z) + 0.004;
+      // **a lens as a squashed sphere and not a disc**: a disc has an edge, and an edge
+      // at this size is a line the light catches, which is what makes a lens read as a
+      // lens instead of a sticker
+      out.push(part(new THREE.SphereGeometry(0.023, 14, 9), M(x, y, z, 0.26, 0.86, 1.20, 0, s * 0.22, 0), C.lens));
+      // and the glint, a small pale wedge off the upper inboard corner - **the one
+      // thing in the county that says a lens is a lens**
+      out.push(part(new THREE.SphereGeometry(0.0068, 8, 6), M(x + 0.004, y + 0.012, z - s * 0.012, 0.26, 0.28, 1.30), C.lensGlint));
+      // the arm, back over the head
+      out.push(part(new THREE.BoxGeometry(0.004, 0.004, 0.044),
+        M(x - 0.006, y + 0.004, z + s * 0.018, 1, 1, 1, 0, s * 0.34, 0), C.brassFrame));
+    }
+    // **and the bridge**, one piece across the nose, which is what holds the two lenses
+    // together as a pair rather than as two things on a face
+    out.push(part(new THREE.BoxGeometry(0.004, 0.004, 0.022),
+      M(HEAD_R * 0.955, EYE.y + 0.006, 0), C.brassFrame));
+    return out;
+  },
+  /**
+   * **The wizard hat, and it is the tallest thing in the county and the only one whose
+   * spine bends.**
+   *
+   * `bentCone()` is the whole of it: **a lathe whose origin moves**, so the cone leans out
+   * over the face and the last third of it folds over and droops, which is the silhouette
+   * every wizard hat is recognisable by and **the one shape on this page no primitive
+   * here can draw** — a `LatheGeometry` turns about one straight axis and a cone that
+   * bends is not a lathe.
+   *
+   * **And it is drawn at 0.7 of its cell's scale in the preview, which is the one place on
+   * the page where a number is not about the hat.** It is the tallest thing in the county
+   * by a factor of two, and a grid that framed every hat to fit would be framing six hats
+   * to fit the seventh. **The brim is 240 mm across on a head 228**, which is a shape
+   * rather than a hat somebody could wear; the reference is a wizard's hat and the
+   * county's is the same silhouette at four centimetres, which is why the stars are the
+   * size they are and why there are seven of them and not the reference's dozen.
+   *
+   * **And it leans forward rather than to one side**, because `+x` is out of the face and
+   * a lean sideways would be a lean the race camera never sees — a snail's head is four
+   * centimetres across at race distance, so the only part of a hat anybody reads is the
+   * outline against the sky, and an outline that leans forwards reads where an outline
+   * that leans sideways reads as a smudge.
+   */
+  wizard: () => {
+    const y = BRIM_Y + 0.006;
+    // **[radius, height, how far forward this ring's centre sits]** — and the last
+    // column is the hat, because the first two are a party hat. It runs out to **188 mm
+    // of forward lean by the fold and 12 mm of drop at the tip**, which is four fifths of
+    // a head's width forward: enough that the droop is clear of the brim from every
+    // bearing the game has a camera at, and the drop is what makes it read as a fold and
+    // not as a cone somebody leaned.
+    const cone = [
+      [0.1200, y - 0.0080, -0.004],   // the brim's outer edge, and where it droops to
+      [0.1155, y + 0.0030, -0.002],
+      [0.0980, y + 0.0065, 0.000],
+      [0.0740, y + 0.0020, 0.003],
+      [0.0670, y + 0.0120, 0.003],   // where the brim's own inner edge is
+      [0.0665, y + 0.0320, 0.008],   // and the cone proper starts, above the brim
+      [0.0600, y + 0.0660, 0.026],
+      [0.0505, y + 0.1020, 0.052],
+      [0.0395, y + 0.1330, 0.082],
+      [0.0275, y + 0.1600, 0.116],
+      [0.0160, y + 0.1745, 0.146],   // **the fold**, and it is the last ring that still climbs
+      [0.0072, y + 0.1760, 0.170],
+      [0.0014, y + 0.1700, 0.188],   // **and the tip comes back down below the fold**
+    ];
+    const out = [
+      bentCone(cone, 22, C.wizardFelt, y - 0.008, y + 0.178),
+      // **the band, and it is a ring of the hat's own darker self rather than another
+      // colour** — a wizard hat's band is the felt doubled over, and a second hue at four
+      // centimetres is a sticker on a hat.
+      grad(new THREE.CylinderGeometry(0.0693, 0.0717, 0.014, 22, 1, true),
+        M(0.004, y + 0.021, 0, 1, 1, 1, 0, 0, -0.05), y + 0.014, y + 0.028, C.wizardFeltShade),
+      // **the crown's own underside**, so the hat is a closed solid from below as well as
+      // from above: a brim with a hole in it is a hole in the silhouette.
+      part(new THREE.RingGeometry(0.001, 0.0670, 22, 1),
+        M(0.004, y + 0.0305, 0, 1, 1, 1, Math.PI * 0.5, 0, -0.05), C.wizardFeltShade),
+    ];
+    /**
+     * **The stars, and they are geometry rather than a map.** A hat has no uv on this page
+     * and adding one for stars means a tiling map on a cone, where they would repeat up the
+     * fold — **so they are flat solids laid on the cone and they lean with it**, which is
+     * also what a star stitched to a floppy hat does.
+     *
+     * **And the lean is the cone's surface normal and not the cone's own angle.** A star
+     * built in the `xz` plane and turned by `-lean` ends up lying *flat* on a cone whose
+     * face is at seventy degrees, which is the wrong way round: **the first version did
+     * exactly that and the upper four stars came out as silver dashes**, because a flat
+     * star on a steep face is edge-on to a camera at the hat's own height. The star's
+     * normal has to *be* the surface's normal, and for a normal that starts at `+y` and
+     * a surface leaning `lean` off vertical that is `lean - 90°` and not `-lean`.
+     *
+     * **And the first column is measured up from the brim and not written as a height,
+     * because the cone's own station table moves every time the hat does.** They were
+     * absolute the first time, which put every star *underneath the brim*: the scan ran
+     * off the end of the profile, the radius clamped to the brim's outer edge, and the
+     * hat came out **1.68 metres across — seven head widths** - with a flat blade sticking
+     * out of it. **A placement table is measured in the same frame as the thing it places,
+     * and the brim is the hat's own datum.**
+     */
+    const STARS = [
+      [0.042, 0.0180], [0.072, 0.0150], [0.100, 0.0125], [0.126, 0.0100], [0.148, 0.0072],
+    ];
+    for (const [up, r] of STARS) {
+      const yf = y + up;
+      // **on the cone's own surface, which is a radius away from a spine that has already
+      // moved**: the star's height gives the station, and the station's radius and spine
+      // are read off the same profile the cone is built from, so a star cannot float off
+      // the felt and cannot end up on the far side of a bend.
+      let st = 0;
+      while (st < cone.length - 2 && cone[st][1] < yf) st++;
+      const [r0, h0, x0] = cone[st], [r1, h1, x1] = cone[st + 1];
+      const t = Math.max(0, Math.min(1, (yf - h0) / (h1 - h0 || 1)));
+      const rad = r0 + (r1 - r0) * t, xc = x0 + (x1 - x0) * t;
+      const lean = Math.atan2(r0 - r1, h1 - h0 || 1);
+      out.push(star(r, r * 0.42, 5, C.wizardStar,
+        M(xc + Math.cos(lean) * rad, yf, 0, 1, 1, 1, 0, 0, lean - Math.PI * 0.5)));
+    }
+    /**
+     * **And two more on the brim, which is where the reference keeps its largest and which
+     * is the one part of this hat a camera can actually see.** The brim's own surface is
+     * nearly level, so a star there is a star with no foreshortening at all — and the
+     * brim is 240 mm across on a head 228, so a star of the same 18 mm is a sixth of the
+     * visible width rather than a sixth of a cone's height.
+     */
+    for (const [phi, r] of [[0.62, 0.0185], [Math.PI - 0.55, 0.0155]]) {
+      out.push(star(r, r * 0.42, 5, C.wizardStar,
+        M(Math.cos(phi) * 0.0865, y + 0.0072, Math.sin(phi) * 0.0865, 1, 1, 1, 0, -phi, 0)));
+    }
+    /**
+     * **And the star on its string, which is the one piece of the reference that is not
+     * felt.** It hangs off the tip on a `0.0009` cord - **under a millimetre, because at
+     * four centimetres a thicker cord is a stick** - and it hangs from the droop's own
+     * low point rather than from the tip's, which is the detail that makes it read as
+     * hung and not as stuck on. A cord cannot swing on its own in a glb, so it is a
+     * straight taper and the hanging is read entirely off the gap.
+     */
+    const tipX = cone[cone.length - 1][2], tipY = cone[cone.length - 1][1];
+    out.push(part(new THREE.CylinderGeometry(0.0009, 0.0009, 0.044, 5), M(tipX + 0.002, tipY - 0.022, 0), C.wizardStar));
+    out.push(star(0.0098, 0.0041, 5, C.wizardStar, M(tipX + 0.004, tipY - 0.048, 0, 1, 1, 1, Math.PI * 0.5, 0, 0.16)));
+    return out;
+  },
+
+  /**
+   * The bonnet: **back and low**, which is what makes it a bonnet - it covers the back
+   * of the head and not the crown, so from the race camera it is a shape where the
+   * others are a crown.
+   *
+   * **It is a lathe about the head's own `x` and not about its `y`**, which is the one
+   * thing on this page worth stating plainly: a bonnet is a hat whose axis runs
+   * fore-and-aft, and a `LatheGeometry` turns about `y`, so `rz = PI / 2` is what
+   * points it backwards - and its profile is then written in `[radius, how far back]`
+   * rather than `[radius, how high]`, which is a different set of numbers for the same
+   * shape. The profile follows the head's own half-width at each distance back with
+   * ten millimetres on it, so **the hood hugs the skull from a constant standoff** and
+   * does not flare out at the middle the way a profile written by eye does.
+   */
+  bonnet: () => {
+    const BACK = M(0, 0, 0, 1, 1, 1, 0, 0, Math.PI * 0.5);
+    const out = [
+      lathe([
+        [0.116, 0.040], [0.112, 0.058], [0.102, 0.076], [0.090, 0.090],
+        [0.060, 0.100],
+        [0.030, 0.115], [0.010, 0.128], [0.002, 0.136],
+      ], 24, C.hatCloth, 0.040, 0.136, BACK),
+      // **the frill round its open edge**, which is the reason it reads as cloth and
+      // not as a bowl - and from the front it is the *only* part of the bonnet there
+      // is to see, since the hood is behind the head. **It is a ring twelve millimetres
+      // proud of the skull and no more**: a ring half a head wider is a halo, and a
+      // halo is not a bonnet.
+      part(new THREE.TorusGeometry(0.118, 0.008, 7, 26), M(-0.038, 0, 0, 1, 1, 1, 0, 0, Math.PI * 0.5), C.hatRibbon),
+      // and the ribbon round the crown of it
+      grad(new THREE.CylinderGeometry(0.1045, 0.1095, 0.015, 26, 1, true),
+        M(-0.062, 0, 0, 1, 1, 1, 0, 0, Math.PI * 0.5), -0.010, 0.010, C.hatRibbon),
+    ];
+    return out;
+  },
+  /**
+   * The Adversary's horns, and **the only bright thing in the set.**
+   *
+   * They start at the brow line and sweep up and **out and back**, and every leg is a
+   * cylinder aimed down its own leg by `taper()` - so the curve is a curve rather than
+   * four cones standing in a row. `hornHot` is a thin sliver along the front of the
+   * whole horn, which is the one thing in the county that makes a snail in the second
+   * pack findable from behind; it is under two millimetres of geometry and it is worth
+   * exactly that.
+   */
+  'devil-horns': () => {
+    const out = [];
+    for (const s of [1, -1]) {
+      // **the path is a quarter-turn, not a lean**: it starts on the brow line
+      // pointing outward and ends at the back of the crown pointing up and back, and
+      // every leg is aimed down its own leg by `taper()` - so the curve is a curve and
+      // not four cones standing in a row.
+      const pts = [
+        [0.060, 0.020, s * 0.048],
+        [0.058, 0.048, s * 0.086],
+        [0.040, 0.078, s * 0.118],
+        [0.010, 0.106, s * 0.138],
+        [-0.024, 0.124, s * 0.144],
+      ];
+      out.push(...taper(pts, 0.026, 0.005, C.horn, 10, C.hornHot));
+    }
+    return out;
+  },
+};
+
+/** The propeller's blades, **about the head's `y` at their own hub.** Returned
+ *  separately because they are their own mesh, and the hub is a real height above
+ *  the origin rather than a transform the game would have to know about. `y` is the
+ *  height of the axis the blades turn on, which is *not* the height of the cap - and
+ *  that difference is why the rotor cannot simply be parented to it. */
+function rotor(y) {
+  const out = [part(new THREE.SphereGeometry(0.0092, 10, 8), M(0, 0, 0), C.hatClothShade)];
+  // **a blade is a flat paddle and not a wing**: a wing has a chord that changes along
+  // its length and a paddle at four centimetres is a paddle, so four boxes is the whole
+  // of it and it reads as a spinner from the side as well as from above.
+  out.push(...ring(new THREE.BoxGeometry(0.040, 0.0035, 0.013), 4, 0.026, 0, C.hatRibbon, Math.PI * 0.25));
+  out.push(...ring(new THREE.BoxGeometry(0.016, 0.0030, 0.010), 4, 0.044, 0, C.hatCloth, Math.PI * 0.25));
+  // and the stem it sits on, because a spinner floating above a cap is a spinner
+  // floating above a cap
+  out.push(part(new THREE.CylinderGeometry(0.004, 0.004, 0.020, 8), M(0, -0.012, 0), C.hatClothShade));
+  const g = mergeGeometries(out, false);
+  g.deleteAttribute('uv');
+  g.computeVertexNormals();
+  // the hub's own height, baked in - the game only has to rotate this mesh about y
+  g.translate(0, y, 0);
+  return g;
+}
+
+// ---------------------------------------------------------------- the file
+/**
+ * One hat, as `{ part, rotor }` - and **the rotor is `null` for five of the six**,
+ * which is the shape the game reads. A hat of two surfaces is the piece and the part,
+ * named `<file>` and `<file>-<part>`, and a hat of one surface is the piece alone;
+ * `assemble()` is the only place that knows which of the two it is building.
+ */
+function buildHat(name) {
+  const fn = HATS[name];
+  if (!fn) throw new Error('no hat called ' + name);
+  const r = fn();
+  if (Array.isArray(r)) return { part: mergeGeometries(r, false), rotor: null };
+  const part = mergeGeometries(r.part, false);
+  part.deleteAttribute('uv');
+  part.computeVertexNormals();
+  return { part, rotor: r.rotor };
+}
+
+const hatMat = () => new THREE.MeshStandardMaterial({
+  name: 'hat', color: 0xffffff, vertexColors: true, roughness: 0.68, metalness: 0.0,
+});
+
+function assemble(name) {
+  building = name;
+  const { part: p, rotor } = buildHat(name);
+  const root = new THREE.Group();
+  // **the group is `hat-set` and not `hat-<name>`**: `GLTFExporter` renames a node
+  // that duplicates another name in the same scene, so a group and its child both
+  // called `hat-straw` come back as `hat-straw` and `hat-straw_1` - which happens
+  // to still load, because `_1` is not `<name>-<part>`, and which would stop
+  // loading the moment a part name appeared. Same trap, same fix, same reason.
+  root.name = 'hat-set';
+  const m = new THREE.Mesh(p, hatMat());
+  m.name = 'hat-' + name;
+  m.castShadow = true;
+  root.add(m);
+  // **the rotor is a sibling of the piece and not a child of it.** It is about the
+  // head's own `y`, and the piece is the cap - so parenting it to the cap would spin
+  // it about the cap's centre and put the spinner a centimetre out.
+  if (rotor) {
+    const r = new THREE.Mesh(rotor, hatMat());
+    r.name = 'hat-' + name + '-rotor';
+    r.castShadow = true;
+    root.add(r);
+  }
+  return root;
+}
+
+// ---------------------------------------------------------------- the page
+const exportBuf = (root) => new Promise((res, rej) =>
+  new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: false }));
+
+/**
+ * **Write one file, by two routes.** The dev server splices a hook into this page's
+ * module scope and `__hatExport` POSTs the bytes straight into `meshes/hats/`; opened
+ * on its own there is no hook, so the bytes come down as a download and the
+ * implementer moves them. Which one ran is in the log either way.
+ */
+async function writeHat(name) {
+  const buf = await exportBuf(assemble(name));
+  if (window.__hatExport) {
+    const r = await window.__hatExport(name);
+    log(`posted hats/${name}.glb — ${r.bytes} bytes`);
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name + '.glb';
+  document.body.appendChild(a); a.click(); a.remove();
+  log(`downloaded hats/${name}.glb — ${buf.byteLength} bytes`);
+}
+
+for (const n of Object.keys(HATS)) {
+  const b = document.createElement('button');
+  b.textContent = 'write ' + n;
+  b.onclick = () => writeHat(n);
+  $('row').appendChild(b);
+}
+$('all').onclick = async () => { for (const n of Object.keys(HATS)) await writeHat(n); };
+
+/**
+ * **Six heads, because a hat on nothing is a hat nobody has ever seen.** A brim
+ * 128 millimetres across on a head four centimetres wide is a disc in the air, and
+ * the only way to judge whether a hat sits right is against the head it was measured
+ * from. The propeller's rotor is spun on the same clock as the page so it can be seen
+ * to be a spinner and not a shape.
+ */
+$('prev').onclick = () => {
+  document.getElementById('view')?.remove();
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9fb7c4);
+  scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+  const key = new THREE.DirectionalLight(0xfff3dc, 1.6);
+  key.position.set(2.0, 3.0, 3.0);
+  scene.add(key);
+  const cam = new THREE.PerspectiveCamera(30, 2.7, 0.01, 10);
+  const groups = [], rotors = [];
+  Object.keys(HATS).forEach((n, i) => {
+    const g = new THREE.Group();
+    const head = new THREE.SphereGeometry(HEAD_R, 18, 12);
+    const cols = new Float32Array(head.attributes.position.count * 3);
+    for (let k = 0; k < cols.length; k += 3) {
+      cols[k] = C.snailBelly[0]; cols[k + 1] = C.snailBelly[1]; cols[k + 2] = C.snailBelly[2];
+    }
+    head.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    const shell = new THREE.Mesh(head, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72 }));
+    shell.scale.set(1, HEAD_SY, HEAD_SZ);
+    g.add(shell);
+    const built = assemble(n);
+    let piece = null;
+    built.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.68 });
+      if (o.name.endsWith('-rotor')) rotors.push(o); else piece = o;
+    });
+    /**
+     * **And the hat's own box, printed, because a hat is a silhouette and the box is the
+     * numbers the silhouette is made of.** The straw hat is 192 mm across on a head 224,
+     * and **that is a decision that was made by eye and can only be checked against a
+     * head** - so the number goes in the log beside the picture rather than in the
+     * author's head. The width a hat wants is its brim's, and a hat whose box is narrower
+     * than the head it goes on is a hat with nothing to read at race distance however good
+     * it looks in the preview.
+     *
+     * **It is measured on the geometry and not on the node**, because a group carries no
+     * box and the whole of this page's geometry is built in head-local space - so the
+     * numbers come out comparable with `headHalfAt()` and with each other with no
+     * transform in the way.
+     */
+    if (piece) {
+      const bb = new THREE.Box3().setFromBufferAttribute(piece.geometry.attributes.position);
+      const w = (bb.max.x - bb.min.x) * 1000, h = (bb.max.y - bb.min.y) * 1000;
+      log(`  ${n.padEnd(12)} ${w.toFixed(0).padStart(4)} mm across · ${h.toFixed(0).padStart(4)} mm tall`
+        + ` · ${(w / (HEAD_RZ * 2000)).toFixed(2)} of a head's width`);
+    }
+    g.add(built);
+    // **a 4 by 2 grid and not a 3 by 2**, because seven hats in six cells is one hat
+    // standing in another's picture - and **the wizard hat is drawn at 0.8 of its cell's
+    // scale** because it is the tallest thing in the county by a factor of two, and a
+    // grid that framed every hat to fit would be framing six hats to fit the seventh.
+    const cell = 0.56;
+    const big = n === 'wizard';
+    g.position.set(((i % 4) - 1.5) * cell, -(((i / 4) | 0) - 0.5) * cell, 0);
+    if (big) g.position.y -= 0.03;
+    g.scale.setScalar(big ? 1.55 : 2.2);
+    scene.add(g);
+    groups.push(g);
+  });
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(1240, 460);
+  // **the DOM id and not `renderer.id`**: that is a property on the renderer
+  // object and never reaches the element, so a preview button that asks for it
+  // back to clear the last one finds nothing and stacks a second canvas.
+  renderer.domElement.id = 'view';
+  document.body.appendChild(renderer.domElement);
+  const draw = () => {
+    // the same turn as the faces' preview: a hat is authored at `+x`, so `-PI / 2`
+    // is what brings its front onto the camera
+    for (const g of groups) g.rotation.y = -Math.PI * 0.5 + Math.sin(performance.now() * 0.0005) * 0.35;
+    for (const r of rotors) r.rotation.y = performance.now() * 0.004;
+    cam.position.set(0, 0.02, 4.9);
+    cam.lookAt(0, 0, 0);
+    renderer.render(scene, cam);
+  };
+  renderer.setAnimationLoop(draw);
+  /**
+   * **And the winding, by name.** `faceOut()` is the gate that makes a lathe safe to
+   * write in either direction, and a gate that repairs silently is a repair nobody knows
+   * happened - so the log says which hat had a piece the wrong way round and how nearly
+   * it voted, and **a build that reverses nothing is the build where every profile on the
+   * page is written the way three winds them.**
+   */
+  log(REVERSED.length
+    ? 'reversed: ' + REVERSED.join(' · ')
+    : 'winding: every profile wound the way three winds it, nothing reversed');
+  log('preview: seven hats on seven heads');
+};
+</script>
+</body>
+</html>

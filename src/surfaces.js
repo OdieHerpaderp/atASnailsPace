@@ -48,6 +48,7 @@ import {
   FLY,
   WALK,
   PUSH,
+  BOWER,
   STEP,
   POOL_BERM,
   CRATE_WALL,
@@ -56,12 +57,21 @@ import {
 } from './core.js';
 import { world, gfxWideRows } from './graphics.js';
 import { trackAt, newFrame, bankRadius, vergeBand, groundYAt, groundEdge } from './course.js';
-import { mat, poolWaterMat, PAL } from './materials.js';
+import { mat, poolWaterMat, PAL, reflectMark } from './materials.js';
 
 const _fr = newFrame();
 const _c = new THREE.Color();
 /** The second scratch, for laying one colour over another without losing it. */
 const _s = new THREE.Color();
+/**
+ * The third, and it is **grey on purpose**: `buildRoad()`'s bower writes a
+ * luminance through it, so it is the one scratch in the file whose value is not a
+ * county colour at all - which is the point, because the desaturation is asking
+ * "what is this vertex's own lightness" and not "which of the sixteen is that".
+ * Writing `new THREE.Color(0, 0, 0)` inline would be a fourth scratch allocated
+ * per vertex, and `setRGB` is what the county uses everywhere else for this.
+ */
+const _grey = new THREE.Color();
 
 function laneVertex(sm, d, out) {
   out.set(sm.p.x + sm.right.x * d, 0, sm.p.z + sm.right.z * d);
@@ -373,6 +383,78 @@ function rampShare(tr) {
   return out;
 }
 
+/**
+ * Where the bower sections are, as arc spans: `[{ s0, s1 }]`, one per run of
+ * `BOWER` samples longer than eight metres.
+ *
+ * **It lives here and not in `scenery.js`, and that is a graph decision rather
+ * than a home for it.** Three things want it - `buildRoad()` for the setts'
+ * weight and the litter, `scenery.js`'s `standBower()` for the hoops - and
+ * `scenery.js` already imports this file, so a fourth definition of it in the
+ * scenery would be a copy of a list and this is the county's own rule about
+ * copies. **`surfaces.js` is the lowest module all three can see**: it takes
+ * `tr` and gives back a fact about the lane, exactly as `rampShare()` and
+ * `midwayOf()` do.
+ *
+ * **The floor of eight metres is a statement and not a filter.** A bower under
+ * eight metres is a shed and not a tunnel, and the planner never lays one that
+ * short - so the number is there to say what the section is rather than to catch
+ * something.
+ */
+function bowerRanges(tr) {
+  const out = [];
+  let open = null;
+  for (let i = 0; i <= tr.n; i++) {
+    const on = tr.sm[i] && tr.sm[i].cond === BOWER;
+    if (on && !open) open = { i0: i, i1: i };
+    else if (on && open) open.i1 = i;
+    else if (!on && open) {
+      if ((open.i1 - open.i0) * STEP > 8) out.push({ s0: open.i0 * STEP, s1: open.i1 * STEP });
+      open = null;
+    }
+  }
+  if (open && (open.i1 - open.i0) * STEP > 8) out.push({ s0: open.i0 * STEP, s1: open.i1 * STEP });
+  return out;
+}
+
+/**
+ * How much **setts** each row of the ribbon carries, 0 to 1.
+ *
+ * **One number off the span, faded three metres either end**, and the fade is the
+ * whole of it: a band that begins on a hard edge is a decal, and the reference's
+ * stones stop short of the tunnel's mouths while the leaf litter carries on past
+ * them. So the stones fade out over three metres and `buildRoad()`'s litter fades
+ * out over four - **the litter outlives the stone**, which is what the reference
+ * shows and what a snail feels, since the speed comes off the litter and not off
+ * the setts.
+ *
+ * **It is zero on eight of the ten courses**, so every course in the county pays
+ * the weight width and none of them pays a draw: `mat.road`'s third set is
+ * guarded by `if (vDetailW.z > 0.002)` and this never leaves zero off a course
+ * whose plan dealt no bower.
+ *
+ * `widen` is how much further past each end the share reaches than the three
+ * metres the stones fade over, and it is there for the **flank**: the ribbon's
+ * setts stop at the lane's edge while the ground the hoop's feet stand on is
+ * another metre and a half out, and a verge that has gone to sand again outside
+ * the setts is the kerb the bower did not come to remove.
+ *
+ * It is asked per row and not precomputed, because **the rows are `roadRows()`
+ * and not the samples** - four rows either side of the start line and the
+ * half-way carry no `s` of their own, and a precomputed table read off `tr.sm[]`
+ * would be one sample per weight where the ribbon is a row every 0.75 m. Four
+ * rows are wrong and a shared function is right, which is the same bargain
+ * `rowRows()` and `rowFrame()` exist for.
+ */
+function settsShareOf(ranges, s, widen = 0) {
+  const f = 3 + widen;
+  let v = 0;
+  for (const r of ranges) {
+    v = Math.max(v, smoothstep(0, f, s - (r.s0 - f)) * smoothstep(0, f, r.s1 + f - s));
+  }
+  return v;
+}
+
 /** The ribbon the racers run on: crushed brick on the flat, rock on the walls. */
 function buildRoad(tr) {
   const C = TRACKC.length;
@@ -383,10 +465,22 @@ function buildRoad(tr) {
   // its frame, because a packed row is not a sample and has no `sm` of its own.
   const rows = roadRows(tr), R = rows.length;
   const pos = new Float32Array(R * C * 3), col = new Float32Array(R * C * 3);
-  // the `detailW` the shader cross-fades on: the track's grain on x, the ramp's
-  // on y, and they sum to one because the one that is not wanted is a zero
-  // rather than a weight, which is what lets each set's fetch be skipped entirely
-  const rockW = new Float32Array(R * C * 3);
+  // The `detailW` the shader cross-fades on: the track's grain on **x**, the
+  // ramp's on **y**, the bower's setts on **z**, and the shore's on **w** - four
+  // weights, and they sum to one because the one that is not wanted is a zero
+  // rather than a weight, which is what lets each set's fetch be skipped entirely.
+  //
+  // **Four and not three, and the price is on every course in the county for a
+  // feature on two of them.** `triplanarSets()` declares `attribute vec4 detailW`
+  // for *every* set-wearing material, and it cannot size that from the material's
+  // own set count: `mat.ledge` has two sets and its geometry carries three
+  // weights, so a `vec2` declaration is the same compile error pointing the other
+  // way. **A fixed `vec4` and a zero fourth weight on the geometry that does not
+  // use it is the honest form** - the fourth set's own guard
+  // (`if (vDetailW.w > 0.002)`) never fires on a zero, so `mat.course` and
+  // `mat.ledge` change appearance not at all - and it costs `R * C * 4` here
+  // rather than `R * C * 3`.
+  const rockW = new Float32Array(R * C * 4);
   // **The lane's own frame, in metres**: arc length along the lane, and metres
   // out from the centre line. This is the whole of "the grain follows the track"
   // and it is two numbers per vertex rather than a projection - see the note on
@@ -395,7 +489,22 @@ function buildRoad(tr) {
   // without a seam anywhere, including round a corner, because the coordinate
   // that repeats is the one that runs along the bend.
   const tuv = new Float32Array(R * C * 2);
+  /** **And the lane's own `right`, out to the shader**, which is the other half
+   *  of `trackUv`: the uv says *where* along the lane a vertex is and this says
+   *  which way across it, and **the parallax march needs both**. A march in a
+   *  set's own frame walks the eye's ray projected into that frame, and the
+   *  frame's two axes are `fwd` and `right` — without the second one the shader
+   *  has a `v` coordinate it cannot turn into a direction, and a march with no
+   *  direction in it is not a parallax march. It is three floats per vertex
+   *  beside a uv that is two, and `course.js` builds `right` as
+   *  `cross(fwd, up)`, so the road and the flank carry the same one and neither
+   *  carries a second copy. */
+  const trg = new Float32Array(R * C * 3);
   const share = rampShare(tr);
+  // **And the bower's spans**, read once here rather than per row, because the
+  // spans are a property of the track and `settsShareOf()` is a fold over them.
+  // Empty on eight of the ten courses, and every term below is guarded by it.
+  const bower = bowerRanges(tr);
   const fr = newFrame();
   const v = new THREE.Vector3();
   for (let i = 0; i < R; i++) {
@@ -405,6 +514,12 @@ function buildRoad(tr) {
     // ribbon is the surface that has to draw them.
     const sm = rowFrame(tr, row, fr);
     const sh = rampShareAt(share, row.s);
+    // **The row's own two shares, asked once for the whole row** rather than once
+    // per column, because both are functions of `row.s` and `row.cond` and a
+    // vertex colour cannot be finer than the row it is on anyway.
+    const setts = bower.length ? settsShareOf(bower, row.s) : 0;
+    const litter = row.cond === BOWER && bower.length
+      ? smoothstep(0, 4, row.s - bower[0].s0) * smoothstep(0, 4, bower[bower.length - 1].s1 - row.s) : 0;
     for (let j = 0; j < C; j++) {
       const edge = Math.abs(TRACKC[j]);
       const d = TRACKC[j] * sm.w;
@@ -412,6 +527,7 @@ function buildRoad(tr) {
       const o = (i * C + j) * 3, q = o / 3;
       pos[o] = v.x; pos[o + 1] = sm.y; pos[o + 2] = v.z;
       tuv[q * 2] = row.s; tuv[q * 2 + 1] = d;
+      trg[q * 3] = sm.right.x; trg[q * 3 + 1] = sm.right.y; trg[q * 3 + 2] = sm.right.z;
       if (isRock(sm)) {
         _c.copy(PAL.stoneA).lerp(PAL.stoneB, vnoise(sm.x * 0.5, j * 2.1));
         // horizontal strata, the way a cut rock face beds
@@ -442,6 +558,56 @@ function buildRoad(tr) {
         _c.lerp(PAL.clayDust, (1 - edge) * 0.5 * (0.5 + 0.5 * vnoise(sm.x * 0.6, 7.3)));
       }
       _c.multiplyScalar(0.88 + 0.26 * vnoise(sm.x * 1.1, j * 3.3));
+
+      /* ---- the bower: the band's edge, then the stones, then the litter ----
+       *
+       * Three terms, **in that order**, and the order is the whole of it. The
+       * reference's road is not stones from edge to edge: it is stones in the
+       * middle with **a metre of loose soil and leaf in it at each side**, and
+       * the soil is where the setts stop short. So the edge band goes on first,
+       * the stones are given somewhere neutral to live, and the litter goes over
+       * both.
+       */
+
+      // **The edge band**, which is the reference's own and needs no map: two of
+      // the sixteen and no seventeenth. It is keyed on how far out the column is
+      // against the lane's own half-width, **not on a metre**, so it follows the
+      // road where it narrows and widens - the same reason a crate's lane slot is
+      // a share of the half-width.
+      if (setts > 0.004) {
+        const out = Math.max(0, edge / sm.w - 0.80) / 0.20;
+        if (out > 0.004) {
+          _s.copy(PAL.dirtLight).lerp(PAL.earthDeep, 0.2 + 0.45 * fbm(sm.x * 0.31, (sm.z + d) * 0.31, 2));
+          _c.lerp(_s, Math.min(1, out) * setts * 0.92);
+        }
+      }
+
+      // **And the stones go neutral underneath**, which is §6.1a's other half and
+      // the half that is easy to leave out. `triplanarSets()`'s colour path is
+      // `diffuseColor.rgb *= dc / dsum` - **a weighted mean multiplied into this**,
+      // and a multiply cannot widen the chroma of what is under it. So a
+      // per-stone warm/cool spread over the ribbon's own `clay` red gives red
+      // stones in a range of values, **and the hue spread is the loudest thing in
+      // `references/cobble.jpg` and the reason the whole third set exists.**
+      //
+      // **Desaturate, do not tint.** A `lerp` toward `stoneA` is the wrong half
+      // of this idea and it is tempting, because the stone pair is already in the
+      // sixteen: `stoneA` has a hue of its own, so it would drag every sett back
+      // toward one stone's colour, which is a setts road in which every stone
+      // agrees about what colour a stone is. **Luminance is not a choice out of
+      // the jar - it is this vertex's own value**, which is why the bower needs no
+      // seventeenth `PAL` key.
+      //
+      // **And the road's own history survives it.** A ribbon's vertex colour is
+      // not only hue: it carries the dust swept down the middle, the damp in the
+      // hollows, the wear at the verges, all of it as a *value* that is already
+      // here. Desaturating keeps every one of those and drops only the clay, so
+      // **the bower's road keeps its own history and loses only its colour.**
+      if (setts > 0.004) {
+        const lum = _c.r * 0.2126 + _c.g * 0.7152 + _c.b * 0.0722;
+        _c.lerp(_grey.setRGB(lum, lum, lum), setts);
+      }
+
       // **The line**, and it is the whole of the third reference: a painted
       // stripe with the turf butted up against it and nothing at all in between.
       // Nothing creeped back in over it and nothing faded out under it - a court
@@ -472,10 +638,88 @@ function buildRoad(tr) {
         _s.copy(PAL.trackLine).lerp(PAL.trackLineWorn, Math.max(0, vnoise(sm.x * 0.9, j * 5.1) - 0.34) * 1.6);
         _c.lerp(_s, line);
       }
+
+      /* ---- **And the litter**, which is the sim's number made visible.** ----
+       *
+       * **Thirty metres of leaf on the road is the whole of why a bower is slower
+       * than the footpath beside it**, and this term is that fact drawn. A bower
+       * that is a tunnel over bare clay is a setpiece with a handicap attached to
+       * nothing a player can see, and `bowerReport()`'s `litter` is the number
+       * that keeps the two the same fact.
+       *
+       * **Painted from the existing sixteen and out of no new colour**: `dry`
+       * **two thirds of the way into `clay`** - a bower's litter is leaves lying on
+       * the county's own road, so it is mostly the road's own colour with a leaf's
+       * on top - and `grassB` in the drifts, which is what a metre of leaves under
+       * a hedge looks like from above.
+       *
+       * **`grassB` and not `leafDark`, and that is the sixteen talking.** `PAL` is
+       * a jar of twenty names of which a biome fills sixteen, and the four it does
+       * not fill are the farms' and the stable's own - **`leafDark` is one of those
+       * four**, so `PAL.leafDark` is `undefined` and `Color.lerp` throws
+       * `Cannot read properties of undefined (reading 'r')` on the first row of
+       * the first bower on the first course. A name outside the sixteen is not a
+       * colour that looks wrong; it is a crash in a lane nobody walks, on two
+       * courses out of ten.
+       *
+       * **And it was not two thirds to start with, and the reason is worth
+       * naming.** The first cut ran it a third of the way and came out a **bright
+       * yellow stripe** down the middle of the lane, which is not leaf litter but
+       * a hazard marking: `PAL.dry` is `[0.66, 0.67, 0.36]`, a yellow-green, and
+       * a third of a lerp towards clay is still most of that yellow. **A litter
+       * band has to sit near the road it is lying on**, and the road's own colour
+       * is the thing it is most of.
+       *
+       * **And at full strength, where the first cut had four fifths of it, and the
+       * reason is the setts.** This term and `bowerSetts-albedo` are the same piece
+       * of ground, and the setts are a multiply over it: at `colourGain` 2.11 on a
+       * map whose mean is 0.474 the vertex colour comes through at **47 per cent**
+       * under the stones, so anything laid here at four fifths arrives as about a
+       * third and the litter was invisible on a road that was visibly a setts
+       * road. **Two things drawn on one surface have to be told who gets the
+       * weight**, and the one that carries the sim's number is the one that does.
+       *
+       * **Before the paint and not after**, so the start line wins where the two
+       * overlap, exactly as the paint wins over the litter. A line under a drift
+       * of leaves is a line under leaves.
+       *
+       * **And it outlives the setts**: `settsShareOf()` fades the stones out over
+       * three metres at each end of a section and this fades over **four**, so the
+       * stone is gone before the leaf is, which is the reference - stones inside
+       * the tunnel, soil at the ends.
+       *
+       * **It is the only thing drawn here that is not on the road's own plane of
+       * the lane, and it is on the road**: the leaves are on the ground the snail
+       * runs on, so the speed and the picture are the same stretch of lane.
+       */
+      /* **And it is heaviest at the verges, because that is where the leaves
+       * actually are.** `references/tunnel.jpg` is a channel cut through the
+       * growth: the road's crown is swept and comparatively clean, and the litter
+       * lies against the wall of green on either side of it. A band laid at one
+       * strength across the whole width is a stripe painted down the middle of a
+       * road, which is what the first two cuts were - and a stripe is a marking,
+       * and a marking is the one thing leaf litter must not look like.
+       *
+       * **So the share falls off towards the centre line**, over the width of a
+       * lane and not over a fixed number of metres, for the same reason a crate's
+       * lane slot is a share of the half-width. */
+      if (litter > 0.004) {
+        const verge = 0.26 + 0.74 * Math.pow(clamp(edge / sm.w, 0, 1), 1.3);
+        _c.lerp(PAL.dry.clone().lerp(PAL.clay, 0.70 + 0.20 * vnoise(sm.x * 0.7, j * 2.1)),
+          litter * verge);
+        _c.lerp(PAL.grassB, Math.max(0, vnoise(sm.x * 0.9 + 7, j * 3.1) - 0.5) * litter * verge * 0.8);
+      }
+
       col[o] = _c.r; col[o + 1] = _c.g; col[o + 2] = _c.b;
-      rockW[q * 3] = 1 - sh;
-      rockW[q * 3 + 1] = sh;
-      rockW[q * 3 + 2] = 0;
+      // **And the setts' share**, which is one number off the row's own condition
+      // and off where the section sits in the arc - see `settsShareOf()`.
+      // It is zero everywhere on the other eight courses, so every course in the
+      // county pays the buffer width and **none of them pays a draw**.
+      const st = setts;
+      rockW[q * 4] = 1 - sh - st;
+      rockW[q * 4 + 1] = sh;
+      rockW[q * 4 + 2] = st;
+      rockW[q * 4 + 3] = 0;
     }
   }
   // **One material and a weight, where this was two materials and a split.**
@@ -517,8 +761,9 @@ function buildRoad(tr) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  g.setAttribute('detailW', new THREE.BufferAttribute(rockW, 3));
+  g.setAttribute('detailW', new THREE.BufferAttribute(rockW, 4));
   g.setAttribute('trackUv', new THREE.BufferAttribute(tuv, 2));
+  g.setAttribute('trackR', new THREE.BufferAttribute(trg, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat.road);
@@ -528,6 +773,12 @@ function buildRoad(tr) {
 }
 
 /** The flanks, so the ribbon is a solid slab sitting on the landscape. */
+/** How far outside the ribbon's edge the bower's own iron stands, in metres, and
+ *  the flank asks for it as an offset. **It is `BOWER_SPAN / 2` less the lane's
+ *  own half-width and not the span**, because what has to reach is the ground the
+ *  feet are on and not the ground the setts stop short at. */
+const BOWER_FOOT = 2.95 - 2.8;
+
 function buildSkirt(tr) {
   // **The rows are `roadRows()` and not the samples**, for the reason the ribbon's
   // are: the flank hangs off the edge of the ribbon, so a flank built on the
@@ -543,7 +794,18 @@ function buildSkirt(tr) {
   // exactly as the ribbon's does and the corner between the two meshes is a
   // corner between two surfaces and not a corner between two frames
   const tuv = new Float32Array(R * 4 * 2);
+  // **and the same lane `right` the ribbon carries**, for the same reason and on
+  // the same frame: a march on the flank is a march in the lane's frame, and the
+  // flank's own `shore` set is `uv` on the ground's account of it being a laid
+  // thing. One field, two meshes — see `buildRoad()`'s note.
+  const trg = new Float32Array(R * 4 * 3);
   const share = rampShare(tr);
+  // **And the bower's spans again**, for the verge term below and for nothing else.
+  // `buildRoad()` has its own copy because they are two functions with two rows
+  // lists; **a second `bowerRanges()` would be a third**, and a list of stretches
+  // that can fall out of step with the two that built the geometry is the failure
+  // this file is written against.
+  const bower = bowerRanges(tr);
   const fr = newFrame();
   const v = new THREE.Vector3();
   for (let i = 0; i < R; i++) {
@@ -562,12 +824,20 @@ function buildSkirt(tr) {
       pos[o + 3] = v.x; pos[o + 4] = Math.min(groundYAt(sm, dBot), sm.y); pos[o + 5] = v.z;
       tuv[q * 2] = row.s; tuv[q * 2 + 1] = dTop;
       tuv[(q + 1) * 2] = row.s; tuv[(q + 1) * 2 + 1] = dBot;
+      trg[q * 3] = sm.right.x; trg[q * 3 + 1] = sm.right.y; trg[q * 3 + 2] = sm.right.z;
+      trg[(q + 1) * 3] = sm.right.x; trg[(q + 1) * 3 + 1] = sm.right.y; trg[(q + 1) * 3 + 2] = sm.right.z;
       // and the share is read between the samples for the same reason the ribbon
       // reads it there: the flank of a packed row is the flank of a row that is
       // not a sample, and the array's own nearest index would put a rock flank
       // under a clay one a third of a metre away.
       const sh = rampShareAt(share, row.s);
       const rock = isRock(sm);
+      /** **And how much of this flank is inside a bower**, which is the whole of
+       *  the verge change below. It is the same `settsShareOf()` the ribbon's own
+       *  setts weight asks, **widened** by the arch's own foot offset, because the
+       *  flank *is* the ground the hoop stands on and the ribbon's span stops well
+       *  short of it. */
+      const inBower = 0;   // the verge goes back to sand - see the note on it
       // and the share the shader reads, beside the colour rather than instead of
       // it: `isRock` still picks the two colours below, because the colour is a
       // step in its own right and a colour that cross-faded would be a different
@@ -581,9 +851,20 @@ function buildSkirt(tr) {
       // flank under a clay ribbon, stone flank under a stone one, and a
       // gradient between the two at each end of every wall, which is the same
       // width and in the same place as the gradient on the ribbon above it.
-      rockW[q * 3] = 0;
-      rockW[q * 3 + 1] = sh;
-      rockW[q * 3 + 2] = 1 - sh;
+      // **A flank never wears the setts, and that is the reason rather than an
+      // omission**: the reference's band of loose soil is on the *road*, where the
+      // setts stop short, and this is the metre of sand hanging off the ribbon's
+      // own edge. So `mat.ledge`'s three sets keep the three weights they always
+      // had - the track's on x, the cliff's on y, the shore's on z - and the
+      // fourth is a zero.
+      rockW[q * 4] = 0;
+      rockW[q * 4 + 1] = sh;
+      // **and the shore's share is `1 - sh` on every course and inside a bower
+      // too**, which is the sand band's note below. It was once damped inside a
+      // bower and the colour painted to match; both are gone and this line is the
+      // county's own sand band again.
+      rockW[q * 4 + 2] = 1 - sh;
+      rockW[q * 4 + 3] = 0;
       if (rock) {
         // the face a wall is cut into: bedded in strata like the lane above
         // it, and shaded the further it falls from the light
@@ -605,6 +886,24 @@ function buildSkirt(tr) {
         // and grit in the cracks, which is the one thing the shore has and a
         // six-centimetre kerb mostly will not
         _c.lerp(PAL.earthDeep, Math.max(0, 0.42 - fbm((sm.x + dTop) * 0.36, (sm.z + dTop) * 0.36, 2)) * 0.5);
+        /* **And this is where the verge went back to sand, and the reason is that
+         *  `grassA` is the wrong green twice over.**
+         *
+         * A bower's verge was painted to `grassA` over `deep` for a while - a dark
+         * earth-and-turf band replacing the sand, on the argument that a sunken
+         * leafy lane has no kerb in it. **The kerb was right to lose and the green
+         * was the wrong answer**: `grassA` is the meadow's *lit* tone, so a metre
+         * of it either side of the cobbles is brighter than the cobbles and reads
+         * as a strip of lawn laid down the middle of a road, which is a worse
+         * kerb than the sand was and a louder one. **The reference's verge is dry
+         * earth with leaf drift on it, and the drift is what softens the join** -
+         * which is `bower-litter`'s job and is now doing it - so the sand stays.
+         *
+         * So `inBower` is zero and this term is gone, and the two halves of the
+         * weight above go back to `(1 - sh)`. **It is left in the source as a
+         * named zero rather than deleted** because the next person to ask why a
+         * bower has a bright band down both sides of it should find the answer
+         * here rather than try it a fourth time. */
       }
       col[o] = _c.r; col[o + 1] = _c.g; col[o + 2] = _c.b;
       _c.multiplyScalar(rock ? 0.9 : 1);
@@ -640,8 +939,9 @@ function buildSkirt(tr) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  g.setAttribute('detailW', new THREE.BufferAttribute(rockW, 3));
+  g.setAttribute('detailW', new THREE.BufferAttribute(rockW, 4));
   g.setAttribute('trackUv', new THREE.BufferAttribute(tuv, 2));
+  g.setAttribute('trackR', new THREE.BufferAttribute(trg, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat.ledge);
@@ -741,6 +1041,18 @@ function buildWater(tr) {
     g.setIndex(idx);
     g.computeVertexNormals();
     g.userData.base = pos.slice(0);
+    // **The pool is the one surface in the county that carries a reflection mark**,
+    // and it is stamped here rather than anywhere else because this is where the
+    // water is *built*: `scatter()` and `planted()` are the other two plant sites
+    // and there is no third one hiding. The mark is negative because this pass has
+    // no normal of the water's own to read - the water is `transparent` and writes
+    // no depth, so `hideFromGBuffer()` keeps it out of the occlusion's buffer on
+    // purpose, and a reflection about the pool floor's normal is a reflection that
+    // leans away from the viewer at the bank. **And 0.02 is water's own answer
+    // looking straight down into it** - the index of 1.33, which is a constant and
+    // not a taste, and two per cent is why a pool is a mirror at the bank and a
+    // sheet of nothing looked into from above. See `reflectMark()`.
+    reflectMark(g, -0.02, 'pools');
     // **A material of this pool's own**, so the reflections row can hang this
     // pool's own cube probe off it - see `poolWaterMat()`. One draw call either
     // way, and the ripple drift is a shared uniform so the pools still move as
@@ -1036,7 +1348,7 @@ function buildGround(tr) {
   // and the three weights the shader blends the three sets by, which are the
   // same three numbers written out for the geometry rather than asked of it a
   // quad at a time
-  const wgt = new Float32Array(R * C * 3);
+  const wgt = new Float32Array(R * C * 4);
   // **How much of the track's sand edge this stretch of course is wearing**, which
   // is `1 - rampShare()` — the same number the flank's own maps are cross-faded
   // by, read here for the band the flank fades into. It is a second caller of
@@ -1239,9 +1551,14 @@ function buildGround(tr) {
       let wr = bare[i * C + c], ws = Math.max(shore[i * C + c], trodden[i * C + c]);
       const tot = wr + ws;
       if (tot > 1) { wr /= tot; ws /= tot; }
-      wgt[q * 3] = 1 - wr - ws;
-      wgt[q * 3 + 1] = wr;
-      wgt[q * 3 + 2] = ws;
+      wgt[q * 4] = 1 - wr - ws;
+      wgt[q * 4 + 1] = wr;
+      wgt[q * 4 + 2] = ws;
+      // **and a zero fourth**, for the reason the road's note above gives: the
+      // ground has three sets and the declaration is a `vec4` because the same
+      // shader reads all of them. Three of the sixteen weights on a meadow is a
+      // third more buffer than the county needed in March and nothing to see.
+      wgt[q * 4 + 3] = 0;
     }
   }
   // **One index list and one material, where this was three groups and three.**
@@ -1284,7 +1601,7 @@ function buildGround(tr) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  g.setAttribute('detailW', new THREE.BufferAttribute(wgt, 3));
+  g.setAttribute('detailW', new THREE.BufferAttribute(wgt, 4));
   g.setIndex(idx);
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat.course);
@@ -1456,7 +1773,7 @@ const midwayOf = (tr) => {
 // which is how a thing standing beside the lane finds where beside is.
 // ------------------------------------------------------------------
 export {
-  laneVertex, roadRows, rowFrame, rampShare, isRock, isFace,
+  laneVertex, roadRows, rowFrame, rampShare, isRock, isFace, bowerRanges, settsShareOf,
   buildRoad, buildSkirt, buildWater, buildGround,
   groundColumns, groundHalfAt, groundDrawnAt,
   lineMarks, midwayOf, MID_CLEAR, TOWER_FOOT, MID_FLAT, MID_PERCH, WATER_TILE, _fr,

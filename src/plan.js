@@ -58,6 +58,7 @@ import {
   FLY,
   WALK,
   PUSH,
+  BOWER,
 } from './core.js';
 
 /* ================================================================== *
@@ -275,7 +276,7 @@ function planTrack(catId, seed, lenScale) {
   // out for the camera to get past it and watch the race come in, so neither
   // end of the course is ever looking off into nothing.
   const secs = [{ c: 'run', len: 17 + R() * 4 }];
-  const tally = { walls: 0, leaps: 0, pools: 0, floods: 0, crates: 0, straights: 0 };
+  const tally = { walls: 0, leaps: 0, pools: 0, floods: 0, crates: 0, straights: 0, bowers: 0 };
   // Every element the course names is dealt in at least once, and the rest of
   // the features are picked at random. Picking all of them at random meant a
   // course could come out with none of the thing it is named after - Lily
@@ -294,6 +295,13 @@ function planTrack(catId, seed, lenScale) {
     else if (k === 'water') tally.pools++;
     else if (k === 'leapClimb') tally.floods++;
     else if (k === 'pushCrate') tally.crates++;
+    // **and a bower is counted rather than lumped in with the straights**, because
+    // `tools/plan-test.mjs` prints `tally` and a number is how anybody - a player
+    // reading the page, or the gate reading a course - knows the deal put a tunnel
+    // in it. Two bowers on one course and none on another is a different picture,
+    // and a tally that called both of them `straights` would have said they were
+    // the same.
+    else if (k === 'bower') tally.bowers++;
     else tally.straights++;
   }
   // the clear stretches of the course, and they are paid for out of the length
@@ -386,11 +394,20 @@ function planTrack(catId, seed, lenScale) {
         : k === 'pushCrate' ? Math.max(CRATE_LANE, footpath)
           : footpath;
       packed += footpath - run;
-      // on the dash course the "features" are the straights themselves
-      const feat = k === 'run' ? 10 + R() * 6 : 0;
+      // **A `run` and a `bower` are both the straights, and both draw a section of
+      // a length of their own rather than the length they reserved.** `long` is
+      // hoisted so the section's length and the arithmetic that advances past it
+      // read ONE value: `atX` is what `midX` and the half-way band are solved from,
+      // and if this line advanced by `ELEMENTS[k].x` while the geometry above was
+      // drawn at `feat`, the plan's arithmetic and the lane would drift apart by
+      // metres and the tower would land off the clear middle. That is the same
+      // hazard `run` already carries, and the fix is the hoist rather than a
+      // second `||`.
+      const long = k === 'run' || k === 'bower';
+      const feat = long ? (k === 'run' ? 10 + R() * 6 : 26 + R() * 6) : 0;
       secs.push({ c: 'run', len: run });
       secs.push({ c: k, len: feat });
-      atX += run + (k === 'run' ? feat : (ELEMENTS[k] || ELEMENTS.run).x);
+      atX += run + (long ? feat : (ELEMENTS[k] || ELEMENTS.run).x);
     }
   };
   lay(kinds.slice(0, cut));
@@ -574,6 +591,30 @@ function planTrack(catId, seed, lenScale) {
         push(x0 + (run * i) / steps, y0 + (h * i) / steps, CLIMB, y0, W);
       }
       x = x0 + run; y = y0 + h; carry += h;
+    } else if (sec.c === 'bower') {
+      // **A bower is footpath, and this branch is `run`'s with one number
+      // changed.** Same height rule - a wall lifts the whole course and nothing
+      // quietly relaxes it back down again - same width, same 1.1 m step, because
+      // **the bower's road is the course's own road** and the only thing about it
+      // that is not the course is thirty metres of leaf lying on top of it. The
+      // width is not narrowed either: a hoop's feet stand at 2.3 m and the lane is
+      // 2.8, so a narrow lane would pull `roadRows()`, `vergeBand()` and
+      // `wallProfile()` into the change for nothing.
+      //
+      // **And it has to be its own branch and not a flag on `run`.** Everything
+      // that is not `run` and not `climb` falls into the hole branch below, where
+      // `cat.gap`, `cat.lip` and `cat.deep` are read - so a `bower` section with no
+      // branch of its own builds a chasm in the road with a green tunnel on the
+      // lid, and on a course with no `gap` in it at all (`dash`) the gap's length is
+      // `NaN` and nothing anywhere throws. That is the quietest failure this
+      // planner has, and it is the reason this task is not one line.
+      const steps = Math.max(1, Math.round(sec.len / 1.1));
+      for (let i = 0; i < steps; i++) {
+        const px = x + (sec.len * i) / steps;
+        y = baseY(px) + carry;
+        push(px, y, BOWER, y, W);
+      }
+      x += sec.len;
     } else {
       // ---- a hole in the course, and the only way past it is off the bank.
       // A leap is a cliff over a dry chasm: the ground stands up at the lip's
