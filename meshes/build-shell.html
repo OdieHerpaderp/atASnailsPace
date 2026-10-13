@@ -51,6 +51,7 @@
   swaps it in the moment a racer is built.
 </p>
 <button id="go">write shell.glb</button><button id="prev">preview</button><button id="isl">islands</button>
+<button id="goSpike">write shell-spike.glb</button><button id="prevSpike">preview spike</button>
 <pre id="log"></pre>
 <script type="module">
 import * as THREE from 'three';
@@ -469,15 +470,180 @@ function volume(g) {
   return vol;
 }
 
-async function assemble() {
-  const g = await loadShell();
+/* ================================================================== *
+ * The second shell, and it is wound here rather than cut from the
+ * reference. The reference images ask for a turbinate coil with a ring
+ * of spikes on every whorl, and `references/snailRef.glb` carries a
+ * smooth dome and nothing of the kind - so this one is a swept tube
+ * around the county's own frame, built to mount on `shellG` exactly the
+ * way the coil does.
+ *
+ * **It is oriented by measurement and not by a written turn.** The coil
+ * above gets `Rx(270°)`+`Ry(180°)` because that is the turn *that file*
+ * needs; a shell built here has no such fact to read, so `apertureOf()`
+ * finds its one open mouth, `frameToFrame()` carries the measured spire
+ * onto `SPIRE_WANT` and the mouth onto `MOUTH_WANT`, and `reportEnds()`
+ * prints how near the two landed. There is no free parameter to be wrong
+ * in, which is the whole point: **a rotation guessed at is a snail on its
+ * side in a still and nobody can say which of the two it was.**
+ *
+ * **And the winding is derived, then checked.** The tube is swept in a
+ * right-handed `(U, V, W = tangent)` frame and its quads are written off
+ * `∂/∂j × ∂/∂i`, which is outwards; the spire is capped with a fan so the
+ * shell has exactly one hole (the mouth) for `apertureOf()` to find; and
+ * every spike is a closed cone reversed in code when its own signed
+ * volume is negative. The volume is logged beside the ends, unsigned of
+ * any claim, because a mesh that went inside out entirely would move it.
+ * ================================================================== */
+const SPIKE_TURNS = 2.7, SPIKE_RINGS = 128, SPIKE_SIDES = 16;
+const SPIKE_R0 = 0.30, SPIKE_H = 0.42, SPIKE_TUBE = 0.12;
+const TAU = Math.PI * 2;
+
+/** The tube's centreline in the shell's own build frame: axis +y, spire up. */
+function spikeCentre(t) {
+  const a = -t * SPIKE_TURNS * TAU;
+  // **a floor on the orbit, so the frame never degenerates at the tip** - a
+  // centre that reaches the axis has a tangent parallel to `up`, and
+  // `cross(up, tangent)` is then zero and the whole cross-section collapses.
+  const orbit = SPIKE_R0 * Math.pow(1 - t, 0.9) + 0.025;
+  return [orbit * Math.cos(a), -SPIKE_H / 2 + SPIKE_H * t, orbit * Math.sin(a), a, orbit];
+}
+const spikeTangent = (t) => {
+  const e = 1e-3, a = spikeCentre(Math.max(0, t - e)), b = spikeCentre(Math.min(1, t + e));
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const l = Math.hypot(d[0], d[1], d[2]) || 1;
+  return [d[0] / l, d[1] / l, d[2] / l];
+};
+
+function buildSpike() {
+  const P = [], COL = [], UV = [], IDX = [];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  // **the same cavity ramp the coil wears**, pale at crown and rim and a shade
+  // deeper in the shelter of the middle, so the racer's own tint is the hue and
+  // this is only ever the value - it cannot outshine the animal wearing it.
+  const ramp = (t) => {
+    const v = RAMP_LO + (RAMP_HI - RAMP_LO) * (0.35 + 0.65 * Math.pow(Math.abs(t * 2 - 1), 1.3));
+    return [v * 0.995, v * 0.985, v * 0.960];
+  };
+  const up = [0, 1, 0];
+
+  // ---- the tube, a right-handed (U, V, W = tangent) frame swept along the centreline
+  for (let i = 0; i <= SPIKE_RINGS; i++) {
+    const t = i / SPIKE_RINGS;
+    const [cx, cy, cz] = spikeCentre(t);
+    const T = spikeTangent(t);
+    const U = norm(cross(up, T));
+    const V = cross(T, U);
+    const tr = SPIKE_TUBE * Math.pow(1 - t, 0.55) + 0.012;
+    const col = ramp(t);
+    for (let j = 0; j <= SPIKE_SIDES; j++) {
+      const b = j / SPIKE_SIDES * TAU, cb = Math.cos(b), sb = Math.sin(b);
+      P.push(cx + tr * (cb * U[0] + sb * V[0]), cy + tr * (cb * U[1] + sb * V[1]), cz + tr * (cb * U[2] + sb * V[2]));
+      COL.push(col[0], col[1], col[2]);
+      UV.push(t, j / SPIKE_SIDES);
+    }
+  }
+  for (let i = 0; i < SPIKE_RINGS; i++) {
+    for (let j = 0; j < SPIKE_SIDES; j++) {
+      const A = i * (SPIKE_SIDES + 1) + j, B = A + 1, Cc = A + SPIKE_SIDES + 1, D = Cc + 1;
+      IDX.push(A, B, D, A, D, Cc);   // outwards, from ∂/∂j × ∂/∂i
+    }
+  }
+  // ---- the spire cap, a fan to the tip's own centre, so the shell has exactly one hole
+  const tip = spikeCentre(1);
+  const capCentre = P.length / 3;
+  P.push(tip[0], tip[1], tip[2]);
+  COL.push(...ramp(1)); UV.push(0.5, 0.5);
+  const ringBase = SPIKE_RINGS * (SPIKE_SIDES + 1);
+  for (let j = 0; j < SPIKE_SIDES; j++) IDX.push(capCentre, ringBase + j, ringBase + j + 1);
+
+  // ---- the spikes, a closed cone on every few whorls, pointing out and up
+  const SP = 7;
+  const signedVol = (idx) => {
+    let vol = 0;
+    for (let t = 0; t < idx.length; t += 3) {
+      const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
+      vol += (P[a] * (P[b + 1] * P[c + 2] - P[c + 1] * P[b + 2])
+        + P[a + 1] * (P[b + 2] * P[c] - P[b] * P[c + 2])
+        + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c])) / 6;
+    }
+    return vol;
+  };
+  const addCone = (base, dir, radius, height, col) => {
+    const d = norm(dir);
+    const p1 = norm(cross(d, Math.abs(d[1]) < 0.9 ? up : [1, 0, 0]));
+    const p2 = cross(d, p1);
+    const start = P.length / 3;
+    for (let k = 0; k <= SP; k++) {
+      const f = k / SP * TAU, cf = Math.cos(f), sf = Math.sin(f);
+      P.push(base[0] + radius * (cf * p1[0] + sf * p2[0]), base[1] + radius * (cf * p1[1] + sf * p2[1]), base[2] + radius * (cf * p1[2] + sf * p2[2]));
+      COL.push(col[0], col[1], col[2]); UV.push(k / SP, 0);
+    }
+    const apexI = P.length / 3;
+    P.push(base[0] + d[0] * height, base[1] + d[1] * height, base[2] + d[2] * height);
+    COL.push(col[0], col[1], col[2]); UV.push(0.5, 1);
+    const baseI = P.length / 3;
+    P.push(base[0], base[1], base[2]); COL.push(col[0], col[1], col[2]); UV.push(0.5, 0);
+    let local = [];
+    for (let k = 0; k < SP; k++) {
+      const A = start + k, B = start + k + 1;
+      local.push(A, B, apexI);   // flank, outwards
+      local.push(baseI, B, A);   // base, faces -d into the shell
+    }
+    // **a spike is never inside out**: the whole cone is reversed in code when
+    // its own signed volume is negative, so a spike cannot be the one face the
+    // tube's winding check could not see.
+    if (signedVol(local) < 0) {
+      const r = [];
+      for (let t = 0; t < local.length; t += 3) r.push(local[t], local[t + 2], local[t + 1]);
+      local = r;
+    }
+    for (const ix of local) IDX.push(ix);
+  };
+  for (let i = 7; i <= SPIKE_RINGS - 9; i += 6) {
+    const t = i / SPIKE_RINGS;
+    const [cx, cy, cz, a] = spikeCentre(t);
+    const tr = SPIKE_TUBE * Math.pow(1 - t, 0.55) + 0.012;
+    const radial = [Math.cos(a), 0, Math.sin(a)];
+    // the base sits *inside* the whorl so the cone emerges from it rather than
+    // hanging off a point on the surface, and it leans up toward the spire
+    const base = [cx + tr * 0.5 * radial[0], cy + tr * 0.5 * radial[1], cz + tr * 0.5 * radial[2]];
+    addCone(base, [radial[0], 0.7, radial[2]], tr * 0.34, tr * 1.45, ramp(t));
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(COL, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
+  g.setIndex(IDX);
+
+  // ---- orient by measurement, then normalise, exactly the way the coil is
+  const hole = apertureOf(g);
+  g.applyMatrix4(frameToFrame(basisOf(hole.spire, hole.mouth), basisOf(SPIRE_WANT, MOUTH_WANT)));
+  g.computeBoundingBox();
+  const fb = g.boundingBox, mid = new THREE.Vector3();
+  fb.getCenter(mid);
+  g.translate(-mid.x, -mid.y, -mid.z);
+  const span = [fb.max.x - fb.min.x, fb.max.y - fb.min.y, fb.max.z - fb.min.z];
+  const k = NORMALISE / Math.max(span[0], span[1], span[2]);
+  g.scale(k, k, k);
+  g.computeVertexNormals();
+  reportEnds(apertureOf(g));
+  log(`spike shell · ${g.attributes.position.count} verts, ${g.index.count / 3} tris`
+    + `  ·  volume ${volume(g).toExponential(2)}${volume(g) > 0 ? '  ✓ outwards' : '  ← REVERSED'}`);
+  return g;
+}
+
+async function assemble(style) {
+  const g = style === 'spike' ? buildSpike() : await loadShell();
   const root = new THREE.Group();
   root.name = 'shell-set';
   const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
     name: 'shell',
     color: 0xffffff, vertexColors: true, roughness: 0.42, metalness: 0.06,
   }));
-  mesh.name = 'shell';
+  mesh.name = style === 'spike' ? 'shell-spike' : 'shell';
   mesh.castShadow = true;
   root.add(mesh);
   const vol = volume(g);
@@ -508,6 +674,25 @@ $('go').onclick = async () => {
   a.href = url; a.download = 'shell.glb';
   document.body.appendChild(a); a.click(); a.remove();
   log(`wrote shell.glb — ${buf.byteLength} bytes (downloaded, not saved into meshes/)`);
+};
+
+// **The second shell, and the same hook with one argument between them.** The
+// `shell` hook takes `(style, name)`, so `'spike'` builds the wound coil and
+// `'shell-spike.glb'` is where it lands - no second route, no second server.
+$('goSpike').onclick = async () => {
+  const root = await assemble('spike');
+  if (window.__shellExport) {
+    const r = await window.__shellExport('spike', 'shell-spike.glb');
+    log(`wrote meshes/shell-spike.glb — ${r.bytes} bytes`);
+    return;
+  }
+  const buf = await new Promise((res, rej) =>
+    new GLTFExporter().parse(root, res, rej, { binary: true, onlyVisible: true }));
+  const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'shell-spike.glb';
+  document.body.appendChild(a); a.click(); a.remove();
+  log(`wrote shell-spike.glb — ${buf.byteLength} bytes (downloaded, not saved into meshes/)`);
 };
 
 /**
@@ -597,6 +782,42 @@ $('prev').onclick = async () => {
     });
   });
   log('preview: four bearings round the shell');
+};
+
+$('prevSpike').onclick = async () => {
+  document.getElementById('view')?.remove();
+  const root = await assemble('spike');
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xaebfcc);
+  scene.add(new THREE.HemisphereLight(0xd6ecff, 0x8a8a72, 0.9));
+  const key = new THREE.DirectionalLight(0xfff3dc, 1.5);
+  key.position.set(2.5, 4, 3);
+  scene.add(key);
+  scene.add(root);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(5, 40),
+    new THREE.MeshStandardMaterial({ color: 0x8fa0ab }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.62;
+  scene.add(ground);
+  const camera = new THREE.PerspectiveCamera(32, 900 / 300, 0.05, 40);
+  const cell = 900 / 4;
+  camera.aspect = cell / 300;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(900, 300);
+  renderer.domElement.id = 'view';
+  document.body.appendChild(renderer.domElement);
+  renderer.setScissorTest(true);
+  const VIEWS = [0, 1.57, 3.14, 4.71];
+  renderer.setAnimationLoop(() => {
+    VIEWS.forEach((a, i) => {
+      camera.position.set(Math.cos(a) * 0.95, 0.42, Math.sin(a) * 0.95);
+      camera.lookAt(0, -0.02, 0);
+      renderer.setViewport(i * cell, 0, cell, 300);
+      renderer.setScissor(i * cell, 0, cell, 300);
+      renderer.render(scene, camera);
+    });
+  });
+  log('preview spike: four bearings round the wound shell');
 };
 </script>
 </body>

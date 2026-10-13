@@ -172,7 +172,7 @@ const SAVE = {
  *  own defaults - Balanced, render scale 1× - before the preset is pressed below.
  *  Seeding the key instead would mean writing nine rows and seven switches out of
  *  `setPreset()` a second time, in this file, where nothing checks them. */
-const SAVE_KEY = 'snail-grand-prix-v1';
+const SAVE_KEY = 'at-a-snails-race-v1';
 
 /* ------------------------------------------------------------------ *
  * Playwright out of the npx cache

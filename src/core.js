@@ -402,18 +402,74 @@ for (const c of CATS) {
     throw new Error('bad course ' + c.id);
   }
 }
-const STAT_MAX = 24;
+const STAT_MAX = 48;
 const STAT_MIN = 1;
 const GOLD_PER_FRUIT = 10;
+const FRUIT_EXP = 10;                         // ...and what a fruit buys with it, which is exp and not a point
 const START_GOLD = 50;
 const START_TRAIT = 5;                        // every trait a new snail begins on
-const freshSnail = () => ({ running: START_TRAIT, power: START_TRAIT, swimming: START_TRAIT, flying: START_TRAIT, stamina: START_TRAIT });
+/* ================================================================== *
+ * The curve, and it is exp under it.
+ *
+ * **A trait is a number of exp and the level is a read of it**, so the thing a
+ * fruit buys is exp and the thing the sim reads is `levelOf(exp)`. It was the
+ * other way round - the trait *was* the level and a fruit moved it by one - and
+ * the cost of that was every price in the game having to be re-derived whenever
+ * the ceiling moved: `btn.disabled = v >= STAT_MAX` was a cap a player could
+ * read off a button, and it is gone because there is no cap now.
+ *
+ * **The two numbers of the curve are named and not written into the formula**,
+ * because the formula is written in both directions - `levelOf()` reads it out of
+ * exp and `expForLevel()` inverts it - and a pair of literals written twice is a
+ * pair that can disagree. **`plan-test.mjs` asserts the two agree at every level
+ * from 0 to 200**, because a curve and its inverse that drift apart do not show
+ * up as a wrong number: they show up as a bar that fills past its own end and a
+ * level you cannot reach by feeding and cannot leave by not feeding.
+ *
+ * **The shape is the argument for the exponent.** Level 1 is 6 exp and level 48
+ * is 715, so a level costs ~7 exp early and ~19 late: **the same fruit is worth
+ * five times as much to a snail at the foot of the ladder as to one near the
+ * top**, which is what a stat that is bought rather than raced wants to be. A
+ * linear curve would be the same number at both ends, and the ladder would be a
+ * thing you grind rather than a thing you climb.
+ * ================================================================== */
+const EXP_POW = 0.8;
+const EXP_DIV = 4;
+/** Exp a snail banks on the trait a course is testing, per second of racing it.
+ *  **A snail earns on the trait it is being asked for and on nothing else**, so
+ *  a course that deals no water pays no swimming and a snail that never surges
+ *  never grows its stamina - which is why the Adversary, whose `greed` is 0,
+ *  stands on the ladder with the bar their entry floors and not one point more. */
+const RACE_EXP = 0.1;
+/** The level a body of exp is worth. The only reader of exp anywhere else. */
+function levelOf(exp) { return Math.floor(Math.pow(Math.max(0, exp || 0), EXP_POW) / EXP_DIV); }
+/** And the exp a level is worth - the exact inverse, `ceil` so the answer is *at*
+ *  the floor of its own level and not one point short of it. */
+function expForLevel(level) { return Math.ceil(Math.pow(EXP_DIV * Math.max(0, level || 0), 1 / EXP_POW)); }
+/**
+ * Where a body of exp sits between two levels, and **in one function because the
+ * stable's bar and nothing else draws it.** It is `levelOf` called twice with an
+ * `expForLevel` between, which is the shape of a bug: a bar drawn off a level
+ * asked for twice and a floor asked for in between is a bar whose top edge and
+ * whose bottom edge come from two different numbers.
+ */
+function levelBar(exp) {
+  const e = Math.max(0, exp || 0);
+  const level = levelOf(e);
+  const floor = expForLevel(level), next = expForLevel(level + 1);
+  const span = next - floor;
+  const into = e - floor;
+  return { level, exp: e, into, span, frac: span > 0 ? clamp(into / span, 0, 1) : 0 };
+}
+/** Every trait a new snail begins on, **in exp** - which is `START_TRAIT` asked
+ *  of the curve rather than the level written down twice. */
+const freshSnail = () => Object.fromEntries(ATTRS.map((a) => [a.key, expForLevel(START_TRAIT)]));
 const POINTS = [25, 20, 15, 10, 5, 3, 2, 1];              // 1st through 8th, and the gold they pay
 const FIELD = 8;                            // the player plus seven rivals
 const POOL_SIZE = 64;                       // the rivals are drawn from here
 const CLUB_SNAILS = 9;                      // ...and the bottom rung of it is this many club snails
 const CLUB_ATTR = 3;                        // three of everything, every one of them
-const ATTR_MAX = 16;                        // a rival's attributes run 1 to 16
+const ATTR_MAX = 32;                        // a rival's attributes run 1 to 16
 /* ================================================================== *
  * The rating, and it is two numbers and a shape.
  *
@@ -665,6 +721,29 @@ const HAT_SET = [
 ];
 const FACE_BY_NAME = Object.fromEntries(FACE_SET.map((f) => [f.name, f]));
 const HAT_BY_NAME = Object.fromEntries(HAT_SET.map((h) => [h.name, h]));
+/**
+ * The shells, and it is the third wardrobe table and the one that is a *shape*
+ * rather than a face or a hat. A face is the whole face and a hat is a
+ * silhouette; **a shell is the animal's own coil**, and there are two of them:
+ * the reference model's smooth dome and a turbinate one with a ring of spikes.
+ *
+ * **`geo` is the loader's key and `name` is what a snail wears**, and the two
+ * are not the same word on purpose. The coil's file is `shell.glb` and its key
+ * is the bare `shell`; the spike's is `shell-spike.glb` and its key is
+ * `shell-spike`. A model name built onto a key by concatenation is the shape
+ * `props['shell-' + style]` was, which is a place the file could be called
+ * something the loader never fetched - so the mapping is a field in this table
+ * and `plan-test.mjs --faces` checks every `geo` is a file that exists.
+ *
+ * **`coil` is the floor and the starter, at price 0**, exactly as `plain` is a
+ * face and `straw` is a hat: a snail with nothing said about it wears the coil,
+ * and every rival is dressed in one of these two by `shellFor()`.
+ */
+const SHELL_SET = [
+  { name: 'coil', geo: 'shell', price: 0, rule: 'the reference coil, and the one every snail starts in' },
+  { name: 'spike', geo: 'shell-spike', price: 65, rule: 'a third of the pool, and it is the spiked one' },
+];
+const SHELL_BY_NAME = Object.fromEntries(SHELL_SET.map((s) => [s.name, s]));
 /** The traits a snail is worst at, best at, and which is the best. */
 const topAttr = (attrs) => {
   let key = null, hi = -Infinity;
@@ -769,7 +848,26 @@ function hatFor(sn) {
   return 'wizard';
 }
 /**
- * Write the two names onto every snail in a pool, and **add no draw.** Every
+ * The shell a snail wears, from what it is - and it is the third of the three
+ * derivations, reading the same numbers `hatFor()` does and adding no draw.
+ * **A third of the pool wears the spike and the rest wear the coil**, which is
+ * the same shape as the hat's thirds and for the same reason: a shell that every
+ * snail wore would be a shell nobody read, and a shell a third wore is the one
+ * you notice across a field. `coil` is the floor, so a snail nothing matched
+ * still has a shell, and the two are the whole set - there is no `none`, because
+ * a snail with no shell is a snail with its back open.
+ */
+function shellFor(sn) {
+  const greed = sn.greed == null ? 0 : sn.greed;
+  const skill = sn.skill == null ? 1 : sn.skill;
+  const id = ((sn.id | 0) % 3 + 3) % 3;
+  if (greed >= 0.70) return 'spike';
+  if (skill >= 1.045) return 'spike';
+  if (id === 2) return 'spike';
+  return 'coil';
+}
+/**
+ * Write the three names onto every snail in a pool, and **add no draw.** Every
  * input is a number the rival already stores, so the field composition is
  * untouched and the dressing is a read of the pool rather than a second lottery
  * beside it. `load()` calls it too, which is what gives an old save its faces
@@ -779,6 +877,12 @@ function dressPool(pool) {
   for (const sn of pool) {
     if (!sn.face) sn.face = faceFor(sn);
     if (!sn.hat) sn.hat = hatFor(sn);
+    // **`shellModel` and not `shell`, and the two are not the same field.** A
+    // pool entry's `shell` is the tint `makeSnail()` multiplies into the coil;
+    // the *shape* is a second fact and it lives here, beside `face` and `hat`
+    // where a worn name belongs. Filling only an absent one keeps an existing
+    // save's dressing, exactly as the two above it do.
+    if (!sn.shellModel) sn.shellModel = shellFor(sn);
   }
   return pool;
 }
@@ -788,13 +892,30 @@ function dressPool(pool) {
  * a rival's attributes 1 to ATTR_MAX, but the ends of each range are the same
  * snail, so a maxed player is exactly as quick as a maxed rival and there is
  * no reading of the sim that quietly favours one over the other.
+ *
+ * **And the value it is handed is a level and not a stat, on both sides.** The
+ * player's traits and the rivals' attributes are both derived from exp now, so
+ * this is the one place in the county that turns a number of exp into the
+ * effective scale - nothing else reads a trait as a number, and the two sides
+ * differ only in which end of the same curve they run to.
+ *
+ * **On the player's side the level is not bounded by `STAT_MAX`.** It is not
+ * bounded by anything: a snail that has been fed `FRUIT_EXP` enough times runs
+ * off the end of the player's scale and normalises to an `eff` above any
+ * rival's, which is the price of a level curve with no cap and the symptom to
+ * watch for is a race that stops being hard. `effFor()` itself is unchanged and
+ * is the only reason the two ends of the scale still agree.
  */
 function effFor(v, lo, hi) { return 1 + ((v - lo) * (STAT_MAX - 1)) / (hi - 1); }
-function effTraits(sn) {
+function effTraits(sn, xp) {
   const lo = sn.player ? STAT_MIN : 1, hi = sn.player ? STAT_MAX : ATTR_MAX;
-  const src = sn.player ? sn.stats : sn.attrs;
+  // **`xp` is the exp to read and not a reason to skip the curve.** A racer banks
+  // exp on the row rather than on the snail, so a race that is abandoned leaves
+  // nothing behind and the snail in the save is the snail that was there before
+  // it - which is why the override is the racer's copy and not the state.
+  const src = xp || sn.xp;
   const out = {};
-  for (const a of ATTRS) out[a.key] = effFor(src[a.key], lo, hi);
+  for (const a of ATTRS) out[a.key] = effFor(levelOf(src[a.key]), lo, hi);
   return out;
 }
 
@@ -916,13 +1037,16 @@ export {
   CLIMB_GRADE, LANE_HW,
   CRATE_S, CRATE_X, CRATE_BACK, CRATE_GAP, CRATE_LANE, CRATE_HW, CRATE_FLARE, CRATE_WALL,
   HOURS_PER_SECOND, LEVEL_Y, POOL_BANK, POOL_SPREAD, POOL_BERM, COND, ATTRS, ELEMENTS,
-  STAT_MAX, STAT_MIN, GOLD_PER_FRUIT, START_GOLD, START_RATING, POINTS, FIELD, POOL_SIZE,
+  STAT_MAX, STAT_MIN, GOLD_PER_FRUIT, FRUIT_EXP, START_GOLD, START_RATING, POINTS, FIELD, POOL_SIZE,
+  START_TRAIT,
+  EXP_POW, EXP_DIV, RACE_EXP, levelOf, expForLevel, levelBar,
   CLUB_SNAILS, CLUB_ATTR, ATTR_MAX, RATING_SCALE, RATING_POW, RATING_GAIN, PODIUM_FLOOR,
   RATING_MIN, RATING_MAX, RATING_STEP, ratingOf,
   SURGE_MULT, SURGE_DRAIN, PASSIVE_DRAIN, TIRED_MULT, SWIM_Y, REGEN, STEP, START_S, freshSnail,
   seasonWord, TIERS, TIER_BY_ID, eligibleSeasons, canEnter, seasonFor, seasonDef,
   seasonScale, seasonPicks, seasonFinaleId, seasonRoster, effFor, effTraits,
   FACE_SET, HAT_SET, FACE_BY_NAME, HAT_BY_NAME, faceFor, hatFor, dressPool, topAttr,
+  SHELL_SET, SHELL_BY_NAME, shellFor,
   BIOMES, ROLE_KEYS, SET_ROLES, PAL_KEYS,
   trackSeed, makeRng, rand, vnoise, fbm, hills,
   bake, M, colored,

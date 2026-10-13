@@ -82,6 +82,73 @@ addGlows(env);
 addGlows(stageEnv);
 
 /**
+ * The key light's ortho shadow box, **and which shot of the stable is standing**.
+ *
+ * The key is pinned over the plinth at `(3.2, 5.4, 3.0)`, so the box is a box in
+ * the light's own space and its width is a statement about how much of the lawn
+ * is *meant* to be in shot. The lobby orbits at 3.9 m and never sees past thirty
+ * metres, so thirty is right and the rest of the lawn may stand unshadowed where
+ * nobody is looking. **The title orbits at twenty-six metres and looks at the
+ * whole county** - the pool at ten, the grove at twelve and a half, the giant
+ * mushrooms at thirty-one to forty - so a thirty-metre box would leave every one
+ * of those standing on the grass like a sticker, which is the exact failure the
+ * comment on this block has always been written about.
+ *
+ * **And the wide box is coarse, which is the price and not a defect.** 2048 texels
+ * over 112 metres is **18 to the metre**, against fifty-one on the narrow box, and
+ * the shadow radius is 7 - so the title's shadows are soft where the lobby's are
+ * crisp, and they are soft in a way a shot from twenty-six metres wants them to
+ * be. If that ever reads badly the answer is a bigger `key.shadow.mapSize` for
+ * this box and **not a narrower one**, because a narrower box puts back the
+ * stickers.
+ *
+ * `far` moves with the rest of it: the light sits about six metres from the plinth
+ * and the lawn is fifty-eight metres of radius, so anything on the far side of
+ * the disc is beyond a `far` of 50 and out of the frustum entirely.
+ */
+const SHADOW_BOX = {
+  narrow: { left: -30, right: 30, top: 30, bottom: -14, far: 50 },
+  wide: { left: -56, right: 56, top: 56, bottom: -30, far: 120 },
+};
+/** Put one of the two on the key. A number, and not the shot, because a caller
+ *  that is asking about the *stable* is asking whether the camera is far out. */
+function shadowBoxFor(wide) {
+  const b = wide ? SHADOW_BOX.wide : SHADOW_BOX.narrow;
+  const cam = stageEnv.key.shadow.camera;
+  cam.left = b.left; cam.right = b.right; cam.top = b.top; cam.bottom = b.bottom;
+  cam.far = b.far;
+  cam.updateProjectionMatrix();
+}
+/**
+ * The box the *standing* shot wants, and **the one function both callers use**.
+ *
+ * The build asks it because `buildStage()` is not only the boot: `restage()` runs
+ * it again on every density or shadow row, and the title screen has a settings
+ * button of its own - so a build that hard-coded the narrow box would throw the
+ * wide one away on the first row somebody pressed, **with the title still up and
+ * nothing anywhere red**. The screen change asks it because that is the moment the
+ * shot changes.
+ */
+function fitShadowBox() {
+  shadowBoxFor(world.modeOf() === 'title');
+}
+/**
+ * The box that is actually standing, **and a reader rather than a derivation**.
+ *
+ * `title.spec.js` asserts that the title puts the wide box on and that Continue
+ * puts the narrow one back, and it cannot ask a table: the question is whether
+ * the camera the light casts through was re-fitted, and a number computed from
+ * `modeOf()` would agree with itself on a build that never called anything.
+ */
+function shadowBoxOf() {
+  const c = stageEnv.key.shadow.camera;
+  return {
+    left: c.left, right: c.right, top: c.top, bottom: c.bottom, far: c.far,
+    mapSize: stageEnv.key.shadow.mapSize.x,
+  };
+}
+
+/**
  * The stable's pool, and the fountain that stands in it.
  *
  * It stands proud of the lawn rather than being cut into it, and that is the
@@ -180,12 +247,26 @@ function stagePool() {
   // the probe stands over the middle of the basin, half a metre above the water
   water.userData.probeAt = new THREE.Vector3(POOL.x, POOL.water + 0.5, POOL.z);
   group.add(water);
-  // the fountain, at the scale a twelve-metre pool wants
-  const f = new THREE.Mesh(props.fountain, matFor('fountain', mat.rock));
-  f.position.y = poolFloorY(0);
-  f.scale.setScalar(POOL.fountain);
-  f.castShadow = true; f.receiveShadow = true;
-  group.add(f);
+  // the fountain, at the scale a twelve-metre pool wants, and **it is two
+  // meshes and not one**: the gilt is the county's second metal, and a metalness
+  // is not a colour a vertex can carry, so the gold is a part of its own with a
+  // material of its own out of its own file - the same split the tower's masonry
+  // and timber are drawn under. The stone is `matFor()`'s answer and the gold is
+  // `partMat()`'s, and the fallback on the gold is `mat.metal` for the day the
+  // file stops declaring one, which is the county's only metal and therefore the
+  // only honest answer there is.
+  const fparts = props['fountain.parts'];
+  const fountain = new THREE.Group();
+  for (const key of ['', 'gold']) {
+    const geo = fparts && fparts[key];
+    if (!geo) continue;
+    const m = new THREE.Mesh(geo, key ? partMat(geo, mat.metal) : matFor('fountain', mat.rock));
+    m.castShadow = true; m.receiveShadow = true;
+    fountain.add(m);
+  }
+  fountain.position.y = poolFloorY(0);
+  fountain.scale.setScalar(POOL.fountain);
+  group.add(fountain);
   // and the water coming out of it: four arcs off the pedestal spouts and one
   // falling column off the finial, each on its own phase so the fountain is
   // never pulsing in lockstep with itself
@@ -202,11 +283,35 @@ function stagePool() {
     jets.push(m);
     return m;
   };
-  const spout = 1.16 * POOL.fountain, reach = 0.45 * POOL.fountain;
+  /* The four spout jets, and **they leave the mouths the spouts actually
+   * have.** Two numbers were wrong and both were the same mistake - reaching
+   * for a quarter turn and a tenth of a metre instead of reading the spout off
+   * the model:
+   *
+   * **The angle was forty-five degrees out.** The buttresses stand on the
+   * diagonals and the spouts stand on the axes, so a jet aimed at
+   * `(i / 4) * TAU + PI / 4` came out of the air *between* two spouts -
+   * measured, **0.56 m from the nearest mouth**, which is a hand's breadth of
+   * nothing with a stream of water standing in it. The quarter turn is the
+   * buttresses' angle, and it was the right number on the wrong prop.
+   *
+   * **And the height was the spout's middle rather than its mouth.** The spout
+   * is `cyl(0.09, 0.06, 0.3)` and the matrix that places it turns the
+   * cylinder's own +Y *inwards*, so the wide end is buried in the pedestal and
+   * the mouth is the narrow end - out at a radius of 0.445 and thirty-seven
+   * millimetres *below* the middle of the spout. Starting the jet at the middle
+   * plus a tenth put it a hundred and fifty millimetres above the hole, which
+   * is a gap you can see.
+   *
+   * Both numbers are the fountain's own, in the fountain's own frame, and the
+   * scale and the floor are applied here rather than written into them - the
+   * same reason `POOL.fountain` is a key and not a literal in four places. */
+  const MOUTH_R = 0.4453, MOUTH_DY = -0.0372;
+  const spout = 1.16 * POOL.fountain, reach = MOUTH_R * POOL.fountain;
   for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * TAU + Math.PI / 4;
+    const a = (i / 4) * TAU;
     const m = jet(
-      new THREE.Vector3(reach, spout + poolFloorY(0) + 0.1, 0),
+      new THREE.Vector3(reach, spout + MOUTH_DY * POOL.fountain + poolFloorY(0), 0),
       new THREE.Vector3(reach * 2.6, spout + 0.55, 0),
       new THREE.Vector3(reach * 5.4, POOL.water, 0), 0.055, i * 1.7);
     m.rotation.y = -a;
@@ -511,19 +616,12 @@ function buildStage() {
   // and the mirror, beside it rather than on it: one line, one function, and it is
   // the only thing on this lawn that exists to be looked at
   s.add(mirrorCube());
-  // The key light's shadow is a twenty-six metre box round the plinth, which is
-  // the right box for a snail on a stone and much too small for a lawn with a
-  // pool and a grove on it: at that width nothing past the plinth had a shadow
-  // at all, and a tree with no shadow stands on the grass like a sticker. The
-  // hub's box is wider, and its shadows are coarser - fifty-one texels to the
-  // metre at 2048, and the snail is the only thing here close enough to read
-  // the difference.
-  {
-    const cam = stageEnv.key.shadow.camera;
-    cam.left = -30; cam.right = 30; cam.top = 30; cam.bottom = -14;
-    cam.far = 50;
-    cam.updateProjectionMatrix();
-  }
+  // The key light's shadow is a sixty-metre box round the plinth for the lobby's
+  // orbit and a hundred and twelve for the title's, and which one is on is a
+  // question about the standing shot rather than a constant - see `fitShadowBox()`,
+  // which is also what `restage()` asks, because the title's own Options button
+  // can rebuild this stage while the title is still up.
+  fitShadowBox();
   // the pool, off to one side so the snail has the middle of the lawn to itself
   // and the water comes into frame and out of it as the camera goes round
   const pool = stagePool();
@@ -780,5 +878,5 @@ function restage() {
 // ------------------------------------------------------------------
 export {
   stageEnv, stageBackdrop,
-  stageOf, buildStable, dropStage, requestRestage, restage,
+  stageOf, buildStable, dropStage, requestRestage, restage, fitShadowBox, shadowBoxOf,
 };

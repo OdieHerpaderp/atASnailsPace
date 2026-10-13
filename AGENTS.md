@@ -1,4 +1,4 @@
-# Snail Grand Prix
+# At a Snail’s Race
 
 A racing game. Five courses, a season ladder, and eight snails. The whole thing
 is a spline-cut lane with rock walls to climb, ponds to swim and gaps to fly;
@@ -110,6 +110,24 @@ hill is a nine-by-six sphere, and smooth-shaded there is a black shape against a
 bright sky at a low sun, because no facet is left facing it.
 
 ## The rules that bite
+
+**A GLSL comment that carries a backtick breaks the template literal it is written in,
+and the whole of `src/post.js` is template literals.** Every shader in the county —
+`GI_FRAG`, `SSR_FRAG`, the `PRESENT_*` kernels, `FXAA_FRAG` — is a JS template
+literal (`` const GI_FRAG = /* glsl */` ... `;``), and the GLSL `//` comment that
+sits inside one is still inside the backtick string, so a backtick in the comment is
+the string's own closer, not a marker of code. The failure is not a compile error
+you can read: it is a `SyntaxError: Unexpected identifier 'openSum'` in the *host
+JS file* on the line the backtick closed, and `node --check` catches it but nothing
+in the browser will, because the module never evaluates. It cost this split an hour:
+a GLSL comment that documented the open fraction with `` `openSum` `` in backticks
+terminated `GI_FRAG` early, the rest of the shader leaked into the module body as
+bare JS, and the whole county would not have booted for a reason that sat four
+hundred lines above the symptom. **The tell is a syntax error in a `.js` file whose
+first token is a GLSL symbol.** So a comment inside a shader string carries its
+symbols bare, or in a language that is not the string's — the same rule the county
+already keeps for a GLSL `#define` that wants a value, which is written as a JS
+template expression and not as a second string.
 
 **A module's live bindings are read-only from outside, and that is a runtime
 error rather than a lint.** An exported `let` cannot be assigned from another
@@ -1212,7 +1230,7 @@ keep-clear list with it. Both halves of that happened on the first cut.
 
 **A duel is a course in `races.json`, and its `duel` object is the whole of it.**
 Whichever entry carries a `duel` is the duel's course, and it holds the field's size,
-the countdown, the purse, the two locked wardrobe names, their `attrBonus`, `skill`
+the countdown, the purse, the two locked wardrobe names, their `attrFloor`, `skill`
 and `greed`, the rating a win is worth, the hour it is raced at and its own length
 scale. `duelCatId()` finds it and the fallback is the marathon, written down,
 because a county with no duel course should still be a county that runs one. **And
@@ -1220,6 +1238,20 @@ it is read off the course and not off `race.duel`**, which was set in `startRace
 and nowhere else — not in the `race` literal, and `wipeSave()` did not clear it —
 so an inspector opened after a duel built a **two-crate apron on an eight-snail
 road**. One answer and no second copy.
+
+**And the floor is a floor and not a bonus, and today it is a guarantee rather than
+a buff.** `attrFloor` reads `Math.max(top.attrs[a.key], floor)` and the `attrBonus`
+it replaced read `Math.min(ATTR_MAX, top + n)` — a bonus applied to the pool's
+strongest rival, which `makePool()` already puts at `ATTR_MAX` in every trait, so it
+came out clamped straight back to the ceiling and **could not change any output
+from the day `ATTR_MAX` left 16**. It is a floor for the reason a bonus is the wrong
+shape here: the claim is that this snail is *at least* as good as the best in the
+county, and a ceiling silently caps the claim. **There is no `Math.min` on it
+either**, because a floor above `ATTR_MAX` is a deliberate statement and clamping it
+would make the key quiet again the moment the ceiling moved. `smoke.spec.js` asserts
+`running >= 32` and `stamina >= 32` off a live duel, which is the only gate that
+would notice the key being dropped as dead code — it is dead code today, and saying
+so in the assertion is what keeps it from being deleted.
 
 **And the hour a course is raced in is `day` or `finale` and not a boolean**, which
 is a fourth thing the duel's entry fixed: the app read the tier's finale, the duel
@@ -1238,7 +1270,7 @@ segments), `ssao` (occlusion, indirect light, and how many samples each step
 spends) and `refl` (the per-pool cube probes and how far they look, named **Sky
 probe** so it is not the other reflection row wearing the same word). Six is
 the top and three is what the game shipped looking like before any of this, so
-three is the default and `localStorage['snail-grand-prix-gfx-v1']` is its own key:
+three is the default and `localStorage['at-a-snails-race-v1-gfx']` is its own key:
 these are settings
 for the machine, not progress, so nothing here is written into the save, no
 version is bumped and `wipeSave()` leaves them alone.
@@ -1296,6 +1328,16 @@ where a kernel can be seen at all:
 | county at 0.5× (2× upscale) | 2,027 | **605** | 2,832 |
 | county at 1× (no resample) | 3,758 | 3,756 | 3,757 |
 | county at 2× (2× downscale) | 23,877 | **3,522** | 6,047 |
+
+**These are the pre-fix numbers and the table is stale.** `PRESENT_CUBIC` computed its
+four weights for a tap order of `b+1, b, b-1, b-2` and applied them to `b-1, b, b+1, b+2`
+(`src/post.js:1598-1599`, now `f + 1 - i`), a consistent half-tap shift that reads as
+staggered blocks on the upscale and downscale rows and is invisible at 1× because no
+resample runs there. The 1× row is unchanged by the fix and every other row moves, so
+re-capture before quoting: bilinear should now be the smoothest on the upscale and
+nearest the worst on the downscale, and bicubic's edge counts fall with it. The frame
+means across the three still sit within 0.1 of 255, because the divide-by-sum DC
+correction is untouched.
 
 The middle row is the honest one: at 1× there is no resample, all three kernels
 are the identity, and the caption says so — `4 fetches · idle at 1×`. Bilinear is
@@ -1454,6 +1496,46 @@ it**, because "water reflections" would be a row lying the moment a surface
 outside the list carried a mark, and a shell carrying one is a single line at its
 plant site.
 
+**And the edge filter was dead twice over, and neither half could be seen from
+the frame.** The shader would not compile — `vec4(texture2D(tDiffuse, vUv), 1.0)`
+is a vec4 *and a scalar* into a four-component constructor, and every driver
+answers `'constructor' : too many arguments` — so the pass drew nothing. And the
+pass was never added when the switch moved, because `syncPasses()`'s key carried
+the other four terms of the chain and not this one: a switch that moves nothing
+else leaves the key unchanged, the guard returns early, and the build-and-drop
+lines twelve lines below never run. **A pass that costs nothing and does nothing
+reads as the cheapest effect on the board**, which is why a frame-time
+measurement could not find either half and why `tools/e2e/aa.spec.js` gates the
+pass list and the picture instead of a clock. The direct-path instance that sat
+beside it is gone with them: it was gated on `composerUp` — the composer path,
+where the chain's own pass already does the work — so it rendered the filter into
+the composer's *write* buffer, a target nobody presents, while the direct path it
+was written for bailed out one line earlier on the occlusion. It also owned a
+second `WebGLRenderer` standing in for a render target, resized every frame, and
+`dropComposer()` never disposed either of them.
+
+**And the parallax march carries two gates that cost it nothing, because both
+ask a question the shader has already answered.** The first is the set's own
+weight: `slope()` and `tint()` both open with `if (vDetailW.k > 0.002)`, so a set
+that carries no weight at a fragment contributes nothing to the colour and
+nothing to the normal — and on open meadow the course material carries turf,
+cliff and shore, two of which are zero on every grass fragment in the county.
+Marching them anyway is the whole cost of the effect spent on a picture that was
+already decided. The second is the fragment's own pixel footprint: the relief
+thins between half a pixel and one and a half of displacement and stops below
+that, so the lane under the camera and the wall beside it keep every step they
+ever had while the far hillside stops paying for a picture it cannot draw. **The
+yardstick is `gfxU.uPomPixel`, written every frame off the camera and the
+county's own height**, because a fade written in metres would have to be re-tuned
+every time the render row moved and a displacement measured in pixels is the same
+picture at every resolution. **The weight gate is the one that pays and the fade
+is the one that is right**: measured at 2560×1440 the two together take 3.6 ms
+off a 34 ms frame on Hedgerow Dash and 2.4 off 26 on Lily Deep, of which the fade
+alone is about 0.1 ms in a race — a chase camera near the ground sees the lane at
+a grazing angle, and a grazing angle grows the displacement exactly as fast as the
+pixel does. The wall on Crag Ascent, where the relief is genuinely many pixels
+across, is byte for byte the picture it was.
+
 **A traced reflection needs a depth buffer to trace, so its gate is two rows and
 not one.** `gfxSsrOn()` is `ssao >= 2 && gfx.fxSsr > 0` and it is derived once in
 `post.js`, asked by `needsComposer()` and `syncPasses()` and by nothing else. The
@@ -1563,6 +1645,23 @@ is not, because `GTAOPass`'s `blendMaterial` is `CustomBlending` with
 alpha is squared every frame the pass runs. The clear alpha is **zero** and that
 is the one behavioural thing about the render: a pixel nothing was drawn into has
 to read *nothing is reflecting*, and the renderer's clear alpha is one.
+
+**And the mask render is gated on anything being in frame to reflect, which is
+asked of the drawn scene every frame rather than kept in a register.** The march
+writes `base` at every unmarked pixel, so when nothing marked is inside the
+frustum the pass's own passthrough branch is the same picture a whole scene
+render cheaper — measured at 2560×1440 the whole pass is 2.1 ms of a 34 ms frame
+on a course with no water in it. A register was the first shape this wanted and
+it is the wrong one: a `Set` filled at the plant sites goes stale the day a course
+is dropped or a field is rebuilt, and a stale register is not a slow frame, it is
+a reflection that quietly stopped. The walk is the other direction — always true
+of the scene being drawn, one traversal against a render it can save, in a path
+that already pays three of them a frame. **What it does not claim is that it fires
+often**: every snail in the county is marked, skin at 0.045 and shell at 0.055,
+and the race camera is a chase camera, so during a race the player's own snail is
+in frame and the render is owed. Where it fires is the inspector on a course with
+no water, the inspector with the field behind the player, and the title shot when
+the mirror cube is out of frame.
 
 **And the mask's depth attachment is sized by hand, because
 `WebGLRenderTarget.setSize()` does not do it.** It resizes the target's *colour*
@@ -2185,7 +2284,7 @@ walk, mouse to look, `Q`/`E` down and up, `Shift` to move faster, `Esc` out.
 
 ## The save
 
-`localStorage['snail-grand-prix-v1']`, written only on a real event — a race
+`localStorage['at-a-snails-race-v1']`, written only on a real event — a race
 result, a purchase, a new game — so it can look empty mid-session and that is
 not a bug. `state` carries the season, tier, rating, gold, the snail's five
 stats, the 64-entry rival `pool` and the season `field`.
@@ -2195,3 +2294,15 @@ Do not leave a test run in it. It is normally season 5, Sunday Cup, rating 130,
 stamina 12`, no results. To verify, read the key; to restore, write those fields
 onto a valid save and reload. A save with a `pool` that is not 64 entries of
 `{attrs, rating}` is rejected and the player gets a new game.
+
+**And the key has moved once.** The game was called Snail Grand Prix, and both
+keys are named after it now — `snail-grand-prix-v1` and `snail-grand-prix-gfx-v1`
+became the two above on the day the title screen arrived. There is no migration
+and there is not going to be one: a save under the old key is not a save this
+build can read, and the rating it holds was on the scale that the curve replaced,
+so the only honest answer to it is `load()`'s existing one — a missing key, and a
+fresh game. `boot()` removes the two dead entries so they do not sit in a
+player's browser forever. **A key that moves takes the test tooling with it in
+the same commit**, because `tools/e2e/fixtures.js` seeds both before the game's
+first line and a stale pin there is a suite that boots on nothing and says
+nothing about it.

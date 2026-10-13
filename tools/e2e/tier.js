@@ -58,8 +58,8 @@ import fs from 'node:fs';
 
 const ROOT = path.resolve(__dirname, '../..');
 
-export const GFX_KEY = 'snail-grand-prix-gfx-v1';
-export const SAVE_KEY = 'snail-grand-prix-v1';
+export const GFX_KEY = 'at-a-snails-race-v1-gfx';
+export const SAVE_KEY = 'at-a-snails-race-v1';
 
 export const GFX = {
   preset: 1, render: 3, msaa: 1, scale: 2, distance: 1, shadow: 1,

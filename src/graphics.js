@@ -164,7 +164,13 @@ export const world = {
   applyLook: () => {},
   renderScene() {
     const m = this.modeOf();
-    return (m === 'stable' || m === 'stroll') ? this.stageScene : this.scene;
+    // **Five modes and three of them draw the stable**, and this is the one place
+    // the count lives: `title` is a shot of the stable from further out, so it is
+    // the stage scene and not the county's. Missing it is loud - an empty county
+    // scene is 32 draw calls and 2,750 triangles where the title should be 68 -
+    // but "loud" is the word for what a *player* sees, not for what the suite
+    // sees, which is why `title.spec.js` asserts this predicate directly.
+    return (m === 'stable' || m === 'stroll' || m === 'title') ? this.stageScene : this.scene;
   },
 };/* ================================================================== *
  * Graphics settings
@@ -190,7 +196,7 @@ export const world = {
  * single `renderer.render()`, with no render target, no extra scene render and
  * no fullscreen pass anywhere in the frame.
  * ================================================================== */
-const GFX_KEY = 'snail-grand-prix-gfx-v1';
+const GFX_KEY = 'at-a-snails-race-v1-gfx';
 /** "Native", which is exactly today's `setPixelRatio` call. */
 const nativePixelRatio = () => Math.min(devicePixelRatio, 2);
 
@@ -287,9 +293,34 @@ const SKY_LADDER = [[16, 10], [28, 16], [40, 24], [64, 32], [96, 48], [128, 64]]
  * was counted once per step with nothing taking them back out and a white arch
  * filling one of six directions came back at 1.3 of white. `stepWeights()` is the
  * other one. Between them the term cannot exceed the albedo of what it bounced
- * off, which is what a bounce is - so **a gain above one here is not a brighter
- * bounce, it is a picture with the top of the range already gone**, and the
- * number is deliberately not asked to carry that.
+ * off, which is what a bounce is.
+ *
+ * **And the term is a fraction of the county's colour and not the colour
+ * itself**, which is what lets the gain above go past one honestly. `irr` is
+ * normalized by the whole hemisphere's weight while its numerator only counts
+ * the steps that hit something, so a meadow pixel a fifth covered by grass gets
+ * a fifth of the grass and a pixel under a canopy four-fifths covered gets
+ * four-fifths of it. That is the shape of the term, and it is why the number is
+ * not a lie above one: nothing is being asked to reflect more than it has.
+ *
+ * **Two ways of getting this wrong, and both were tried.** The open-sky
+ * fraction used to be accumulated down the same march as the complement of
+ * cover and then multiplied into the cast - which counted the occlusion twice,
+ * once through the denominator above and once through the fraction of the
+ * hemisphere that was *not* covered. Two complementary fractions peak at a
+ * quarter of their product, so the term was capped at about a quarter of the
+ * county's colour *and* flattened, with open ground and a crevice within a few
+ * per cent of each other, and **the gain was a dial on almost nothing**: a sweep
+ * from 1.4 to 25 moved the mean lift from 3.7 to 6.7 of 255. The open fraction
+ * is GTAOPass's number and GTAOPass runs a pass earlier, so it is not in here.
+ *
+ * **The other way is to normalize by the hits instead**, which is the obvious
+ * repair and the worse one: `irr` then *is* the mean albedo of what the rays
+ * found, so a tuft of grass surrounded by more grass gets its own full albedo
+ * added on top of itself and the meadow comes up saturated. Measured on the
+ * stable, that put a 0.32 linear green cast on the snail, the plinth and the
+ * lawn at once - **a surface wearing more of its own colour than it has**. The
+ * fraction is the point: it is what stops a county from bouncing off itself.
  *
  * Level 1 is `null`: no pass, no G-buffer, and the direct render path.
  */
@@ -297,9 +328,9 @@ const AO_LADDER = [
   null,
   { samples: 4, radius: 0.8, blend: 0.95, gi: 0 },
   { samples: 8, radius: 0.8, blend: 0.95, gi: 0 },
-  { samples: 4, radius: 0.7, blend: 0.95, gi: 0.95 },
-  { samples: 8, radius: 0.7, blend: 0.95, gi: 0.95 },
-  { samples: 16, radius: 0.6, blend: 0.95, gi: 0.95 },
+  { samples: 4, radius: 0.7, blend: 0.95, gi: 1 },
+  { samples: 8, radius: 0.7, blend: 0.95, gi: 1 },
+  { samples: 16, radius: 0.6, blend: 0.95, gi: 1 },
 ];
 /**
  * How far a bounce is looked for, in metres, and how deep a surface has to be
@@ -318,14 +349,27 @@ const AO_LADDER = [
  * four-metre tree, a thirty-five-metre cliff - is still well inside "the piece of
  * ground next to this one" and is where a colour cast belongs.
  *
- * `uThick` is the same idea measured the other way: how far inside a surface a
- * ray point has to be before the surface counts as having caught the ray, and it
- * is short because the only things in the county that are thin are props, and a
- * prop is exactly what `uInner` is keeping the march away from.
+ * `uThick` is the same idea measured the other way, and **it is counted in
+ * strides and not in metres**, because a tolerance that does not scale with the
+ * step that produced it is a tolerance about a different march. It is how far
+ * inside a surface a ray point has to be before the surface counts as having
+ * caught the ray, and the stride is the yardstick: a genuine crossing is found
+ * the step after it happens, so the penetration it can honestly report is one
+ * stride times the sine of the incidence, and anything past that is a surface
+ * the ray went through several steps ago or never touched at all.
+ *
+ * **It is short because the only things in the county that are thin are props**,
+ * and a prop is exactly what `uInner` is keeping the march away from. At 0.6
+ * metres it was three and a half strides, which is not a tolerance but a rule
+ * saying anything near a surface counts as the surface - and a 2 mm smile band
+ * crossed at a grazing angle reported itself as a 0.6 m occluder, so the pass
+ * read the snail's own face off the depth buffer and painted it, smile and all,
+ * onto the fountain wall. The hit test in `GI_FRAG` is what rejects those; this
+ * number only decides how confidently a *resolved* crossing counts.
  */
 const GI_RADIUS = 2.6;
 const GI_INNER = 0.9;
-const GI_THICK = 0.6;
+const GI_THICK = 1.5;
 /** Cube probe edge length; 0 is off and the water falls back on the shared
  *  PMREM environment. Levels 5-6 add the fresnel roughness ramp on top. */
 const REFL_LADDER = [0, 64, 128, 256, 256, 512];
@@ -392,6 +436,8 @@ const FX_TOGGLES = [
     cost: 'a composer pass · needs ambient occlusion on', live: true },
   { key: 'fxPom', name: 'Parallax relief', cells: ['off','two-sided','relief 4','relief 8','parallax 8','parallax 12'], short: 'pom',
     cost: 'a height march in the course shader' },
+  { key: 'fxAa', name: 'Edge anti-aliasing', cells: ['off', 'on'], short: 'aa',
+    cost: 'one fullscreen quad · needs the composer' },
   { key: 'fxBloom', name: 'Bloom', cells: ['off', 'bloom', 'bloom hi'], short: 'bloom',
     cost: 'a composer pass' },
   { key: 'fxWind', name: 'Wind', cells: ['off', 'on'], short: 'wind',
@@ -413,16 +459,6 @@ const FX_PRESET = [
   { fxGlow: 1, fxCloud: 1, fxBloom: 1, fxSsr: 1, fxPom: 4 },
   { fxGlow: 1, fxCloud: 1, fxBloom: 2, fxWind: 1, fxSsr: 2, fxPom: 5 },
 ];
-/** And the stack itself, kept for the one save that still carries it. The same
- *  six levels read out as the same six switches, so a level means what it meant. */
-const FX_LEGACY = [
-  { fxGlow: 1 },
-  { fxGlow: 1, fxVig: 1 },
-  { fxGlow: 1, fxVig: 1, fxGrain: 1 },
-  { fxGlow: 1, fxVig: 1, fxGrain: 1, fxCloud: 1 },
-  { fxGlow: 1, fxVig: 1, fxGrain: 1, fxCloud: 1, fxBloom: 1 },
-  { fxGlow: 1, fxVig: 1, fxGrain: 1, fxCloud: 1, fxBloom: 2, fxWind: 1 },
-];
 const PRESET_NAMES = ['Low', 'Light', 'Balanced', 'High', 'Very high', 'Ultra'];
 /** Steps to sample counts. **Three states and not six**, because a multisampled
  *  buffer's sample count is one of one, two or four and a cell saying x3 would be
@@ -443,9 +479,17 @@ const PRESET_NAMES = ['Low', 'Light', 'Balanced', 'High', 'Very high', 'Ultra'];
  *  panel would otherwise be printing an ellipsis where a word was - the same reason
  *  `short` is a field on `GFX_ROWS` and on every `FX_TOGGLES` row.
  */
-const MSAA_LADDER = [0, 2, 4];
-const MSAA_NAMES = ['direct only', 'x2', 'x4'];
-const MSAA_SHORT = ['direct', 'x2', 'x4'];
+const MSAA_LADDER = [0, 2, 4, 8];
+/** **The compositor buffer's sample count, named rather than numbered.** The bottom
+ *  cell is `direct only` and not `off` because the frame is smoothed there anyway -
+ *  the context's own multisampled default framebuffer is a separate mechanism on a
+ *  separate path and is not negotiable at runtime, so zero is what the *buffer* is
+ *  built at and not what the frame is. The three above it are the buffer's count and
+ *  say nothing about the context's, which is why they carry the word `MSAA` rather
+ *  than a bare number: a cell that said `x2` would read as the frame's own
+ *  anti-aliasing, and the two are different numbers on the same driver. */
+const MSAA_NAMES = ['direct only', 'MSAA x2', 'MSAA x4', 'MSAA x8'];
+const MSAA_SHORT = ['direct', 'MSAA x2', 'MSAA x4', 'MSAA x8'];
 /** The parallax relief's march step count, per fxPom cell. **A cell is a
  *  technique and a quality, and the step count is the quality half of it.**
  *  Cells 0 and 1 (off and two-sided) write 0 steps - the two-sided path is
@@ -466,16 +510,27 @@ const POM_STEPS = [0, 0, 4, 8, 8, 12];
  *  the relief cell was quietly drawing the parallax picture. Two tables keyed
  *  by the same cell is the honest form, and it is the reason the uniform is
  *  `uPomBisect` rather than a comparison in the shader: **a state two buttons
- *  share is a state that cannot say which button is pressed.** */
+ *  share is a state that cannot say which button is pressed.**
+ *
+ *  **And every march cell carries a distance fade that is not a cell**, because
+ *  it is not a quality the player picks - it is the rule the rest of the county
+ *  already obeys: work spent on a fragment smaller than the pixel it lands in
+ *  is work nobody can see. The relief thins between half a pixel and one and a
+ *  half of displacement and stops below that, so the lane under the camera and
+ *  the wall beside it keep every step they ever had while the far hillside
+ *  stops paying for a picture it cannot draw. The yardstick is
+ *  `gfxU.uPomPixel`, written every frame off the camera and the county's own
+ *  height, and the thresholds live in the march's own `walk` in
+ *  `materials.js` beside the reason they are in pixels. */
 const POM_BISECT = [0, 0, 0, 0, 1, 1];
 /** What each preset writes onto the anti-aliasing row, and **the row has to carry a
- *  table of its own** rather than be written by identity like the other eight: three
+ *  table of its own** rather than be written by identity like the other eight: four
  *  states cannot hold six numbers, so a cascade writing *N* into it would put a step
  *  it has no cell for on the row and a cell it cannot reach in the table. Balanced is
  *  `direct only`, which is the picture the composer path has always drawn, and the
- *  top three are x4 - a row that rises with quality or it does not mean what its
+ *  top three are MSAA x8 - a row that rises with quality or it does not mean what its
  *  neighbours mean. */
-const MSAA_PRESET = [1, 1, 1, 2, 3, 3];
+const MSAA_PRESET = [1, 1, 1, 2, 3, 4];
 const GFX_STEPS = ['1', '2', '3', '4', '5', '6'];
 /** The render scale's cells, **read off the ladder rather than written beside it**:
  *  six labels that disagree with the six numbers they name is a menu that lies about
@@ -534,7 +589,7 @@ const gfxRowValue = (row, n) => (row.map ? row.map[n - 1] : n);
 const gfx = {
   preset: 3, render: 3, msaa: 1, scale: 2, distance: 3, shadow: 3, props: 3,
   grass: 3, sky: 3, ssao: 3, refl: 3,
-  fxGlow: 1, fxVig: 0, fxGrain: 0, fxCloud: 0, fxSsr: 0, fxPom: 0, fxBloom: 0, fxWind: 0,
+  fxGlow: 1, fxVig: 0, fxGrain: 0, fxCloud: 0, fxSsr: 0, fxPom: 0, fxBloom: 0, fxWind: 0, fxAa: 0,
 };
 
 /* --- the value each row reads, so the appliers never index a ladder twice --- */
@@ -897,11 +952,11 @@ const HOUR = {
     clock: 23,                                 // where this hour stands on the clock
     haze: 0.90,
     cloud: 0x2b3252,
-    sky: [[0.00, 0x050a18], [0.30, 0x0a1430], [0.44, 0x16224a], [0.50, 0x243056],
-          [0.545, 0x2b3557], [0.66, 0x1b2138], [1.00, 0x14161f]],
+    sky: [[0.00, 0x03060f], [0.30, 0x070d24], [0.44, 0x101a38], [0.50, 0x18244a],
+          [0.545, 0x1f2848], [0.66, 0x13162a], [1.00, 0x0c0e18]],
     sun: 0x8fa8d8, sunI: 0.22, sunH: 0.9, sunSide: 0.6,
-    hemiSky: 0x2c3a5e, hemiGround: 0x1b1c22, hemiI: 0.34,
-    fog: 0x1a2036, exposure: 1.02, lamps: 1.0,
+    hemiSky: 0x202a44, hemiGround: 0x0d0e13, hemiI: 0.30,
+    fog: 0x10162a, exposure: 1.02, lamps: 1.0,
   },
 };
 /** Which stretch of the day a course is raced in. */
@@ -927,8 +982,79 @@ const TOD = {
   fog: new THREE.Color(), cloud: new THREE.Color(),
   sunI: 1, hemiI: 1, exposure: 0.84, lamps: 0, sunH: 1, sunSide: 1, haze: 0.3,
 };
-/** The hour, `u` of the way through the stretch the course is raced in. */
-function timeOfDay(u, finale, out) {
+/** The hour, `u` of the way through the stretch the course is raced in.
+ *  If `absolute` is true, interpret `u` as an hour in [0,24). */
+function timeOfDay(u, finale, out, absolute = false) {
+  if (absolute) {
+    const hour = ((u % 24) + 24) % 24;
+    // Find which interval this hour falls into
+    // Sort keys by clock time
+    const keys = ['dawn', 'morning', 'noon', 'dusk', 'night'];
+    let a = keys[0], b = keys[1];
+    for (let i = 0; i < keys.length; i++) {
+      const cur = keys[i];
+      const next = keys[(i + 1) % keys.length];
+      const curH = HOUR[cur].clock;
+      const nextH = HOUR[next].clock;
+      if (i === keys.length - 1) {
+        // night wraps to dawn. The night interval is [23, 24) and dawn is [6, 9),
+        // so the stretch between them is the last hour of night plus the first
+        // six, a span of seven, and **the answer is measured against the wrap and
+        // not against the next key**: the span is `(24 - 23) + 6`, and reading
+        // `nextH` here would read dawn's own clock as if it were still a key past
+        // night, which is 6 either way - but the branch is the wrap and the number
+        // belongs to it, so it is written in the branch and not left to the next
+        // key's. `nextH` is unused in this branch on purpose.
+        if (hour >= curH || hour < HOUR.dawn.clock) {
+          a = cur; b = keys[0];
+          const span = (24 - curH) + HOUR[keys[0]].clock;
+          const t = hour >= curH ? (hour - curH) / span : (hour + 24 - curH) / span;
+          const A = HOUR[a], B = HOUR[b];
+          const tt = clamp(t, 0, 1);
+          for (let j = 0; j < _todSky.length; j++) {
+            _todSky[j].setHex(A.sky[j][1]).lerp(_c2.setHex(B.sky[j][1]), tt);
+          }
+          out.sun.setHex(A.sun).lerp(_c2.setHex(B.sun), tt);
+          out.hemiSky.setHex(A.hemiSky).lerp(_c2.setHex(B.hemiSky), tt);
+          out.hemiGround.setHex(A.hemiGround).lerp(_c2.setHex(B.hemiGround), tt);
+          out.fog.setHex(A.fog).lerp(_c2.setHex(B.fog), tt);
+          out.cloud.setHex(A.cloud).lerp(_c2.setHex(B.cloud), tt);
+          out.sunI = lerp(A.sunI, B.sunI, tt);
+          out.hemiI = lerp(A.hemiI, B.hemiI, tt);
+          out.exposure = lerp(A.exposure, B.exposure, tt);
+          out.lamps = lerp(A.lamps, B.lamps, tt);
+          out.sunH = lerp(A.sunH, B.sunH, tt);
+          out.sunSide = lerp(A.sunSide, B.sunSide, tt);
+          out.haze = lerp(A.haze, B.haze, tt);
+          return out;
+        }
+      } else {
+        if (hour >= curH && hour < nextH) {
+          a = cur; b = next;
+          const t = (hour - curH) / (nextH - curH);
+          const A = HOUR[a], B = HOUR[b];
+          const tt = clamp(t, 0, 1);
+          for (let j = 0; j < _todSky.length; j++) {
+            _todSky[j].setHex(A.sky[j][1]).lerp(_c2.setHex(B.sky[j][1]), tt);
+          }
+          out.sun.setHex(A.sun).lerp(_c2.setHex(B.sun), tt);
+          out.hemiSky.setHex(A.hemiSky).lerp(_c2.setHex(B.hemiSky), tt);
+          out.hemiGround.setHex(A.hemiGround).lerp(_c2.setHex(B.hemiGround), tt);
+          out.fog.setHex(A.fog).lerp(_c2.setHex(B.fog), tt);
+          out.cloud.setHex(A.cloud).lerp(_c2.setHex(B.cloud), tt);
+          out.sunI = lerp(A.sunI, B.sunI, tt);
+          out.hemiI = lerp(A.hemiI, B.hemiI, tt);
+          out.exposure = lerp(A.exposure, B.exposure, tt);
+          out.lamps = lerp(A.lamps, B.lamps, tt);
+          out.sunH = lerp(A.sunH, B.sunH, tt);
+          out.sunSide = lerp(A.sunSide, B.sunSide, tt);
+          out.haze = lerp(A.haze, B.haze, tt);
+          return out;
+        }
+      }
+    }
+    // fallback
+  }
   const [a, b] = RACE_HOURS[finale ? 'finale' : 'day'];
   const A = HOUR[a], B = HOUR[b];
   const t = clamp(u, 0, 1);
@@ -1220,7 +1346,9 @@ export {
   gfxSsao, gfxReflSize, gfxReflOn, triesBoost,
   renderer,
   buildSkyGeo, setSkyGeo, skyGeo, matSky, paintSky, domeToneFix, timeOfDay,
+  skyAt,
   envPmrem, makeEnv, refreshEnvironment,
   LAMP_LIGHTS, LAMP_SPACING, LAMP_COLOUR,
+  SKY_TS,
   raceClock, raceHour, clockText, TOD, WHITE, _todSky,
 };

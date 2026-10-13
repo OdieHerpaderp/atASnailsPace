@@ -352,7 +352,7 @@ test('every cup is one course of each trait and a finale, and the ash round is a
   expect(ashRound.size, 'and no two tiers swap the same trait in').toBe(TRAITS.length);
 });
 
-test('the duel reads six numbers off its course rather than out of the source', async ({ page }) => {
+test('the duel reads seven keys off its course rather than out of the source', async ({ page }) => {
   const { errors } = await boot(page);
   const entry = RACES.find((c) => c.duel);
   expect(entry.id, 'the duel is a course in races.json').toBe('adversary');

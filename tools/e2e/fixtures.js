@@ -16,9 +16,23 @@ import { GFX, GFX_KEY, SAVE_KEY } from './tier.js';
 const HERE = __dirname;
 
 /** The game's own save, captured off a running game by `capture.spec.js` and
- *  committed. `load()` wants `v: 2` and a `pool` of exactly 64 entries of
- *  `{attrs, rating}` and it checks both, so a hand-written fixture that missed
- *  one would be rejected **in silence**. */
+ *  committed. `load()` wants `v: 3` and a `pool` of exactly 64 entries of
+ *  `{attrs, xp, rating}` and it checks all three, so a hand-written fixture that
+ *  missed one would be rejected **in silence** - and the answer to a rejected
+ *  save is `shuffleOrder()`, which is a random season.
+ *
+ *  **`xp` is on the entry beside `attrs` because a snail's traits are exp now and
+ *  the attributes are a reading of it.** The two are written here together and
+ *  the file is a capture rather than a hand-built save, so `xp` here is
+ *  `expForLevel(attr)` for every entry - `levelOf()` hands the attribute back,
+ *  which is the whole of the round trip `load()` re-establishes on the way in.
+ *
+ *  **And it is an old capture, on purpose.** Its pool still carries attributes
+ *  above the ceiling and ratings from the scale before the curve, which is what
+ *  makes it the one fixture that exercises the bounds in `load()` rather than
+ *  only the happy path. Re-deriving it from a current `makePool()` would replace
+ *  the migration with a snapshot and the suite would stop asking the question it
+ *  was captured to ask. */
 export const SAVE = JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-save.json'), 'utf8'));
 
 export { GFX, GFX_KEY, SAVE_KEY };

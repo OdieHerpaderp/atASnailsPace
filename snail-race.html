@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Snail Grand Prix</title>
+<title>At a Snail’s Race</title>
 <link rel="stylesheet" href="snail-race.css" />
 <!-- three's own addons (the glTF loader) import the bare name 'three', so it
      has to be mapped to the same file the game loads, or the two end up as
@@ -20,10 +20,36 @@
 </head>
 <body>
 
+<!-- ============ THE TITLE ============
+     The front door, over a wide slow orbit of the stable. One panel and
+     nothing else: the shot is the background and the shot swings from sky to
+     lawn to its own shadow, so everything that has to be read has to be on
+     something with a backdrop behind it - **which is why the buttons live
+     inside the card and not beside it**, because `.screen` is
+     `pointer-events: none` and a button outside the `.panel` is a button that
+     cannot be pressed.
+
+     It is a fifth `mode`, and the two other screens are not reachable from it
+     by anything except these three buttons: the lobby has its own identity and
+     a `Delete save` of its own, and a route back here would be a second way to
+     lose a season. -->
+<section id="title" class="screen on">
+  <div class="panel" id="titleCard">
+    <h2>At a Snail’s Race</h2>
+    <p class="note" id="titleBlurb">A county of sixty-five snails, four courses a season and a ladder above both. Every snail carries five traits and the course decides which one is working. It's still early in development, so the game may run slowly on lower-powered computers or older devices.</p>
+    <div id="titleMenu">
+      <button class="big" id="titleContinue" title="pick the season up where you left it">Continue</button>
+      <button class="big danger" id="titleNew" title="throw the saved game away and start a new snail">New game</button>
+      <button class="quiet" id="titleOptions" title="graphics, quality and effects">Options</button>
+    </div>
+    <p class="note" id="titleSave">—</p>
+  </div>
+</section>
+
 <!-- ============ STABLE ============ -->
-<section id="stable" class="screen on">
+<section id="stable" class="screen">
   <header id="brand">
-    <div class="logo">Snail Grand Prix</div>
+    <div class="logo">At a Snail’s Race</div>
     <div class="tag" id="seasonTag">season 1 · four races, then the marathon</div>
     <div id="pips"></div>
   </header>
@@ -41,7 +67,7 @@
     </div>
     <button class="quiet" id="openWardrobe" title="faces and hats — spend gold on them">wardrobe</button>
     <div id="stats"></div>
-    <p class="note">A fruit costs <b>10g</b> and lifts one trait by 1, up to 24. Stamina sets how long the bar lasts. Gold is what you finish on: every race pays the points you scored in it.</p>
+    <p class="note">A fruit costs <b>10g</b> and buys <b>10 exp</b> on one trait — and there is no top to it. Every race pays exp on the trait it is testing, and only while you spend the bar does stamina grow. Gold is what you finish on: every race pays the points you scored in it.</p>
     <button class="big danger" id="wipeSave" title="throw the saved game away and start a new snail">Delete save</button>
   </div>
 
@@ -195,18 +221,20 @@
 </div>
 
 <!-- ============ THE WARDROBE ============
-     Ten faces and six hats, and **a shop and not a settings panel**: the buttons
-     carry a price and the ones you cannot afford are dim, so the panel and the
-     gold counter have to be read together or neither means anything. `openWardrobe`
-     lives on the snail card because a costume is the snail's, and the two colour
-     inputs next to it are the same idea three doors along - the shell has one
-     model now, so there is no style row beside them any more. -->
+     Ten faces, six hats and two shells, and **a shop and not a settings panel**:
+     the buttons carry a price and the ones you cannot afford are dim, so the
+     panel and the gold counter have to be read together or neither means
+     anything. `openWardrobe` lives on the snail card because a costume is the
+     snail's, and the two colour inputs next to it are the same idea three doors
+     along - the shell colour tints whichever of the two coils is worn, and the
+     Shells row below chooses the coil itself. -->
 <div class="modal" id="wardrobe">
   <div class="card-modal">
     <h2>The wardrobe</h2>
-    <div class="sub"><span class="coin"></span> <b id="wdGold">50</b> gold · a face or a hat you have not bought is dim</div>
+    <div class="sub"><span class="coin"></span> <b id="wdGold">50</b> gold · a face, a hat or a shell you have not bought is dim</div>
     <div class="wdrow"><h3>Faces</h3><div class="swatches" id="wdFaces"></div></div>
     <div class="wdrow"><h3>Hats</h3><div class="swatches" id="wdHats"></div></div>
+    <div class="wdrow"><h3>Shells</h3><div class="swatches" id="wdShells"></div></div>
     <p class="note" id="wdNote">—</p>
     <div class="btns"><button class="big" id="wdClose">Back to the stable</button></div>
   </div>

@@ -114,17 +114,18 @@ function loadAddons() {
       import('three/addons/postprocessing/GTAOPass.js'),
       import('three/addons/postprocessing/UnrealBloomPass.js'),
       import('three/addons/postprocessing/OutputPass.js'),
+      import('three/addons/postprocessing/ShaderPass.js'),
       // **The base class and the quad, and nothing else from it.** `GtaoGiPass` is
       // the county's own pass rather than a three one, and it is a `Pass` in
       // everything `EffectComposer` asks of one - `enabled`, `needsSwap`,
       // `renderToScreen`, `setSize`, `dispose` - so it is built on three's and
       // writes its own `render()`.
       import('three/addons/postprocessing/Pass.js'),
-    ]).then(([ec, rp, gtao, bloom, out, ps]) => {
+    ]).then(([ec, rp, gtao, bloom, out, sp, ps]) => {
       GFX_ADDONS = {
         EffectComposer: ec.EffectComposer, RenderPass: rp.RenderPass,
         GTAOPass: gtao.GTAOPass, UnrealBloomPass: bloom.UnrealBloomPass,
-        OutputPass: out.OutputPass, Pass: ps.Pass, FullScreenQuad: ps.FullScreenQuad,
+        OutputPass: out.OutputPass, ShaderPass: sp.ShaderPass, Pass: ps.Pass, FullScreenQuad: ps.FullScreenQuad,
       };
       return GFX_ADDONS;
     });
@@ -134,7 +135,7 @@ function loadAddons() {
 
 let composer = null, composerUp = false;
 let renderPass = null, presentPass = null, gtaoPass = null, gtaoGiPass = null;
-let ssrPass = null, bloomPass = null;
+let ssrPass = null, bloomPass = null, aaPass = null;
 /** The set of passes currently in the chain, so `syncPasses()` is a no-op when
  *  nothing crossed. `a` is ambient occlusion, `g` is the bounce, `s` is the
  *  reflection march and `b` is bloom - **four terms**, and all four are in the key
@@ -181,32 +182,46 @@ function scenePixels() {
  * is the wrong size - see `AO_LADDER`.
  */
 const gfxSsrOn = () => gfx.ssao >= 2 && gfx.fxSsr > 0;
+/** **The one pass that is a filter and not a scene render.** MSAA softens geometry
+ *  silhouettes and the resample row only re-samples an already-aliased buffer, so
+ *  neither touches a texture edge - and the county's sharpest features are texture
+ *  edges: the painted lane line against clay, a prop's albedo seam, the snail's
+ *  shell pattern. This is the one thing that covers them without a second scene
+ *  render, so it is a switch and not a ladder row, and it is a fullscreen quad
+ *  rather than a material flag because it has to run on **both** paths: the
+ *  composer's, where it lands after bloom and before `presentPass`, and the direct
+ *  path's, where the overlay quad already proves a fullscreen pass fits. It is
+ *  gated on the occlusion the same way the march is - `ssao >= 2` - because a
+ *  fullscreen pass needs the G-buffer's depth to test against, and on the bottom
+ *  tier the switch reads on and the chain is not built, which is disclosed in the
+ *  row's cost rather than papered over. */
+const gfxAaOn = () => gfx.ssao >= 2 && gfx.fxAa > 0;
 
 /**
- * The one predicate the whole cost story hangs off. **Four things raise it and
- * only one of them is not a pass**, and that one is the interesting one: a
- * resample is a buffer whose size is not the window's, so a machine that asks for
- * a render scale off 1× cannot have a direct path any more. It gets the chain with
- * `RenderPass` and `presentPass` on it and nothing else, which is one scene render
- * and one resolve - so the direct path is still `renderer.render()` and still
- * spends no render targets, but only because the settings say so.
+ * The one predicate the whole cost story hangs off. **Five things raise it and
+ *  only one of them is not a pass**, and that one is the interesting one: a
+ *  resample is a buffer whose size is not the window's, so a machine that asks for
+ *  a render scale off 1× cannot have a direct path any more. It gets the chain with
+ *  `RenderPass` and `presentPass` on it and nothing else, which is one scene render
+ *  and one resolve - so the direct path is still `renderer.render()` and still
+ *  spends no render targets, but only because the settings say so.
  *
- * **Multi-sampling is not on this list any more, and that is the change.** It was,
- * and it made the anti-aliasing row reachable only by building a post chain: a
- * player on the bottom tier who wanted smoother edges had to buy a compositor to get
- * them, and the frame they were smoothing was one the composer then drew. The context
- * carries its own MSAA now - see the renderer at the bottom of `graphics.js` - so
- * the direct path is smoothed without a buffer and `x2`/`x4` have something to say
- * only once something else has put the chain up.
+ *  **Multi-sampling is not on this list any more, and that is the change.** It was,
+ *  and it made the anti-aliasing row reachable only by building a post chain: a
+ *  player on the bottom tier who wanted smoother edges had to buy a compositor to get
+ *  them, and the frame they were smoothing was one the composer then drew. The context
+ *  carries its own MSAA now - see the renderer at the bottom of `graphics.js` - so
+ *  the direct path is smoothed without a buffer and `MSAA x2`/`x4`/`x8` have something
+ *  to say only once something else has put the chain up.
  *
- * **The failure this invites is a row naming a count nothing is drawing into**, and
- * it is met twice: `gfxCaption()` says `idle, no chain` rather than quoting a cost
- * that is not being paid, and the settings that *are* paying wear an orange border -
- * so a player who has set `x4` and sees no border anywhere learns in one glance that
- * nothing in the frame is spending on it.
+ *  **The failure this invites is a row naming a count nothing is drawing into**, and
+ *  it is met twice: `gfxCaption()` says `idle, no chain` rather than quoting a cost
+ *  that is not being paid, and the settings that *are* paying wear an orange border -
+ *  so a player who has set `MSAA x8` and sees no border anywhere learns in one glance
+ *  that nothing in the frame is spending on it.
  */
 function needsComposer() {
-  return gfx.ssao >= 2 || gfx.fxBloom > 0 || gfxSsrOn() || needsResample();
+  return gfx.ssao >= 2 || gfx.fxBloom > 0 || gfxSsrOn() || needsResample() || gfxAaOn();
 }
 
 /**
@@ -222,20 +237,38 @@ function needsComposer() {
  * where they were, because a button that changed shape when you pressed it would be
  * telling you about the past.
  *
-* **It is not "would the chain be up if I picked this", which is a different question
+ * **It is not "would the chain be up if I picked this", which is a different question
  * and a worse one.** That answer moves as the other rows move - bloom on and `1×`
  * stops being free - so the same button would gain and lose its frame for reasons the
  * player never touched, and a border that flickers on an unrelated row is not a cost,
  * it is noise. **So every term of `needsComposer()` that is decidable from its own
  * row alone carries a frame, and a term that is not carries its cost in its tooltip
- * instead** - which is the same answer the anti-aliasing row already has, below.
+ *  instead** - which is the same answer the anti-aliasing row already has, below.
  *
- * **The reflection row is the second thing not here**, and it is not here for the
- * same reason and one more: `gfxSsrOn()` is `ssao >= 2 && fxSsr > 0`, so framing its
+ * **Three things are not here, and the first is the most written-about.** The
+ * reflection row is one: `gfxSsrOn()` is `ssao >= 2 && fxSsr > 0`, so framing its
  * `on` cells would put a border on a button that gains and loses it as the occlusion
  * row moves, for reasons the player never touched. Its cost sentence lives in the
  * row's `cost` - which `syncOptions()` prints as the visible caption - and in the
  * tooltip beside `reflectReport()`.
+ *
+ * **The anti-aliasing ladder is the second**, and it is not here for a different
+ * reason: its three MSAA cells build the compositor's target at that count, but the
+ * bottom cell does not build one at all, and the frame is still anti-aliased there
+ * by the context's own default framebuffer. So the row is in this table under its
+ * own key (`msaa: n >= 2`) rather than being folded into a general rule, because the
+ * general rule - "a term decidable from its own row alone carries a frame" - is
+ * exactly what would put a frame on `direct only`, which is the cheap option.
+ *
+ * **The third is the edge anti-aliasing switch itself**, which is not a term of
+ * `needsComposer()` that is decidable from its own row alone but a term that is not
+ * a term at all: `gfxAaOn()` is `ssao >= 2 && fxAa > 0`, so its `on` cell would
+ * gain and lose its frame as the occlusion row moves. It is in the table under its
+ * own key because it is the one case where the dependency is the wrong shape to
+ * leave out: a filter that needs the composer has to be asked about its own row,
+ * and a switch whose frame moved with the occlusion would be the flicker the list
+ * exists to rule out. Its cost lives in the row's `cost` and its caption, and the
+ * dependency is disclosed there rather than hidden.
  */
 const CHAIN_CELLS = {
   // **The render scale, and the one cell that carries no frame is `1×`.** Every other
@@ -249,6 +282,23 @@ const CHAIN_CELLS = {
   // **And the bloom, which is a switch and not a ladder** - hence `n > 0` and not
   // `n >= 1`, because zero is its first cell rather than a level below the first.
   fxBloom: (n) => n > 0,
+  // **The edge anti-aliasing, and it is the one term here that is not a ladder.** It
+  // is decidable from its own row alone - on or off, nothing else on the panel moves
+  // the answer - so it carries a frame the way the other three do, and it is the
+  // reason the switch is a row rather than a cell on the anti-aliasing ladder: a
+  // filter that needs the composer has to be asked about its own row.
+  fxAa: (n) => n > 0,
+  // **The anti-aliasing ladder, and only its three MSAA cells.** This one is the
+  // exception to the "decidable from its own row alone" rule and it is written down
+  // because it is the only one: `MSAA x2`, `x4` and `x8` build the compositor's
+  // target at that count, and `direct only` does not build one at all. It is not
+  // decidable from the row alone - the direct path is smoothed by the context's own
+  // default framebuffer whatever the row says, so cell 1 carries no frame even
+  // though the frame is anti-aliased there - and the honest answer to "what will
+  // this cost me" on the bottom cell is "nothing": no buffer, no chain, and the
+  // smoothing is a parameter the game does not control. Framing it would be the
+  // border lying about the cheap option, the same as `1×` above.
+  msaa: (n) => n >= 2,
 };
 
 /** The scene the frame is about to draw, which is the stable's on the stable and
@@ -322,6 +372,7 @@ function dropComposer() {
     if (gtaoGiPass) { composer.removePass(gtaoGiPass); gtaoGiPass.dispose(); gtaoGiPass = null; }
     if (ssrPass) { composer.removePass(ssrPass); ssrPass.dispose(); ssrPass = null; }
     if (bloomPass) { composer.removePass(bloomPass); bloomPass.dispose(); bloomPass = null; }
+    if (aaPass) { composer.removePass(aaPass); aaPass.dispose(); aaPass = null; }
     // frees both ping-pong targets and the copy pass
     composer.dispose();
   }
@@ -405,8 +456,18 @@ function syncPasses(force) {
   const a = gfxSsao();
   const wantAO = !!a, wantGI = !!(a && a.gi), wantSsr = gfxSsrOn();
   const wantBloom = gfx.fxBloom > 0;
+  // **And the edge filter, in the key with the other four.** It was the one term
+  // of `needsComposer()`'s family the key left out, and the omission is the
+  // quiet kind: the pass is built and dropped on its own switch twelve lines
+  // below, but a switch that moves nothing else leaves the key unchanged, the
+  // guard returns early, and **the build-and-drop lines never run**. The row
+  // reads on, the tooltip explains the occlusion it needs, and the frame is
+  // un-filtered with nothing anywhere saying so - the same shape as the shader
+  // that would not compile, and found the same way: a frame-time measurement
+  // reads it as the cheapest effect on the board.
+  const wantAa = gfxAaOn();
   const key = (wantAO ? 'a' : '') + (wantGI ? 'g' : '') + (wantSsr ? 's' : '')
-    + (wantBloom ? 'b' : '');
+    + (wantBloom ? 'b' : '') + (wantAa ? 'x' : '');
   if (key === passKey && !force) return;
   passKey = key;
   const { GTAOPass, UnrealBloomPass } = GFX_ADDONS;
@@ -446,7 +507,17 @@ function syncPasses(force) {
   if (wantBloom && !bloomPass) {
     bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.30, 0.55, 1.15);
   }
-  if (!wantBloom && bloomPass) { bloomPass.dispose(); bloomPass = null; }
+if (!wantBloom && bloomPass) { bloomPass.dispose(); bloomPass = null; }
+  // **The edge anti-aliasing, after bloom and before `presentPass`.** It is a
+  // `ShaderPass` and not a scene render, so it needs no target of its own and it
+  // is built and dropped on its own switch the way the other passes are. It has to
+  // precede `presentPass` because that pass applies ACES and the sRGB transfer and
+  // is the last pass in the chain by construction: an edge filter applied after
+  // the tone map would tone map the filtered result and the frame would come out
+  // a different colour from the one every material in the county was compiled
+  // against.
+  if (wantAa && !aaPass) aaPass = newAaPass();
+  if (!wantAa && aaPass) { aaPass.dispose(); aaPass = null; }
   // **The two flat buffers follow the wanted list and not the passes**, because the
   // bounce owns one and the march owns the other and neither owns its render: a
   // target that outlived its reader is a texture nobody reads, and one that did not
@@ -454,21 +525,24 @@ function syncPasses(force) {
   if (wantGI || wantSsr) buildFlat(wantSsr);
   else dropFlat();
 // **Order is the whole of what this chain is.** The scene, then the occlusion
-  // multiply, then the bounce, then the march, then bloom, then the one pass that
-  // tone-maps and encodes. GTAO has to precede the bounce because the bounce is
-  // *light arriving at* a surface and the occlusion is how much of the sun's own
-  // is getting here; a bounce added before the multiply is a bounce the occlusion
-  // then darkens, which is the same as not having one in a crease. The march sits
-  // after the bounce and before bloom because **a reflection already carrying the
-  // sun's own share must not then be multiplied into the bloom** - and after the
-  // bounce because a bounce added on top of a reflection is the same term twice
-  // over on the one surface in the county that is both. Bloom has to precede
-  // OutputPass for the reason above, and OutputPass has to be last because it is
-  // what applies ACES and the sRGB transfer to the finished frame.
+  // multiply, then the bounce, then the march, then bloom, then the edge filter,
+  // then the one pass that tone-maps and encodes. GTAO has to precede the bounce
+  // because the bounce is *light arriving at* a surface and the occlusion is how
+  // much of the sun's own is getting here; a bounce added before the multiply is a
+  // bounce the occlusion then darkens, which is the same as not having one in a
+  // crease. The march sits after the bounce and before bloom because **a reflection
+  // already carrying the sun's own share must not then be multiplied into the
+  // bloom** - and after the bounce because a bounce added on top of a reflection is
+  // the same term twice over on the one surface in the county that is both. The
+  // edge filter sits after bloom for the same reason `presentPass` does: it is a
+  // filter on the finished picture and must not see the bloom's own unsharp
+  // mask, and it has to precede the tone map. Bloom has to precede OutputPass for
+  // the reason above, and OutputPass has to be last because it is what applies
+  // ACES and the sRGB transfer to the finished frame.
   //
   // So the array is rebuilt from the wanted list rather than appended to, which is
-  // also what makes it correct when a tier *drops*: `addPass()` would put the
-  // new pass at the end, after `presentPass`, and the frame would come out
+  // also what makes it correct when a tier *drops*: `addPass()` would put the new
+  // pass at the end, after `presentPass`, and the frame would come out
   // untone-mapped with the occlusion applied to nothing.
   composer.passes.length = 0;
   composer.addPass(renderPass);
@@ -476,6 +550,7 @@ function syncPasses(force) {
   if (gtaoGiPass) composer.addPass(gtaoGiPass);
   if (ssrPass) composer.addPass(ssrPass);
   if (bloomPass) composer.addPass(bloomPass);
+  if (aaPass) composer.addPass(aaPass);
   composer.addPass(presentPass);
   sizeGBuffers();
   tuneGtao();
@@ -680,6 +755,68 @@ function restoreGBuffer(sc, cache) {
 const isMarked = (o) => !!(o.geometry && o.geometry.attributes
   && o.geometry.attributes.gfxReflect);
 
+/** **Is anything wearing a mark inside the camera's frustum, and it is asked
+ *  every frame rather than kept in a register.**
+ *
+ *  The mask render is a whole scene through an override material - the dearest
+ *  thing the reflection row does - and it exists to answer two questions: which
+ *  pixels start a ray, and what the ray hits. **When nothing marked is in frame
+ *  both answers are already known**: no pixel starts a ray, so the march writes
+ *  `base` at every one of them, which is byte-for-byte what the pass's own
+ *  passthrough branch writes. The render is then a whole county drawn to decide
+ *  a question the shader answers for the price of one texture fetch.
+ *
+ *  **A register was the first shape this wanted and it is the wrong one.** A
+ *  `Set` of marked meshes filled at the plant sites goes stale the day a course
+ *  is dropped or a field is rebuilt - and a stale register is not a slow frame,
+ *  it is a reflection that quietly stopped, which is the failure this county
+ *  keeps arriving at. The walk is the other direction: it is always true of the
+ *  scene being drawn, it costs one traversal against a render it can save, and
+ *  the county already pays three of them a frame in this same path
+ *  (`hideFromGBuffer` and `restoreGBuffer` round each flat render).
+ *
+ *  **And the test is conservative in the only direction that matters.** A false
+ *  positive - rendering when nothing is visible - costs the frame it always
+ *  cost. A false negative would drop a reflection, so the sphere is the
+ *  geometry's own bounding sphere through the mesh's world matrix and the
+ *  frustum is the camera the pass is actually rendering with: the inspector's
+ *  free camera and the race's chase camera do not share a view, and a gate
+ *  asked of the wrong one is a gate that is wrong exactly when the player is
+ *  the one looking.
+ *
+ *  What it does *not* claim is that this fires often. **Every snail in the
+ *  county is marked** - the skin at 0.045 and the shell at 0.055 - and the race
+ *  camera is a chase camera, so during a race the player's own snail is in
+ *  frame and the render is owed. Where it fires is the inspector on a course
+ *  with no water, the inspector with the field behind the player, and the title
+ *  shot when the mirror cube is out of frame: measured on Hedgerow Dash at
+ *  2560x1440 the whole pass is 2.1 ms of a 34 ms frame, and this is what says
+ *  whether those 2.1 ms are owed.
+ */
+const _gateFrustum = new THREE.Frustum();
+const _gatePV = new THREE.Matrix4();
+const _gateSphere = new THREE.Sphere();
+function markedVisible(sc, cam) {
+  if (!sc || !cam) return false;
+  _gatePV.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  _gateFrustum.setFromProjectionMatrix(_gatePV);
+  let any = false;
+  sc.traverse((o) => {
+    if (any || !o.visible || !isMarked(o)) return;
+    const g = o.geometry;
+    // **Computed here and not at the plant site**, because a bounding sphere is
+    // a question about the geometry and the plant sites have enough of their
+    // own: the water computes its own for the probe, and a shell or a cube that
+    // never needed one gets one on the first frame the gate asks. It is cached
+    // on the geometry, so this is once per piece and not once per frame.
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    if (!g.boundingSphere) return;
+    if (_gateFrustum.intersectsSphere(
+      _gateSphere.copy(g.boundingSphere).applyMatrix4(o.matrixWorld))) any = true;
+  });
+  return any;
+}
+
 /* ------------------------------------------------------------------ *
  * The two flat buffers, and the one render that draws them.
  *
@@ -869,6 +1006,30 @@ const GI_FRAG = /* glsl */`
   uniform float uInner;
   uniform float uRadius;
   uniform float uThick;
+  /* ------------------------------------------------------------------ *
+   * Option 4: a bounded diffuse cast off the county's own flat albedo.
+   *
+   * **The one number this carries, and not a light from the geometry.** The
+   * march reads what the flat albedo of the pieces it found is (irr), as a
+   * fraction of the whole hemisphere, and scales it by the hour's ambient
+   * light (uDayLevel). The result is added to the frame rather than
+   * multiplied into it: the frame already carries the sky's own light from
+   * the hemisphere light and the PMREM environment, and a second additive
+   * sky term was the whole of the washed-out haze. So the effect is "what
+   * colour is the geometry that's bouncing light onto this pixel, and how
+   * much of the hemisphere is it" rather than "add the sky's colour again".
+   * At night the diffuse cast dies with the sun and the frame is left at
+   * whatever the hemisphere light and the PMREM gave it, while a hedge at
+   * the same height as the road keeps a bounded, hour-scaled tint of green
+   * on the lane it stands beside.
+   *
+   * **There is no open-sky fraction in here, and there used to be.** It was
+   * the complement of cover, accumulated down the same march, and it gated
+   * the cast - which counted the occlusion twice, because the denominator
+   * below already only counts the directions that hit something. The open
+   * fraction is GTAOPass's number and GTAOPass runs a pass earlier.
+   * ------------------------------------------------------------------ */
+  uniform float uDayLevel;  // the scene's ambient light, 0 at night, 1 at noon
 
   varying vec2 vUv;
 
@@ -940,7 +1101,7 @@ const GI_FRAG = /* glsl */`
 
   void main() {
     vec4 base = texture2D( tDiffuse, vUv );
-    
+
     // **Sky is depth one, and it is the only place this pass does nothing.** The
     // dome is out of the G-buffer by hideFromGBuffer() - it does not write depth -
     // so a clear pixel here is the sky, and the county already lights that with
@@ -956,6 +1117,17 @@ const GI_FRAG = /* glsl */`
     // is in view space, unswizzled out of the same rgb.
     vec3 n = normalize( unpackRGBToNormal( texture2D( tNormal, vUv ).rgb ) );
     mat3 fr = frameFor( n );
+
+    // **The stride, and it is the yardstick the hit test below measures in.** A
+    // march that steps a fixed distance and then asks "am I inside something"
+    // has no way to tell a crossing from a pass-by, and the answer it gives
+    // instead is the shape of whatever it passed. One stride of slack is all a
+    // discrete march is owed: a crossing is found the step after it happens, so
+    // the surface is at most one stride behind the sample that found it, and a
+    // surface further back than that is one the ray went through earlier or
+    // never touched. It is derived and not written down, so moving the inner
+    // radius, the outer one or the step count cannot put the two out of step.
+    float stride = ( uRadius - uInner ) / float( GI_STEPS );
 
     vec3 sum = vec3( 0.0 );
     float total = 0.0;
@@ -985,34 +1157,95 @@ const GI_FRAG = /* glsl */`
         vec3 q = p + dir * t;
         vec4 clip = cameraProjectionMatrix * vec4( q, 1.0 );
         vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
-        if ( suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0 ) break;
-        float sd = texture2D( tDepth, suv ).x;
-        // **No break on the first thing found, and a cover that is smooth in the
-        // depth of the sample rather than a hit or a miss.** Those two are the same
-        // decision written twice: a hard hit test makes the answer a step function
-        // of where a surface happens to be, and a step function is a contour line on
-        // a curved surface. Every step along the ray is accumulated and the
-        // weighting is a smoothstep, so the estimate moves the way the geometry
-        // moves.
-        if ( sd >= 1.0 ) break;                          // open sky from here on
-        // View space looks down -Z, so a surface *nearer* the camera than the ray
-        // point is a surface the ray point is behind: the difference is the depth
-        // of the ray point inside it, and it is what uThick is measured against.
-        float pen = perspectiveDepthToViewZ( sd, cameraNear, cameraFar ) - q.z;
-        float cover = smoothstep( 0.0, uThick, pen );
+        // **Out of bounds and open sky are the same answer - both are cover 0 -
+        // and neither stops the march.** A step that found nothing has no albedo
+        // to add, and the loop keeps going so the tail of the direction is
+        // counted too: a ray that is open at 1.2 m may still cross a hedge at
+        // 2.4 m, and breaking on the first open step silently dropped every hit
+        // past it.
+        float sd = ( suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0 )
+          ? 1.0 : texture2D( tDepth, suv ).x;
+        float pen = ( sd >= 1.0 )
+          ? 0.0 : perspectiveDepthToViewZ( sd, cameraNear, cameraFar ) - q.z;
+        float cover = smoothstep( 0.0, uThick * stride, pen );
+        /* ---------------------------------------------------------------- *
+         * The hit test, and **it is the one this shader was missing.** A
+         * penetration says the ray point is behind whatever the depth buffer
+         * holds at suv, and nothing more. It does not say the ray *crossed*
+         * that surface: a ray that has already gone past a prop, or that
+         * passes beside it, projects onto the prop just as readily, and the
+         * albedo read at suv is then the prop's own, painted onto the
+         * receiver in the prop's exact shape. That is the snail's silhouette
+         * on the grass and the snail's smile on the fountain wall - not a
+         * bounce, a copy, and the tell is that it carries edges.
+         *
+         * So the surface is rebuilt at suv and asked the two questions a
+         * crossing answers and a pass-by does not. **How far along the ray is
+         * it** - a surface the march has already gone past sits nearer than
+         * the step that found it, and one stride of slack is the whole of
+         * what discretisation is owed. **And how far beside the ray is it** -
+         * a crossing puts the surface on the ray, and a pass-by leaves it off
+         * it. The third is the usual one: a surface whose normal faces away
+         * from the ray is a back face, and a ray does not bounce off the back
+         * of a thing it never reached.
+         *
+         * **A rejected step contributes nothing and is not dark.** The direction
+         * really is open - the geometry that looked like it was blocking it is
+         * somewhere else - so there is no albedo to take from it, and the march
+         * carries on down the same direction rather than giving up on it.
+         * ---------------------------------------------------------------- */
+        if ( cover > 0.0 ) {
+          vec4 sview = cameraProjectionMatrixInverse
+            * vec4( suv * 2.0 - 1.0, sd * 2.0 - 1.0, 1.0 );
+          vec3 sp = sview.xyz / sview.w;
+          vec3 dv = sp - p;
+          float along = dot( dv, dir );
+          if ( along < t - stride || length( dv - dir * along ) > stride ) {
+            cover = 0.0;
+          } else {
+            vec3 nh = normalize( unpackRGBToNormal( texture2D( tNormal, suv ).rgb ) );
+            if ( dot( nh, -dir ) <= 0.0 ) cover = 0.0;
+          }
+        }
         if ( cover <= 0.0 ) continue;
         sum += texture2D( tAlbedo, suv ).rgb * ( w * cover * ( 1.0 - t / uRadius ) );
         if ( cover > 0.995 ) break;                      // the rest of the ray is inside
       }
     }
-    // **Both denominators, and the second one is the one that was missing.**
-    vec3 irr = sum / max( total, 1e-4 ) / max( stepWeights(), 1e-4 );
-    // **The receiving surface's own colour is the last multiply and not the
-    // first**, because it is Lambert: what comes back off a wall is the same
-    // radiance whichever way it lands, and a white road beside a hedge is the
-    // thing that goes green, not the hedge.
-    vec3 bounce = texture2D( tAlbedo, vUv ).rgb * irr * uGi;
-    gl_FragColor = vec4( base.rgb + bounce, base.a );
+    // **The one denominator, and it is the whole hemisphere's.** sum only
+    // accumulates the steps that hit something, so dividing by every direction's
+    // weight times every step's makes irr the *fraction of the county's colour*
+    // this pixel can actually see: a meadow pixel whose hemisphere is a fifth
+    // covered by grass gets a fifth of the grass, and a pixel under a canopy
+    // that is four-fifths covered gets four-fifths of it. That is the whole of
+    // the shape of the term, and it is why the gain below can go past one
+    // without any surface being asked to reflect more than it has.
+    //
+    // **There is no open fraction in this shader, and there used to be.** It was
+    // accumulated as the complement of cover and then multiplied into the cast,
+    // which counted the same occlusion twice - once through this denominator,
+    // which already only counts what was hit, and once through the fraction of
+    // the hemisphere that was not. Two complementary fractions peak at a quarter
+    // of their product, so the term was capped at about a quarter of the county's
+    // colour *and* flattened: open ground and a crevice came out within a few per
+    // cent of each other. **The open fraction is the occlusion pass's job** -
+    // GTAOPass multiplies the frame by exactly that number a pass earlier, and a
+    // second copy of it here is two effects answering one question.
+    float stepW = stepWeights();
+    float denom = max( total, 1e-4 ) * max( stepW, 1e-4 );
+    vec3 irr = sum / denom;
+    /* **The cast is the fraction of the county's colour this pixel can see,
+     * scaled by the hour and by nothing else.** No open fraction - that is the
+     * occlusion pass's number and it is applied a pass earlier - and no
+     * receiver albedo, which was the other half of why the bounce used to
+     * vanish on bright surfaces: a white marble plinth beside grass got
+     * grass * openFrac * uDay * 1.0 and a black stone got the same times 0.0.
+     * The bounced light arriving at a surface is a property of what is around
+     * it and not of what it is; the white one reflects most of it and the black
+     * one absorbs it, which is the albedo's job in the frame's own PBR lighting
+     * and not this pass's. */
+    vec3 diffuseCast = irr * uDayLevel;
+    gl_FragColor = vec4( base.rgb + diffuseCast * uGi, base.a );
   }
 `;
 
@@ -1025,15 +1258,30 @@ const GI_VERT = /* glsl */`
 `;
 
 /**
+ * **The hour's light level, the one number the bounce now asks of the dome
+ * rather than of the scene.** `uDayLevel` is the scene's ambient light,
+ * `TOD.sunI` normalised to its own range, and the diffuse cast is gated by
+ * it: a canopy's green wash dies with the sun and only a dark, bounded
+ * cast is left. The sky-bounce term that stood beside it is gone - it was
+ * an additive light on top of a frame the hemisphere light and the PMREM
+ * environment already illuminate, and the whole of the washed-out haze was
+ * that double count.
+ */
+function giDayLevel() {
+  return clamp(TOD.sunI / 1.55, 0, 1);
+}
+
+/**
  * Built on demand and thrown away with the row, and it is a `Pass` in everything
  * `EffectComposer` asks of one so that it can be dropped into the array beside
  * `GTAOPass` and rebuilt from the wanted list like any other.
  *
  * **The flat colour it samples is the county's and not this pass's** - see the
  * two flat buffers above - so this constructor builds one `ShaderMaterial` and a
- * quad and nothing else, and `render()` asks `renderFlat()` for its input. That
- * is the whole of what changed when the buffer was lifted, and the picture it
- * draws is the picture it drew before.
+ * quad and nothing else, and `render()` asks `renderFlat()` for its input. The
+ * hour's light level is written every frame from the dome's own stops, for the
+ * reason `syncGlow()` gives for the lamps: a number read from the hour and not
+ * written on the frame it moved is a number one hour old.
  */
 function newGtaoGiPass(gtao, cam) {
   const { Pass, FullScreenQuad } = GFX_ADDONS;
@@ -1046,6 +1294,7 @@ function newGtaoGiPass(gtao, cam) {
       cameraNear: { value: 0.1 }, cameraFar: { value: 1000 },
       uGi: { value: 0 }, uInner: { value: GI_INNER },
       uRadius: { value: GI_RADIUS }, uThick: { value: GI_THICK },
+      uDayLevel: { value: 1 },
     },
     vertexShader: GI_VERT,
     fragmentShader: GI_FRAG,
@@ -1102,6 +1351,7 @@ function newGtaoGiPass(gtao, cam) {
       u.cameraFar.value = this.camera.far;
       u.cameraProjectionMatrix.value.copy(this.camera.projectionMatrix);
       u.cameraProjectionMatrixInverse.value.copy(this.camera.projectionMatrixInverse);
+      u.uDayLevel.value = giDayLevel();
       this.fsQuad.material = this.material;
       renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
       if (this.clear) renderer.clear();
@@ -1367,7 +1617,14 @@ function newSsrPass(gtao, cam) {
     }
     setSize() {}
     render(renderer, writeBuffer, readBuffer) {
-      if (!maskRT || !this.gtao) {
+      // **The gate, and it is the whole of what this pass costs when it has
+      // nothing to do.** No mask buffer, no occlusion pass to read, or nothing
+      // marked inside the frustum: in all three the march would write `base` at
+      // every pixel, so the passthrough below is the same picture the full pass
+      // would have produced and a whole scene render cheaper. See
+      // `markedVisible()` for why the question is asked of the drawn scene every
+      // frame rather than kept in a register.
+      if (!maskRT || !this.gtao || !markedVisible(this.scene, this.camera)) {
         this.fsQuad.material = this.material;
         this.material.uniforms.tDiffuse.value = readBuffer.texture;
         renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
@@ -1585,7 +1842,19 @@ const PRESENT_LANCZOS = /* glsl */`
 /** The body all three kernels share, byte for byte: a separable 4x4
  *  weighted sum with the divide-by-sum DC correction. It calls `cr()` and
  *  nothing else, which is the whole of why one constant serves three
- *  kernels. */
+ *  kernels.
+ *
+ *  **The weight index is `f + 1 - i` and not `f - 1 + i`.** The four taps are
+ *  `b + {-1, 0, 1, 2}` and the sample point is `t = b + f`, so the tap at
+ *  `b + k` sits at distance `|f - k|` and has to carry `cr(f - k)`. The
+ *  old form computed the weights for a tap order of `b+1, b, b-1, b-2` and
+ *  applied them to `b-1, b, b+1, b+2`, which agrees only at `i = 1` and at
+ *  `f = 0`: at `f = 0.5` the kernel should blend `b` and `b+1` equally but
+ *  the old weights put both halves on `b-1` and `b`, a consistent half-tap
+ *  shift left and up that reads as staggered blocks on a 2× upscale and
+ *  doubles painted edges. The divide-by-sum restores DC gain and cannot
+ *  repair a weight applied to the wrong texel, and the identity row at 1×
+ *  is untouched because no resample runs there. */
 const PRESENT_CUBIC = /* glsl */`
       vec2 t = vUv * uSrc - 0.5;
       vec2 b = floor( t );
@@ -1595,8 +1864,8 @@ const PRESENT_CUBIC = /* glsl */`
       float sx = 0.0;
       float sy = 0.0;
       for ( int i = 0; i < 4; i ++ ) {
-        wx[i] = cr( f.x - 1.0 + float( i ) );
-        wy[i] = cr( f.y - 1.0 + float( i ) );
+        wx[i] = cr( f.x + 1.0 - float( i ) );
+        wy[i] = cr( f.y + 1.0 - float( i ) );
         sx += wx[i];
         sy += wy[i];
       }
@@ -1655,6 +1924,93 @@ const PRESENT_FRAG = [
   PRESENT_HEAD + PRESENT_TAP + PRESENT_LANCZOS + PRESENT_OPEN + PRESENT_CUBIC + PRESENT_TAIL + PRESENT_CLOSE,
 ];
 
+/** **FXAA, and it is the one pass in the county that is a filter and not a scene
+ *  render.** MSAA softens geometry silhouettes and the resample row only re-samples
+ *  an already-aliased buffer, so **neither touches a texture edge** - and the
+ *  county's sharpest features are texture edges: the painted lane line against clay,
+ *  a prop's albedo seam, the snail's shell pattern. This is the one thing that
+ *  covers them without a second scene render, which is why it is a switch and not a
+ *  ladder row and why it is a fullscreen quad rather than a material flag: it has to
+ *  run on **both** paths.
+ *
+ *  **The luma edge is the whole of it.** It is the standard subpixel-contrast
+ *  luma test, not a colour one: a painted line against clay is a step in luminance
+ *  and a coloured edge is not, so a colour test would miss the one edge the county
+ *  has. The local-contrast threshold is a single number rather than a pair, because
+ *  the frame's contrast range is what it is and a second number would be tuning a
+ *  scene nobody has measured.
+ *
+ *  **The span is a uniform and not a constant.** It is `1.0` on the `on` cell and
+ *  `0.7` would be the narrower variant, and the reason it is a uniform rather than
+ *  a second shader is that the off path writes zero and the GLSL branch is gated on
+ *  that: the frame is byte-identical to today's when the switch is off, and the
+ *  uniform write is one line on every apply. A second shader would be a second
+ *  program and a second compile.
+ *
+ *  **It is a `ShaderPass` and not a `Material` flag** for the same reason the grain
+ *  is a quad: it has to run on the direct path as well as the composer's, and the
+ *  direct path has no material to hang it on. It is built on first use like the
+ *  other passes, because a machine on the bottom tier never fetches the addons.
+ *
+ *  **The order is the load-bearing part.** It goes after bloom and before
+ *  `presentPass`, because `presentPass` applies ACES and the sRGB transfer and is
+ *  the last pass in the chain by construction: an edge filter applied after the
+ *  tone map would tone map the filtered result and the frame would come out a
+ *  different colour from the one every material in the county was compiled
+ *  against. On the direct path it runs after `renderer.render()` and before the
+ *  overlay, which is where the county already proves a fullscreen pass fits. */
+const FXAA_FRAG = /* glsl */`
+  precision highp float;
+  uniform sampler2D tDiffuse;
+  uniform vec2 uResolution;
+  uniform float uSpan;
+  varying vec2 vUv;
+  #define FXAA_QUALITY 0.50
+  // **texture2D returns vec4 and GLSL does not drop the fourth component.**
+  //  The first cut took vec3 and the compiler answered "no matching overloaded
+  //  function" for every call, which is the luma error in badProgram - and a
+  //  material whose shader will not compile draws nothing at all, so the pass
+  //  wrote no pixels and presentPass tone-mapped whatever the bloom left
+  //  behind, which on a course with no bloom is the finished frame and on one
+  //  with it is black. The signature is the whole of what was wrong.
+  //
+  //  **And the same mistake wore a second coat, in the two writes rather than in
+  //  the reads.** A vec4 built from a texture fetch *and a scalar* is five
+  //  components for four slots, and every driver answers
+  //  'constructor' : too many arguments. The luma fix left both writes as they
+  //  were, so the pass still drew nothing: the switch read on, the console
+  //  carried a shader error, and the frame was un-filtered with nothing anywhere
+  //  saying so. **A shader that will not compile is a pass that costs nothing
+  //  and does nothing**, which is the one failure a frame-time measurement
+  //  cannot see - it reads as the cheapest effect on the board. The .rgb is the
+  //  whole of the fix, and it is the reason the two writes below name their
+  //  channels.
+  float luma(vec4 c) { return dot(c.rgb, vec3(0.2126, 0.7152, 0.0722)); }
+  void main() {
+    vec2 px = 1.0 / uResolution;
+    float c0 = luma(texture2D(tDiffuse, vUv));
+    float c1 = luma(texture2D(tDiffuse, vUv + vec2( px.x, 0.0)));
+    float c2 = luma(texture2D(tDiffuse, vUv - vec2( px.x, 0.0)));
+    float c3 = luma(texture2D(tDiffuse, vUv + vec2(0.0,  px.y)));
+    float c4 = luma(texture2D(tDiffuse, vUv - vec2(0.0,  px.y)));
+    float mn = min(min(c0, c1), min(min(c2, c3), c4));
+    float mx = max(max(c0, c1), max(max(c2, c3), c4));
+    float con = mx - mn;
+    // **The threshold is on the local contrast and nothing else.** A pixel whose
+    // four neighbours differ from it by less than this is flat whatever colour it
+    // is, and a flat pixel has no edge to reconstruct: the test is what keeps the
+    // pass from blurring the whole county into a soft photograph.
+    if (con < 0.0323 * uSpan) { gl_FragColor = vec4(texture2D(tDiffuse, vUv).rgb, 1.0); return; }
+    float v = -0.5 * (c2 + c0 - c1 - c3);
+    float w = clamp(abs(v) * 2.0 / max(con, 1e-5), 0.0, 1.0);
+    // **The blend is a share of the subpixel offset, and the offset is in screen
+    // space.** A lane line is a half-pixel step and the share is what turns that
+    // step into a ramp; the confidence is what turns a noisy edge into nothing
+    // and a clean one into a held edge.
+    gl_FragColor = vec4(texture2D(tDiffuse, vUv + w * v * px * 8.0).rgb, 1.0);
+  }
+`;
+
 let PresentPass = null;
 /** Built on first use, because `OutputPass` only exists once the addons have
  *  downloaded and a machine that never asks for a pass never fetches them. */
@@ -1678,6 +2034,40 @@ function presentPassClass() {
     }
   };
   return PresentPass;
+}
+
+/** **The edge filter, built on first use like the other passes.** It is a
+ *  `ShaderPass` and not a scene render, so it needs no target of its own: it reads
+ *  whatever buffer it is handed and writes whatever it is handed, which is the
+ *  whole of what `Pass.render()` does. It is built here rather than in
+ *  `syncPasses()` because the shader is one constant and the material one object,
+ *  and the only thing that moves between the two instances is the uniform - so
+ *  there is nothing to rebuild when the switch moves, only a flag.
+ *
+ *  **Two instances, and the reason is the two paths.** The composer's reads the
+ *  chain's own ping-pong buffer; the direct path's reads the default framebuffer
+ *  and has to write to the screen, which is `renderToScreen: true`. A `ShaderPass`
+ *  with `renderToScreen` set hands the buffer it is given to the renderer as the
+ *  target and draws over whatever is already there - which on the direct path is
+ *  the county, and on the composer path would be the chain's own output. The two
+ *  cannot share an instance, and the direct path cannot share the composer's
+ *  instance even if it could, because the composer's is inside a chain that does
+ *  not exist on the bottom tier. */
+function newAaPass() {
+  const { ShaderPass } = GFX_ADDONS;
+  const p = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      uResolution: { value: new THREE.Vector2(innerWidth, innerHeight) },
+      uSpan: { value: 1.0 },
+    },
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: FXAA_FRAG,
+  });
+  p.renderToScreen = false;
+  return p;
 }
 
 const overlayScene = new THREE.Scene();
@@ -1740,6 +2130,28 @@ function drawOverlay(t) {
   renderer.render(overlayScene, overlayCam);
   renderer.autoClear = true;
 }
+
+/**
+ * **The edge filter has no direct-path instance, and the reason is the row's own
+ * dependency rather than an omission.** `gfxAaOn()` is `ssao >= 2 && fxAa > 0`:
+ * the filter reads a buffer, the bottom tier draws to the default framebuffer,
+ * and a fullscreen pass cannot read that without `preserveDrawingBuffer` on for
+ * the whole county - which doubles memory on every machine that has one. So the
+ * switch is inert on the bottom tier by construction, and the context's own
+ * multisampled default framebuffer is the smoothing that path already has. The
+ * row's cost and its tooltip say so rather than papering over it.
+ *
+ * **There was a second instance here and it is gone**, because it could not have
+ * worked and cost a fullscreen pass a frame pretending to: it was gated on
+ * `composerUp` - the composer path, where the chain's own `aaPass` already does
+ * the work - so it rendered the filter into the composer's *write* buffer, a
+ * target nothing presents, while the direct path it was written for bailed out
+ * one line earlier on the occlusion. It also owned a second `WebGLRenderer`
+ * standing in for a render target, resized every frame, and `dropComposer()`
+ * never disposed either of them. **A pass that is described in a comment as gone
+ * and is still there is the failure this county keeps arriving at**, and this
+ * one was found by asking what the frame was paying for.
+ */
 
 /* ------------------------------------------------------------------ *
  * A readback, for the one question a screenshot cannot answer: whether the
@@ -2106,6 +2518,7 @@ async function applyGraphics() {
          already at the new size whatever happens to the passes below */
   applyRenderScale();
   applyScaling();
+  applyAa();
   applyDrawDistance();
   applyShadows();
   applySky();
@@ -2177,6 +2590,25 @@ function applyRenderScale() {
  *  request rather than needing a place in the order. */
 function applyScaling() {
   if (presentPass) presentPass.setKernel(gfxScale());
+}
+
+/** **The edge filter's two uniforms, and nothing else.** It is a fullscreen pass and
+ *  not a scene render, so it has no target to size and no program to recompile:
+ *  the resolution is what turns `vUv` into a pixel address and the span is the
+ *  local-contrast threshold, and both are written to the same two uniforms on the
+ *  same two instances. The resolution is the window's and not the county's - the
+ *  filter reads the finished frame, which is the window on the direct path and the
+ *  chain's output on the composer's, and both are the window's size.
+ *
+ *  **It is asked rather than written**, because the two instances are built on
+ *  demand and one of them does not exist on the bottom tier: writing to a pass
+ *  that is not standing is a null, and this is the same guard `applyScaling()`
+ *  uses against `presentPass`. */
+function applyAa() {
+  if (aaPass) {
+    aaPass.uniforms.uResolution.value.set(innerWidth, innerHeight);
+    aaPass.uniforms.uSpan.value = 1.0;
+  }
 }
 
 function applyDrawDistance() {
@@ -2296,16 +2728,17 @@ function gfxCaption(key, n) {
       return n === 3 ? `${p.toFixed(2)}× · native` : `${p.toFixed(2)}× device`;
     }
 // **What a step costs and not what it is**: the cells already say direct only,
-    // x2 and x4, and the number that matters on the row is the one nobody can see
-    // from the button - a multisampled buffer stores a whole frame per sample.
-    //
-    // **And it says when there is no buffer**, which is the half that is new and the
-    // half a player can get wrong. The count is the compositor target's, and a frame
-    // on the direct path has no target at all - so quoting a cost there would be
-    // quoting a cost nobody is paying, on a row the player deliberately set. The
-    // direct path's own smoothing is the context's, and it is *named* rather than
-    // counted: `getContext` takes a boolean and the driver picked the number, so the
-    // game has no figure to print and does not invent one.
+     // MSAA x2, MSAA x4 and MSAA x8, and the number that matters on the row is the
+     // one nobody can see from the button - a multisampled buffer stores a whole
+     // frame per sample.
+     //
+     // **And it says when there is no buffer**, which is the half that is new and the
+     // half a player can get wrong. The count is the compositor target's, and a frame
+     // on the direct path has no target at all - so quoting a cost there would be
+     // quoting a cost nobody is paying, on a row the player deliberately set. The
+     // direct path's own smoothing is the context's, and it is *named* rather than
+     // counted: `getContext` takes a boolean and the driver picked the number, so the
+     // game has no figure to print and does not invent one.
     case 'msaa': {
       const s = MSAA_LADDER[n - 1];
       if (!s) return 'context MSAA · no buffer';
@@ -2546,6 +2979,6 @@ export {
   drawOverlay, takeGrab, grabPixels, doGrab,
   addGlows, syncGlow, courseProbes, probeQueue,
   dropProbe, dropReflections, queueProbes, pumpProbes, syncProbes,
-  STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, forgetCastApplied, applyShadows,
+  STAGE_ROWS, markStageDirty, clearStageDirty, applyRenderScale, applyAa, forgetCastApplied, applyShadows,
   renderOptions, optionsOpen, openOptions, closeOptions,
 };

@@ -57,14 +57,18 @@ const MESH_FILES = [
   'corn-plot', 'sprout-plot',
   'palm', 'fountain',
   'watchtower',
-  // **And one shell, and there is no `shell-` prefix to it.** The snail wore three
-  // whorls - `shell-bands`, `shell-swirl`, `shell-spots` - cut here from three numbers,
-  // and the shop had a row of three buttons that chose between them. The shell is now
-  // the reference model's own coil, cut out of `references/snailRef.glb` by
-  // `meshes/build-shell.html` and **one file**, so the key is the bare name: a key that
-  // is built by concatenation is a place where the file could be called something the
+  // **And the two shells, and neither has a `shell-` prefix built at runtime.**
+  // The snail wore three whorls once - `shell-bands`, `shell-swirl`, `shell-spots` -
+  // and the shop had a row of three buttons that chose between them. The first is
+  // now the reference model's own coil, cut out of `references/snailRef.glb` by
+  // `meshes/build-shell.html`; the second is a turbinate coil with a ring of
+  // spikes, wound on the same page. **Both are bare names here**, because a key
+  // built by concatenation is a place where the file could be called something the
   // loader never fetched, and `props['shell-' + style]` was exactly that shape.
-  'shell',
+  // `SHELL_SET` in `core.js` maps a worn model name onto one of these two keys by
+  // an explicit `geo` field, and `plan-test.mjs --faces` checks every one of them
+  // is a file that exists - so the mapping is a table and not a guess.
+  'shell', 'shell-spike',
   // **And the ashlands' eight**, and they are on this list rather than behind a
   // branch: a file that is not named here is not loaded at all, so a biome that
   // named a prop the loader never heard of would place nothing and say nothing -
@@ -344,7 +348,22 @@ const gfxU = {
   // (`uPomSteps == 0.0 && uPomTwoSided == 0.0`) is byte-identical to today's
   // d computation - a multiply-by-zero off is the answer, the same bargain
   // `uCloudAmt` and `uWindAmp` make.
+  //
+  // **And the fourth is the march's own yardstick, and it is written every
+  // frame rather than on a cell press.** `uPomPixel` is metres per pixel at one
+  // metre of depth - the vertical extent of the frustum at one metre over the
+  // height it is drawn at - and it is what turns the march's displacement from
+  // a number in tiles into a number in *pixels*, which is the only unit a
+  // distance fade can be written in: a fade in metres would move every time the
+  // render row did, and a fade in pixels is the same picture at every
+  // resolution. It is written beside `uCloudTime` in the frame loop because it
+  // is read off the camera and the county's own height, and **a number read
+  // from the camera and not written on the frame it moved is a number one
+  // camera old** - the same sentence `syncGlow()` is written against. Zero is
+  // the safe default: with no yardstick the fade divides by a floor and comes
+  // back at full strength, which is the un-faded march and not a black one.
   uPomSteps: { value: 0 }, uPomTwoSided: { value: 0 }, uPomBisect: { value: 0 },
+  uPomPixel: { value: 0 },
 };
 const GLSL_NOISE = `
   float gfxHash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
@@ -1221,7 +1240,46 @@ function triplanarSets(m, sets) {
       float tl = length( dir );
       if ( tl < 0.0001 || vn < 0.0001 ) return vec2( 0.0 );
       vec2 dn = dir / tl;
-      float mx = min( ${T} * tl / vn, ${T} * 8.0 );`;
+      float mx = min( ${T} * tl / vn, ${T} * 8.0 );
+      // **The distance fade, and it is a pixel test and not a distance one.**
+      // The march runs for every fragment of the course surface, and a fragment
+      // metres away has the whole relief smaller than the pixel it is being
+      // drawn into: the offset is sub-pixel, the normal shift that rides it is
+      // sub-pixel, and the eight to twelve height samples that produced them
+      // were spent on a picture nobody can see.
+      //
+      // **It is the smaller of the march's two gates and it is worth saying so.**
+      // Measured at 2560x1440 the parallax cells cost 5.2 ms of a 34 ms frame,
+      // and this fade alone takes about 0.1 ms off a race and 0.3 off a view
+      // looking down from height - because a chase camera near the ground sees
+      // the lane at a grazing angle, and a grazing angle makes the displacement
+      // grow exactly as fast as the pixel does. **The gate that pays is the
+      // set's own weight, below in the colour include.** This one is here for
+      // the views where the ground really is distant and flat to the eye, and
+      // because a march that runs where its answer cannot be seen is the shape
+      // of waste the rest of the county has already ruled out.
+      //
+      // **The yardstick is the fragment's own pixel footprint, and it is in
+      // pixels rather than in metres for a reason.** A fade written in metres
+      // would have to be re-tuned every time the render row moved - 0.75x makes
+      // every pixel bigger and the same relief crosses the threshold sooner -
+      // while a displacement measured in pixels is the same picture at every
+      // resolution and every render scale. mx is in tiles and one tile is
+      // 1/scale metres, so mx over scale is the displacement in metres and
+      // dist times uPomPixel is the metres a pixel covers here.
+      //
+      // **And the fade is smooth rather than a step, because a step is a line
+      // across the county.** The relief does not stop, it thins: between half a
+      // pixel and one and a half the offset is scaled down to nothing, so the
+      // last thing to go is the last thing that was visible. Below half a pixel
+      // the march returns no offset at all, which is the same answer the off
+      // cell gives and the same answer the surface already had before parallax
+      // existed - **a sub-pixel offset is not a small offset, it is no offset**,
+      // and the normal map is sampled where it was.
+      float pomPx = mx / ${S} / max( length( cameraPosition - vTriW ) * uPomPixel, 1e-5 );
+      float pomVis = smoothstep( 0.5, 1.5, pomPx );
+      if ( pomVis <= 0.0 ) return vec2( 0.0 );
+      mx *= pomVis;`;
     // The two-sided cell: two samples and the ray's own line between them, so
     // the crossing is where `h0 + (h1 - h0) * f` meets `1 - f` - one division,
     // no loop, no bisection. It breaks down at an oblique angle, which is why
@@ -1399,6 +1457,10 @@ function triplanarSets(m, sets) {
     // and the only thing that can see it is two cells measured against each
     // other rather than against the row's off cell.
     sh.uniforms.uPomBisect = gfxU.uPomBisect;
+    // **And the fourth, the distance fade's yardstick**, handed over the same
+    // way and written every frame rather than on a cell press - see `gfxU` for
+    // why it is per-frame and why zero is the safe default.
+    sh.uniforms.uPomPixel = gfxU.uPomPixel;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec4 detailW;
@@ -1426,7 +1488,7 @@ function triplanarSets(m, sets) {
         ${anyUv ? 'varying vec2 vTrackUv;\nvarying vec3 vTrackR;' : ''}
         varying vec3 vTriW;
         varying vec3 vTriWN;
-uniform float uPomSteps, uPomTwoSided, uPomBisect;
+uniform float uPomSteps, uPomTwoSided, uPomBisect, uPomPixel;
          ${decls}
          // **And the marches themselves, held in globals rather than in a local.**
          // They are worked out in the colour include and read again in the
@@ -1473,16 +1535,32 @@ uniform float uPomSteps, uPomTwoSided, uPomBisect;
           vec3 wn = normalize(normalize(vTriWN) + vec3(d, 0.0));
           normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
         }`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        {
-          vec3 an = abs(normalize(vTriWN));
-          an /= (an.x + an.y + an.z);
-          // **The marches, here rather than in the normal's block**, because
-          // three puts the colour first and both halves of a set's surface have
-          // to be displaced by the same amount - see the globals' note above.
-          ${live.map((s, i) => `pOff${i} = ${s.height ? `pomO${i}( an )` : 'vec2(0.0)'};`).join('\n          ')}
-          vec3 dc = vec3(0.0);
-          float dsum = 0.0;${live.map((_, i) => tint(i)).join('')}
+       .replace('#include <color_fragment>', `#include <color_fragment>
+         {
+           vec3 an = abs(normalize(vTriWN));
+           an /= (an.x + an.y + an.z);
+           // **The marches, here rather than in the normal's block**, because
+           // three puts the colour first and both halves of a set's surface have
+           // to be displaced by the same amount - see the globals' note above.
+           //
+           // **And each one is gated on its own weight, which is the same number
+           // its two readers already ask about.** slope() and tint() both open
+           // with if (vDetailW.k > 0.002) - a set that carries no weight at
+           // this fragment contributes nothing to the colour and nothing to the
+           // normal, so its offset is read by nobody. Marching it anyway is the
+           // whole cost of the effect spent on a picture that was already
+           // decided: on open meadow the course material carries turf, cliff and
+           // shore, and two of those three weights are zero on every grass
+           // fragment in the county. **The gate is the readers' own threshold
+           // and not a second one**, because a march that ran where the read
+           // does not is wasted work and a march that stopped where the read
+           // still runs is a set whose relief silently vanished - and the
+           // second of those is the quiet kind.
+           ${live.map((s, i) => `pOff${i} = ${s.height
+             ? `( vDetailW.${K[i].toLowerCase()} > 0.002 ? pomO${i}( an ) : vec2(0.0) )`
+             : 'vec2(0.0)'};`).join('\n          ')}
+           vec3 dc = vec3(0.0);
+           float dsum = 0.0;${live.map((_, i) => tint(i)).join('')}
           // and the same for the colour: a weighted mean of the sets' detail
           // rather than a chain of multiplies, so a surface that is half turf and
           // half stone is half of each map and not one map laid over the other

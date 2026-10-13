@@ -401,6 +401,37 @@ const crease = (parts, who, deg = 22) => {
   return g;
 };
 
+/**
+ * Average the vertex colour across every vertex that shares a position, so a
+ * piece coloured a facet at a time comes out smooth in its colour the way it
+ * already is in its normals. `stone()` colours per face - three vertices, one
+ * tone - which is right beside a flat normal and wrong beside a creased one: the
+ * light gradients across a facet while its colour steps, and the step is what
+ * still reads as a facet. The weld is the same one `toCreasedNormals` makes, to
+ * the same hundredth of a unit, so a colour and a normal agree about which
+ * vertices are the same one. A piece already coloured per vertex is unchanged.
+ */
+function smoothColors(g) {
+  const pos = g.attributes.position, col = g.attributes.color;
+  if (!pos || !col) return g;
+  const groups = new Map();
+  for (let i = 0; i < pos.count; i++) {
+    const k = `${Math.trunc(pos.getX(i) * 100)},${Math.trunc(pos.getY(i) * 100)},${Math.trunc(pos.getZ(i) * 100)}`;
+    let list = groups.get(k);
+    if (!list) groups.set(k, list = []);
+    list.push(i);
+  }
+  const out = new Float32Array(col.array.length);
+  for (const list of groups.values()) {
+    let r = 0, gr = 0, b = 0;
+    for (const j of list) { r += col.getX(j); gr += col.getY(j); b += col.getZ(j); }
+    r /= list.length; gr /= list.length; b /= list.length;
+    for (const j of list) { out[j * 3] = r; out[j * 3 + 1] = gr; out[j * 3 + 2] = b; }
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(out, 3));
+  return g;
+}
+
 const box = (w, h, d) => new THREE.BoxGeometry(w, h, d, 1, 1, 1);
 const cyl = (rt, rb, h, s = 8) => new THREE.CylinderGeometry(rt, rb, h, s, 1);
 const cone = (r, h, s = 10) => new THREE.ConeGeometry(r, h, s, 1);
@@ -2647,10 +2678,14 @@ function stone({ R = 0.62, detail = 2, sx = 1.06, sy = 0.78, sz = 0.96, lean = 0
   const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
   const v = new THREE.Vector3();
   // the shape of the lump, asked the same question everywhere so that a
-  // displaced face and its neighbour still meet along their shared edge
-  const lump = (x, y, z) => fbm(x * 1.1, y * 1.1, z * 1.1, seed, 2) * 0.56
-    + fbm(x * 2.7, y * 2.7, z * 2.7, seed + 5, 2) * 0.30
-    + fbm(x * 6.1, y * 6.1, z * 6.1, seed + 11, 2) * 0.14;
+  // displaced face and its neighbour still meet along their shared edge. The
+  // fourth octave is the grain, and it is only worth its place at the detail
+  // the rocks are cut at: a facet has to be smaller than the feature or the
+  // feature is not there.
+  const lump = (x, y, z) => fbm(x * 1.1, y * 1.1, z * 1.1, seed, 2) * 0.50
+    + fbm(x * 2.7, y * 2.7, z * 2.7, seed + 5, 2) * 0.27
+    + fbm(x * 6.1, y * 6.1, z * 6.1, seed + 11, 2) * 0.15
+    + fbm(x * 13.5, y * 13.5, z * 13.5, seed + 17, 2) * 0.08;
   // and the planes it is cut on, each one leaning off the top
   const cuts = [];
   for (let i = 0; i < ncuts; i++) {
@@ -2682,14 +2717,13 @@ function stone({ R = 0.62, detail = 2, sx = 1.06, sy = 0.78, sz = 0.96, lean = 0
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.computeVertexNormals();
   // the colour, one facet at a time: three vertices, one tone
-  const nor = g.attributes.normal, dip = new Float32Array(n / 3);
+  const nor = g.attributes.normal;
   const cen = new THREE.Vector3();
   for (let t = 0; t < n; t += 3) {
     cen.set((pos[t * 3] + pos[(t + 1) * 3] + pos[(t + 2) * 3]) / 3,
       (pos[t * 3 + 1] + pos[(t + 1) * 3 + 1] + pos[(t + 2) * 3 + 1]) / 3,
       (pos[t * 3 + 2] + pos[(t + 1) * 3 + 2] + pos[(t + 2) * 3 + 2]) / 3);
     const d = lump(cen.x / sx, cen.y / sy, cen.z / sz);
-    dip[t / 3] = d;
     const t01 = clamp01((d + 0.34) / 0.68);                 // low in the lump reads dark
     const up = clamp01(nor.getY(t) * 0.5 + 0.5);
     // an iron streak running through the stone, warm against the grey
@@ -2704,9 +2738,29 @@ function stone({ R = 0.62, detail = 2, sx = 1.06, sy = 0.78, sz = 0.96, lean = 0
     }
     for (let k = 0; k < 3; k++) { col[t * 3 + k] = col[(t + 1) * 3 + k] = col[(t + 2) * 3 + k] = c[k]; }
   }
-  g.userData.dip = dip;
-  g.userData.top = Math.max(...cuts.map((c) => c.d));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  // The lowness of every **face**, for the moss to find the hollows water stands
+  // in, and it is per face and not per vertex on purpose: `mossSkin` flattens
+  // this geometry and reads the array back by face, and `toNonIndexed` emits the
+  // triangles in the index buffer's own order, so a per-face array lines up with
+  // the flattened triangles exactly. The old one was sized off the vertex count
+  // and stepped it in threes, which is neither the faces nor their order - it
+  // read back as `undefined` past its length and the hollow term was `NaN`, so
+  // the moss never once grew where the stone was low.
+  const idx = g.index, pa = g.attributes.position;
+  const nf = idx ? idx.count / 3 : n / 3;
+  const faceDip = new Float32Array(nf);
+  for (let f = 0; f < nf; f++) {
+    const ia = idx ? idx.getX(f * 3) : f * 3;
+    const ib = idx ? idx.getX(f * 3 + 1) : f * 3 + 1;
+    const ic = idx ? idx.getX(f * 3 + 2) : f * 3 + 2;
+    cen.set((pa.getX(ia) + pa.getX(ib) + pa.getX(ic)) / 3,
+      (pa.getY(ia) + pa.getY(ib) + pa.getY(ic)) / 3,
+      (pa.getZ(ia) + pa.getZ(ib) + pa.getZ(ic)) / 3);
+    faceDip[f] = lump(cen.x / sx, cen.y / sy, cen.z / sz);
+  }
+  g.userData.dip = faceDip;
+  g.userData.top = Math.max(...cuts.map((c) => c.d));
   // and the grain of the stone, projected from where it ended up: a boulder has
   // no unwrapping and never had one, and a box projection is what a lump of
   // rock gets instead
@@ -2715,32 +2769,32 @@ function stone({ R = 0.62, detail = 2, sx = 1.06, sy = 0.78, sz = 0.96, lean = 0
 
 /**
  * The moss that grows on the top of a stone in the wet ground, as a skin of
- * triangles lifted off the ones underneath: only the faces that look up at the
- * sky get it, and only as high as they go, with the edge of it ragged because
- * the noise is asked where the moss stops.
- */
-/**
- * The moss that grows on the top of a stone in the wet ground, as a skin of
  * facets lifted off the ones underneath. It goes where the stone is highest and
  * where the noise left a hollow, because that is where water stands, and its
  * edge is ragged because the noise is asked where it stops. The dip the stone
  * recorded is what tells a hollow from a ridge.
+ *
+ * It is a **raised cushion and not a decal**, and the colour is the moss palette
+ * mixed by height, by a coarse patch and by a fine one, so the mat is mottled
+ * the way a real one is rather than graded - see the body of the function.
  */
 function mossSkin(body, { lo = 0.24, hi = 0.9, up = 0.14, out = 0.022, seed = 41, dip = 0.12 } = {}) {
   const src = flat(body.clone());
   const p = src.attributes.position, n = p.count, depths = body.userData.dip || null;
   const su = src.attributes.uv;
-  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-  const uvs = new Float32Array(n * 2);
+  // pushed, not preallocated: a face that is skipped takes its vertices with it,
+  // and the three attributes have to stay in step or the uv lands on the wrong
+  // corner of the map - which is exactly what the old fixed-size version did
+  const pos = [], col = [], uvs = [];
   const cen = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
   const nrm = new THREE.Vector3();
-  let k = 0;
+  const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
   for (let t = 0; t < n; t += 3) {
-    const a = new THREE.Vector3().fromBufferAttribute(p, t);
-    const b = new THREE.Vector3().fromBufferAttribute(p, t + 1);
-    const c = new THREE.Vector3().fromBufferAttribute(p, t + 2);
-    cen.copy(a).add(b).add(c).multiplyScalar(1 / 3);
-    nrm.copy(e1.copy(b).sub(a)).cross(e2.copy(c).sub(a)).normalize();
+    va.fromBufferAttribute(p, t);
+    vb.fromBufferAttribute(p, t + 1);
+    vc.fromBufferAttribute(p, t + 2);
+    cen.copy(va).add(vb).add(vc).multiplyScalar(1 / 3);
+    nrm.copy(e1.copy(vb).sub(va)).cross(e2.copy(vc).sub(va)).normalize();
     const hgt = clamp01((cen.y - lo) / (hi - lo));
     const hollow = depths ? clamp01(1 - (depths[t / 3] + 0.1) / dip) : 0;
     // and where its edge falls, which the noise decides
@@ -2748,29 +2802,40 @@ function mossSkin(body, { lo = 0.24, hi = 0.9, up = 0.14, out = 0.022, seed = 41
     if (hgt + hollow * 0.55 + edge < up) continue;
     if (nrm.y < -0.04) continue;
     const patch = clamp01(0.5 + fbm(cen.x * 4.5, cen.y * 2.2, cen.z * 4.5, seed + 7, 2) * 0.95);
-    const m = clamp01(hgt * 0.42 + patch * 0.66);
+    // height and one coarse patch, and no fine term: the moss is coloured a
+    // facet at a time and a fine field read per facet at this density is noise,
+    // not mottling - the fine half of the moss is the map's job, not the
+    // vertex colour's
+    const m = clamp01(hgt * 0.45 + patch * 0.55);
     const cr = lerp(C.mossDark[0], C.mossLight[0], m);
     const cg = lerp(C.mossDark[1], C.mossLight[1], m);
     const cb = lerp(C.mossDark[2], C.mossLight[2], m);
-    for (const v of [a, b, c]) {
-      pos[k] = v.x * (1 + out); pos[k + 1] = v.y * (1 + out); pos[k + 2] = v.z * (1 + out);
-      col[k] = cr; col[k + 1] = cg; col[k + 2] = cb;
-      k += 3;
-    }
-    // The moss lies on the stone, so it takes the stone's own uvs rather than
-    // its own projection. Projecting separately would put a second, slightly
-    // different set of coordinates over the same surface, and the grain would
-    // slide against the rock it is growing out of - which is the one thing a
-    // layer of moss must not do.
-    for (const i of [t, t + 1, t + 2]) {
-      uvs[i * 2] = su ? su.getX(i) : 0;
-      uvs[i * 2 + 1] = su ? su.getY(i) : 0;
+    for (let vi = 0; vi < 3; vi++) {
+      const v = vi === 0 ? va : vi === 1 ? vb : vc;
+      // a raised cushion, not a decal: every vertex is scaled off the stone's
+      // centre by the same `out`, so the skin sits just clear of the rock. It is
+      // a **uniform radial** scale and not a per-vertex bump on purpose - a bump
+      // scales each vertex by its own amount, which distorts the facets and
+      // pushes the ones that meet on a shared edge past the crease, and the mat
+      // comes out faceted; a uniform scale keeps every shared vertex in step, so
+      // the weld `toCreasedNormals` makes finds them and the skin stays smooth.
+      // The volume is the tufts' and the map's job, not the skin's.
+      const l = 1 + out;
+      pos.push(v.x * l, v.y * l, v.z * l);
+      col.push(cr, cg, cb);
+      // The moss lies on the stone, so it takes the stone's own uvs rather than
+      // its own projection. Projecting separately would put a second, slightly
+      // different set of coordinates over the same surface, and the grain would
+      // slide against the rock it is growing out of - which is the one thing a
+      // layer of moss must not do.
+      const si = t + vi;
+      uvs.push(su ? su.getX(si) : 0, su ? su.getY(si) : 0);
     }
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.computeVertexNormals();
   return g;
 }
@@ -2789,8 +2854,13 @@ function chip(r, seed, c) {
 
 /** The big grey stone a field has one of, sitting in its own bit of soil. */
 function rock() {
-  const body = stone({ R: 0.6, detail: 3, seed: 3, sx: 1.0, sy: 1.02, sz: 0.94, lean: 0.16, ncuts: 5, cut: 0.7 });
-  const parts = [flat(body)];
+  // cut finer than it was and **smooth shaded**. The noise carries the shape and
+  // the crease is what keeps the fracture faces the cuts leave standing sharp
+  // while the weathered surface between them is one smooth curve - a flat-shaded
+  // boulder is a crystal, and the county's is a stone. Detail 6 is 980 faces
+  // against the 320 it was: a silhouette that reads as a curve and not a polygon.
+  const body = stone({ R: 0.6, detail: 6, seed: 3, sx: 1.0, sy: 1.02, sz: 0.94, lean: 0.16, ncuts: 5, cut: 0.7 });
+  const parts = [body];
   // and a couple of chips of it broken off, lying at the foot
   for (let i = 0; i < 2; i++) {
     const a = i * 2.399 + 0.7, r = 0.44 + i * 0.14;
@@ -2798,7 +2868,49 @@ function rock() {
     g.applyMatrix4(M(Math.cos(a) * r, 0.004, Math.sin(a) * r, 1, 1, 1, a, a * 0.7, 0));
     parts.push(g);
   }
-  return merge(parts);
+  return smoothColors(crease(parts, 'rock', 50));
+}
+
+/**
+ * The tufts of moss standing up out of the skin, and they are placed **on the
+ * stone's own up-facing top** rather than in a ring at its foot: a tuft has to
+ * come out of the moss to read as moss, and the moss is where the skin is. The
+ * spots are the stone's own faces, so a tuft stands on the surface it grows from
+ * and leans the way that surface leans, and a minimum separation keeps them from
+ * stacking into one clump on the same facet.
+ */
+function mossTufts(stoneGeo, { count = 16, seed = 5, minY = 0.2, gap = 0.05 } = {}) {
+  const p = stoneGeo.attributes.position, idx = stoneGeo.index;
+  const nf = idx ? idx.count / 3 : p.count / 3;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const cen = new THREE.Vector3(), nrm = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+  const spots = [];
+  for (let f = 0; f < nf; f++) {
+    const ia = idx ? idx.getX(f * 3) : f * 3, ib = idx ? idx.getX(f * 3 + 1) : f * 3 + 1, ic = idx ? idx.getX(f * 3 + 2) : f * 3 + 2;
+    a.fromBufferAttribute(p, ia); b.fromBufferAttribute(p, ib); c.fromBufferAttribute(p, ic);
+    cen.copy(a).add(b).add(c).multiplyScalar(1 / 3);
+    nrm.copy(e1.copy(b).sub(a)).cross(e2.copy(c).sub(a)).normalize();
+    if (nrm.y < 0.5 || cen.y < minY) continue;
+    spots.push({ cen: cen.clone(), nrm: nrm.clone() });
+  }
+  const r = makeR(seed);
+  const tufts = [], taken = [];
+  const up = new THREE.Vector3(0, 1, 0), q = new THREE.Quaternion();
+  let guard = 0;
+  while (tufts.length < count && guard++ < count * 40 && spots.length) {
+    const s = spots[Math.floor(r() * spots.length)];
+    if (taken.some((t) => t.distanceToSquared(s.cen) < gap * gap)) continue;
+    taken.push(s.cen);
+    const h = 0.045 + r() * 0.06, rad = 0.016 + r() * 0.014;
+    q.setFromUnitVectors(up, s.nrm);
+    // the base sits a hair into the surface so the tuft grows out of the moss
+    // rather than floating on it, and the tip stands along the surface normal
+    const m = new THREE.Matrix4().compose(
+      s.cen.clone().addScaledVector(s.nrm, h * 0.35), q, new THREE.Vector3(1, 1, 1));
+    const g = cone(rad, h, 7).applyMatrix4(m);
+    tufts.push(grad(g, M(0, 0, 0), 0, h, r() < 0.5 ? C.moss : C.mossLight));
+  }
+  return tufts;
 }
 
 /**
@@ -2812,31 +2924,39 @@ function rock() {
  *
  * It comes back as its own part, named, because it is its own material: the
  * stone and the moss have different maps and different roughness, and a moss
- * skin drawn in the stone's granite is a green stone.
+ * skin drawn in the stone's granite is a green stone. The tufts ride in that
+ * same part, so they wear the moss's grain and not the granite's.
  */
 function mossyRock() {
   const shape = { R: 0.62, seed: 9, sx: 1.16, sy: 0.72, sz: 1.02, lean: -0.1, warm: 0.14, ncuts: 4, cut: 0.74 };
-  const stoneParts = [flat(stone({ ...shape, detail: 3 }))];
-  // and the tufts of it standing up out of the moss
-  for (let i = 0; i < 8; i++) {
-    const a = i * 0.898, r = 0.08 + (i % 4) * 0.1;
-    const h = 0.09 + (i % 3) * 0.04;
-    const g = cone(0.03, h, 5);
-    g.applyMatrix4(M(Math.cos(a) * r, h * 0.5, Math.sin(a) * r, 1, 1, 1, 0.12, a, 0.12));
-    stoneParts.push(grad(g, M(0, 0, 0), 0, h, i % 2 ? C.mossLight : C.moss));
-  }
+  // one stone, cut fine, and it is the surface the moss is measured from and the
+  // tufts are stood on; the body is a second copy of the same thing, smooth
+  // shaded, so the two agree about where the surface is to the millimetre
+  const fine = stone({ ...shape, detail: 6 });
+  const stoneParts = [stone({ ...shape, detail: 6 })];
+  // and a few chips of it at the foot
   for (let i = 0; i < 3; i++) {
     const a = i * 2.399 + 1.1, r = 0.4 + (i % 2) * 0.14;
     const g = chip(0.05 + (i % 2) * 0.02, 70 + i, C.graniteDark);
     g.applyMatrix4(M(Math.cos(a) * r, 0.004, Math.sin(a) * r, 1, 1, 1, a, a * 0.6, 0));
     stoneParts.push(g);
   }
+  // the moss is its own part - the skin and the tufts together - and it is smooth
+  // shaded like everything else in the county
+  const mossParts = [mossSkin(fine, { lo: 0.2, hi: 0.6, up: 0.32, out: 0.02, seed: 41, dip: 0.1 })];
+  for (const tuft of mossTufts(fine, { count: 16, seed: 5 })) mossParts.push(tuft);
   return {
     // '' is the piece itself, so the stone is named `mossy-rock` and the moss
     // `mossy-rock-moss` - which is the naming the game already expects, and the
     // one the manifest's per-part maps are keyed on
-    '': merge(stoneParts, 'mossy-rock'),
-    moss: mossSkin(stone({ ...shape, detail: 4 }), { lo: 0.24, hi: 0.98, up: 0.3, out: 0.012, seed: 41, dip: 0.1 }),
+    '': smoothColors(crease(stoneParts, 'mossy-rock', 50)),
+    // the moss is creased and colour-smoothed like the stone: it is a skin of
+    // the stone's own facets, and the uniform lift keeps every shared vertex in
+    // step, so the weld `toCreasedNormals` makes finds them and the mat comes
+    // out smooth rather than a field of little flat triangles. The angle is high
+    // enough to take the tufts' own facets with it - a seven-sided shoot meets
+    // its neighbour at about fifty-one degrees.
+    moss: smoothColors(crease(mossParts, 'mossy-rock-moss', 62)),
   };
 }
 
@@ -4892,44 +5012,151 @@ function cactusBarrel() {
  * because the stage hangs its water on them and a jet out of thin air is a
  * mistake you can see. The water itself is the stage's: this is stone, and the
  * water is put in it from outside so the pool and the basin are the same water.
+ *
+ * **And it is smooth shaded, which is the whole of what changed here.** The
+ * piece was built out of `lathe()` and `grad()`, and both of those flatten the
+ * index on the way in - `computeVertexNormals()` on a triangle soup has nothing
+ * to average across, so every quad of every turned surface carried its own
+ * normal and the diagonal of it showed as a hard line: a bowl of thirty segments
+ * read as sixty triangles however many rings were in it. A moulded pedestal is
+ * the worst place in the county for that, because a moulding *is* a band and a
+ * band of flat triangles with a line down each one is a stack of drums. So it is
+ * `slathe()` and `sgrad()` now, indexed the whole way, and `crease()` at the
+ * bottom rather than `merge()` - which re-welds by position and averages the
+ * normals of every face under the crease angle, so the bowl is one curve while
+ * the buttresses keep their corners, the plinth keeps its arris and the rim
+ * keeps the lip it was given.
+ *
+ * **The profiles are not `resample()`d, and that is deliberate.** `resample()`
+ * divides the runs between control points, and every run on this piece is a
+ * straight line - so subdividing one adds rings along a taper that is already
+ * straight and changes nothing that a normal can read. The segment counts went
+ * up instead, because a smooth normal on a twelve-sided silhouette is a
+ * twelve-sided silhouette with a gradient on it: the basin is thirty-six round
+ * where it was thirty, and the sagitta at that count is six millimetres on a
+ * metre-and-a-half wall, which is nothing at the distance the pool is seen from.
+ *
+ * **And the gilt, which is the second surface and the reason the piece is two
+ * meshes.** A beaded band at each of the three moulding transitions, a lip on
+ * the upper bowl, a collar on each of the four spout mouths and a bead on the
+ * finial, in the county's second metal. A metalness is not a colour and a vertex
+ * cannot carry one, so the gold is a part of its own with a material of its own
+ * and a map of its own - `gold-*` in the texture builder, which is the iron's
+ * own field with the tarnish put where the rust was.
+ *
+ * The bands are **half-buried beads and not rings standing proud**, and the
+ * arithmetic is the reason: a bead whose tube is centred on the wall it stands
+ * on is proud by its own radius at the wall's own height and buried at the top
+ * and bottom of its tube, wherever the wall is. That is what a beaded moulding
+ * on a curved wall is, and it is the one form that cannot be got wrong by a
+ * wall whose radius moves - a flat band has to be told the wall's radius at
+ * every height it spans, and the basin's wall moves a centimetre over the
+ * height of a bead.
  */
 function fountain() {
-  const parts = [];
+  const stone = [], gold = [];
+  /* The spout's mouth, and it is built once and cloned four times. A torus
+   * lies in the XY plane with its axis along Z, so it is turned a quarter turn
+   * about X to put that axis along the spout cylinder's own +Y - and `OUT_END`
+   * is half a cylinder along it, which is the far end of a `cyl(..., 0.3)`.
+   * Both are in the spout's **local** frame, so the same matrix that places the
+   * stone places the gilt and the two cannot disagree about where the mouth is.
+   *
+   * **And it is the minus-Y end, which is the whole of the trap here.** The
+   * spout is `cyl(0.09, 0.06, 0.3)` - wide at the top, narrow at the bottom -
+   * and the matrix that places it turns the cylinder's own +Y *inwards*, into
+   * the pedestal: the wide end comes out at a radius of 0.177 against the
+   * shaft's own 0.214 at that height, so it is buried in the stone and the
+   * spout reads as emerging from the pedestal rather than as a pipe shoved
+   * through it. The mouth is therefore the **narrow** end, out at a radius of
+   * 0.445 and a hand's breadth lower, and that is where the stage hangs its
+   * water. A ring put on the +Y end is a ring inside the pedestal, which
+   * nothing throws and nothing shows.
+   *
+   * The tube is centred on the mouth's own rim - 0.06 at the far end of a
+   * `cyl(0.09, 0.06, 0.3)` - so it is a collar half-buried in the lip. */
+  const mouth = new THREE.TorusGeometry(0.062, 0.018, 8, 12).rotateX(-Math.PI / 2);
+  const OUT_END = new THREE.Matrix4().makeTranslation(0, -0.15, 0);
   // the basin: a cross-section from the middle of the floor, out and up the
   // inside, over the rim and back down the outside, so it is a solid bowl
-  parts.push(grad(lathe([
+  stone.push(sgrad(slathe([
     [0.00, 0.00], [1.28, 0.00], [1.44, 0.15], [1.52, 0.44], [1.50, 0.60],
     [1.40, 0.70], [1.31, 0.68], [1.24, 0.50], [1.10, 0.29], [0.86, 0.19], [0.00, 0.15],
-  ], 30), M(0, 0, 0), 0, 0.7, C.stoneA));
+  ], 36), M(0, 0, 0), 0, 0.7, C.stoneA));
   // the mouldings under it, the darker half of the same stone
-  parts.push(grad(lathe([
+  stone.push(sgrad(slathe([
     [0.00, 0.00], [1.30, 0.00], [1.22, 0.09], [0.62, 0.13], [0.58, 0.20], [0.00, 0.20],
-  ], 30), M(0, -0.001, 0), 0, 0.2, C.stoneB));
+  ], 32), M(0, -0.001, 0), 0, 0.2, C.stoneB));
   // the pedestal: plinth, shaft, collar
-  parts.push(grad(cyl(0.44, 0.5, 0.2, 12), M(0, 0.3, 0), 0.2, 0.5, C.stoneB));
-  parts.push(grad(lathe([
+  stone.push(sgrad(cyl(0.44, 0.5, 0.2, 20), M(0, 0.3, 0), 0.2, 0.5, C.stoneB));
+  stone.push(sgrad(slathe([
     [0.00, 0.40], [0.36, 0.40], [0.3, 0.52], [0.21, 0.72], [0.18, 1.16], [0.23, 1.34], [0.00, 1.4],
-  ], 16), M(0, 0, 0), 0.4, 1.4, C.granite));
+  ], 24), M(0, 0, 0), 0.4, 1.4, C.granite));
   // the upper bowl, and the four buttresses that carry it
-  parts.push(grad(lathe([
+  stone.push(sgrad(slathe([
     [0.00, 1.34], [0.5, 1.34], [0.66, 1.46], [0.7, 1.62], [0.62, 1.7], [0.3, 1.62], [0.26, 1.52], [0.00, 1.5],
-  ], 20), M(0, 0, 0), 1.34, 1.7, C.stoneA));
+  ], 28), M(0, 0, 0), 1.34, 1.7, C.stoneA));
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-    parts.push(grad(box(0.12, 0.44, 0.3), M(Math.cos(a) * 0.42, 1.32, Math.sin(a) * 0.42, 1, 1, 1, 0, -a, 0.22),
+    stone.push(sgrad(box(0.12, 0.44, 0.3), M(Math.cos(a) * 0.42, 1.32, Math.sin(a) * 0.42, 1, 1, 1, 0, -a, 0.22),
       1.1, 1.54, C.stoneB));
   }
   // the finial
-  parts.push(grad(cyl(0.1, 0.14, 0.2, 8), M(0, 1.78, 0), 1.7, 1.9, C.stoneA));
-  parts.push(part(ball(0.17, 10), M(0, 1.98, 0), C.stoneA));
-  parts.push(part(cone(0.08, 0.2, 8), M(0, 2.2, 0), C.stoneA));
+  stone.push(sgrad(cyl(0.1, 0.14, 0.2, 16), M(0, 1.78, 0), 1.7, 1.9, C.stoneA));
+  stone.push(spart(ball(0.17, 16), M(0, 1.98, 0), C.stoneA));
+  stone.push(spart(cone(0.08, 0.2, 16), M(0, 2.2, 0), C.stoneA));
   // the four spouts, out of the pedestal at the height the jets leave it
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2;
-    parts.push(grad(cyl(0.09, 0.06, 0.3, 7), M(Math.cos(a) * 0.3, 1.16, Math.sin(a) * 0.3, 1, 1, 1, 0, -a, Math.PI / 2 - 0.25),
-      0.95, 1.35, C.stoneB));
+    const m = M(Math.cos(a) * 0.3, 1.16, Math.sin(a) * 0.3, 1, 1, 1, 0, -a, Math.PI / 2 - 0.25);
+    stone.push(sgrad(cyl(0.09, 0.06, 0.3, 14), m, 0.95, 1.35, C.stoneB));
+    // and its mouth: the same frame, translated half a cylinder back along the
+    // spout's own axis, which is the only way to say "the far end of it"
+    // without working out which way the spout ended up pointing
+    gold.push(spart(mouth, m.clone().multiply(OUT_END), C.cob));
   }
-  return merge(parts);
+
+  /* ---- the gilt ------------------------------------------------------- *
+   * A bead is a torus lying flat, `seg` round the ring and `rad` round the
+   * tube, and **the gold is `merge()`d and not `crease()`d** - which is the one
+   * place in the county that is true and the reason is that every part of it is
+   * a three primitive that arrives with its own smooth normals already. A
+   * torus's normal is the radius of its own tube, so a twelve-sided one shades
+   * as a curve and only its *silhouette* is a twelve-gon - and on a tube four
+   * centimetres across that is a chord of a centimetre and a bit, seen from
+   * across a pool. Running it through `crease()` would throw those normals away
+   * and rebuild them from the tessellation, which is the one thing a coarse
+   * primitive does not want done to it.
+   *
+   * The radii are read off the stone profiles above rather than chosen: each
+   * one is the wall's own radius at the height the band sits at, so the bead is
+   * centred on the wall and proud by its tube's radius. */
+  const bead = (R, r, seg = 32, rad = 12) =>
+    new THREE.TorusGeometry(R, r, rad, seg).rotateX(-Math.PI / 2);
+  // the basin's wall, a third of the way up it: 1.44 at 0.15 to 1.52 at 0.44
+  gold.push(spart(bead(1.48, 0.045), M(0, 0.30, 0), C.cob));
+  // the pedestal's shaft, at the waist's shoulder: 0.30 at 0.52 to 0.21 at 0.72
+  gold.push(spart(bead(0.285, 0.028, 24), M(0, 0.55, 0), C.cob));
+  // and under the upper bowl's overhang, tucked up against its underside at
+  // 1.34: 0.18 at 1.16 to 0.23 at 1.34
+  gold.push(spart(bead(0.215, 0.03, 20), M(0, 1.30, 0), C.cob));
+  // the upper bowl's own lip, on the outer slope of its rim: 0.70 at 1.62 to
+  // 0.62 at 1.70
+  gold.push(spart(bead(0.655, 0.028, 20), M(0, 1.66, 0), C.cob));
+  // and the finial's tip, which is the one place on the piece a gilt bead is
+  // what the shape is *for* - a spike with nothing on the end of it is a spike
+  gold.push(spart(ball(0.05, 12), M(0, 2.30, 0), C.cob));
+
+  // **And the tile stays the county's own third of a metre**, which is what
+  // `sgrad`/`spart` project and what the piece has always worn: the marble is a
+  // detail multiply over the pale greys, and a coarser tile than the one it was
+  // drawn at is a quarter of the fountain's detail dead. So there is no
+  // re-projection here the way the tower has one - the parts arrive with their
+  // uvs and `merge()` leaves them alone.
+  return {
+    '': crease(stone, 'fountain'),
+    gold: merge(gold, 'fountain-gold'),
+  };
 }
 
 /**
@@ -6691,6 +6918,23 @@ const PART_MATERIAL = {
   // that keeps it off the converted list.
   'pine-leaves': { name: 'pine', roughness: 0.9, side: THREE.DoubleSide },
   'bower-arch': { name: 'metal', roughness: 0.54, metalness: 0.82 },
+  // **And the fountain's gilt, which is the county's second metal and the first
+  // that is not iron.** It is here for the crate's reason and not a new one: a
+  // metalness is not a colour, three.js will only read one out of a texture, and
+  // a band with a metalness of zero is a yellow plastic moulding however much
+  // `cob` is in its vertices. `gold-rgh` is handed to `roughnessMap` **and**
+  // `metalnessMap` the way `metal-rgh` is, and the tarnish takes the metalness
+  // down to a third rather than to nothing, because there is still gold under
+  // the film where there was no steel under the rust.
+  //
+  // The roughness is **0.82 and not the 0.85 the iron's three carry**, and the
+  // number is the other side of the same argument: `gold-rgh` reads about 0.33
+  // on average, so 0.82 of it is the **0.27** a polished gilt has - the gilt is
+  // the bright thing on the fountain and it is meant to catch the sky, where a
+  // crate bracket is a working part in the weather and is dull. 0.82 is also the
+  // right answer on the day the map fails to load, where a base of 0.27 would
+  // leave a mirror standing in a pool.
+  'fountain-gold': { name: 'gold', roughness: 0.82, metalness: 1.0 },
 };
 
 /**

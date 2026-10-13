@@ -66,7 +66,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planTrack } from '../src/plan.js';
-import { CATS, CAT_BY_ID, TIERS, CRATE_S, CRATE_BACK, CRATE_LANE, FACE_SET, HAT_SET, faceFor, hatFor, makeRng, ATTRS, ATTR_MAX, CLUB_SNAILS, CLUB_ATTR, ratingOf, START_RATING, POOL_SIZE, POINTS, RATING_GAIN, PODIUM_FLOOR, RATING_STEP, RATING_MIN, RATING_MAX, eligibleSeasons, COND } from '../src/core.js';
+import { CATS, CAT_BY_ID, TIERS, CRATE_S, CRATE_BACK, CRATE_LANE, FACE_SET, HAT_SET, SHELL_SET, faceFor, hatFor, shellFor, makeRng, ATTRS, ATTR_MAX, CLUB_SNAILS, CLUB_ATTR, ratingOf, START_RATING, POOL_SIZE, POINTS, RATING_GAIN, PODIUM_FLOOR, RATING_STEP, RATING_MIN, RATING_MAX, eligibleSeasons, COND, STAT_MAX, levelOf, expForLevel, levelBar, FRUIT_EXP, RACE_EXP, START_TRAIT } from '../src/core.js';
 import { SURFACE } from '../meshes/maps.js';
 import { COUNTY } from '../meshes/palette.js';
 import { BIOMES, PAL_KEYS, SET_ROLES, ROLE_KEYS, COUNTY_PROPS } from '../meshes/biomes.js';
@@ -123,12 +123,17 @@ async function facesReport(MAPS, lerp, payMultOf) {
   const known = new Set(Object.keys(MAPS));
   const faceNames = FACE_SET.map((f) => 'face-' + f.name);
   const hatNames = HAT_SET.filter((h) => !h.sentinel).map((h) => 'hat-' + h.name);
+  // **the shells, and it is the `geo` field and not the worn name** - a shell's
+  // file is named in `SHELL_SET`'s `geo`, which is the loader's bare key, so this
+  // is the one wardrobe set whose manifest name is not `'<kind>-' + name`.
+  const shellGeos = SHELL_SET.map((s) => s.geo);
   let bad = 0;
   const say = (ok, line) => { if (!ok) bad++; console.log((ok ? '  ok   ' : '  FAIL ') + line); };
 
   console.log('the wardrobe\n');
   for (const n of faceNames) say(known.has(n), `${n} is in meshes/maps.js`);
   for (const n of hatNames) say(known.has(n), `${n} is in meshes/maps.js`);
+  for (const n of shellGeos) say(known.has(n), `${n} is in meshes/maps.js`);
   // **`none` has no file and that is the point of it.** It is the sentinel: a
   // hatless snail is a `null` mesh, not a missing one. Asserting the file is
   // `sentinel: true` is asserting that the set knows which of its members is not a
@@ -146,6 +151,7 @@ async function facesReport(MAPS, lerp, payMultOf) {
   const css = await readFile(new URL('../snail-race.css', import.meta.url), 'utf8');
   const cssFaces = new Set((css.match(/\bf-([a-z-]+)/g) || []).map((s) => s.slice(2)));
   const cssHats = new Set((css.match(/\bh-([a-z-]+)/g) || []).map((s) => s.slice(2)));
+  const cssShells = new Set((css.match(/\bsh-([a-z-]+)/g) || []).map((s) => s.slice(3)));
   for (const f of FACE_SET) {
     if (f.name === 'plain') continue;
     say(cssFaces.has(f.name), `face ${f.name} has a .f-${f.name} rule in snail-race.css`);
@@ -154,10 +160,16 @@ async function facesReport(MAPS, lerp, payMultOf) {
     if (h.sentinel) continue;
     say(cssHats.has(h.name), `hat ${h.name} has a .h-${h.name} rule in snail-race.css`);
   }
+  // **and the shells, which have no sentinel** - both are real files and both need
+  // a `.sh-` rule, or the Shells row draws a blank swatch and says nothing.
+  for (const s of SHELL_SET) {
+    say(cssShells.has(s.name), `shell ${s.name} has a .sh-${s.name} rule in snail-race.css`);
+  }
   // and nothing in the stylesheet that the sets do not declare: a stray glyph
   // is a rule for a face nobody can wear, which is a name waiting to go stale
   for (const n of cssFaces) say(FACE_SET.some((f) => f.name === n), `.f-${n} in snail-race.css is a face in FACE_SET`);
   for (const n of cssHats) say(HAT_SET.some((h) => h.name === n), `.h-${n} in snail-race.css is a hat in HAT_SET`);
+  for (const n of cssShells) say(SHELL_SET.some((s) => s.name === n), `.sh-${n} in snail-race.css is a shell in SHELL_SET`);
 
   // and the pool, walked end to end
   const r = makeRng(99123);
@@ -193,22 +205,30 @@ async function facesReport(MAPS, lerp, payMultOf) {
 
   const tally = {};
   for (const p of pool) {
-    const f = faceFor(p), h = hatFor(p);
+    const f = faceFor(p), h = hatFor(p), sh = shellFor(p);
     tally[f] = (tally[f] || 0) + 1;
     tally[h] = (tally[h] || 0) + 1;
+    tally[sh] = (tally[sh] || 0) + 1;
     if (!FACE_SET.some((x) => x.name === f)) say(false, `rival ${p.id} was given the face '${f}', which is not in FACE_SET`);
     if (!HAT_SET.some((x) => x.name === h)) say(false, `rival ${p.id} was given the hat '${h}', which is not in HAT_SET`);
+    if (!SHELL_SET.some((x) => x.name === sh)) say(false, `rival ${p.id} was given the shell '${sh}', which is not in SHELL_SET`);
     // **the two locked names, and this is the assertion that matters**
     if (f === 'devil' || h === 'devil-horns') say(false, `rival ${p.id} was given '${f}'/'${h}', which is locked`);
   }
   console.log('  faces ' + Object.entries(tally)
-    .filter(([k]) => FACE_SET.some((x) => x.name === k) || HAT_SET.some((x) => x.name === k))
+    .filter(([k]) => FACE_SET.some((x) => x.name === k) || HAT_SET.some((x) => x.name === k) || SHELL_SET.some((x) => x.name === k))
     .map(([k, n]) => `${k} ${n}`).join(' · '));
-  const used = new Set(pool.flatMap((p) => [faceFor(p), hatFor(p)]));
+  const used = new Set(pool.flatMap((p) => [faceFor(p), hatFor(p), shellFor(p)]));
   say(FACE_SET.every((f) => f.locked || used.has(f.name) || f.price === 0),
     `every buyable face is reachable: ${FACE_SET.filter((f) => used.has(f.name)).map((f) => f.name).join(', ')}`);
   say(HAT_SET.filter((h) => used.has(h.name)).length >= 4,
     `${HAT_SET.filter((h) => used.has(h.name)).length} of ${HAT_SET.length - 1} hats reach the pool, so the set is not one hat and a gap`);
+  // **and both shells reach the pool**, which is the same argument the hat count
+  // makes: a shell nobody wore would be a file loaded and a button that did
+  // nothing, and the whole point of a second shell is that a third of the field
+  // is wearing it.
+  say(SHELL_SET.every((s) => used.has(s.name)),
+    `every shell reaches the pool: ${SHELL_SET.map((s) => `${s.name} ${tally[s.name] || 0}`).join(', ')}`);
 
   // **the ladder, because the wardrobe's prices are in the same gold as it**
   const ratings = pool.map((p) => p.rating);
@@ -476,6 +496,65 @@ function condReport() {
   process.exitCode = bad ? 1 : 0;
 }
 
+/**
+ * The exp curve, and **the two directions of it agreeing**.
+ *
+ * `levelOf()` and `expForLevel()` are two lines of arithmetic written from the
+ * same two constants and they are the whole of the exp economy: one turns a
+ * snail's banked exp into the level the sim reads, the other draws the bar's
+ * bottom edge and writes a fresh snail's page. **A curve and its inverse that
+ * drift apart do not fail loudly** - `levelBar()` returns `frac` clamped to
+ * `[0, 1]`, so a disagreement one part in a thousand is a bar that quietly
+ * under-fills, and `levelOf(expForLevel(l))` being `l - 1` is a level that
+ * cannot be bought and cannot be left. So the pair is walked against each other
+ * over the whole range a player can plausibly reach, which is the range the
+ * check would be worthless without.
+ */
+function curveReport() {
+  let bad = 0;
+  const say = (ok, line) => { if (!ok) bad++; console.log((ok ? '  ok   ' : '  FAIL ') + line); };
+
+  // **the inverse, level for level**, and the far end is a snail with no cap:
+  // 200 is four times `STAT_MAX` and about four thousand fruits, which is the
+  // point of the curve being unbounded and so the place a rounding error in
+  // `ceil` shows up first.
+  let worst = 0, firstBad = null;
+  for (let l = 0; l <= 200; l++) {
+    const got = levelOf(expForLevel(l));
+    if (got !== l && !firstBad) firstBad = `level ${l} reads back as ${got} at ${expForLevel(l)} exp`;
+    if (got !== l) bad++;
+  }
+  say(!firstBad, firstBad || 'levelOf(expForLevel(l)) === l for every level 0..200');
+
+  // **and the bar's own arithmetic**, which is the third use of the pair and the
+  // one drawn on a screen: the span between two levels is the difference of two
+  // exp floors, and a `frac` outside [0, 1) is a bar past its own end.
+  let barBad = 0;
+  for (let l = 0; l <= 200; l++) {
+    const at = expForLevel(l);
+    const bar = levelBar(at);
+    if (bar.level !== l || bar.into !== 0) barBad++;
+    const next = levelBar(at + 1);
+    if (next.frac < 0 || next.frac >= 1 || Math.abs(next.span - (expForLevel(l + 1) - at)) > 1e-9) barBad++;
+  }
+  say(!barBad, `${barBad ? barBad + ' bar(s) out of step' : 'every bar sits at its floor and spans the gap to the next'}`);
+
+  // **and a fresh snail, because `START_TRAIT` is now a question asked of the
+  // curve** rather than five levels written down, and the wrong answer here is a
+  // new snail that starts below the club snails it is meant to be able to catch.
+  say(levelOf(expForLevel(START_TRAIT)) === START_TRAIT,
+    `a fresh snail begins on level ${levelOf(expForLevel(START_TRAIT))} in every trait`);
+
+  console.log(`\n  curve level = floor(exp ^ 0.8 / 4) · 1 at ${expForLevel(1)} exp · `
+    + `5 at ${expForLevel(5)} · 10 at ${expForLevel(10)} · 20 at ${expForLevel(20)} · `
+    + `${ATTR_MAX} at ${expForLevel(ATTR_MAX)} · ${STAT_MAX} at ${expForLevel(STAT_MAX)}`);
+  const to48 = expForLevel(STAT_MAX) - expForLevel(START_TRAIT);
+  console.log(`  a fresh snail to level ${STAT_MAX} is ${to48} exp, or ${Math.ceil(to48 / FRUIT_EXP)} fruits at ${FRUIT_EXP} exp each`
+    + ` · a 70s race pays about ${(70 * RACE_EXP).toFixed(1)} exp on the trait it tests`);
+  console.log(bad ? `\n${bad} problem(s).` : '\nxp: the curve and its inverse agree at every level.');
+  process.exitCode = bad ? 1 : 0;
+}
+
 /** **Read off `COND` and not written out**, which is how the seventh condition came
  * to print as `undefined×26` in this file's own course walk. A hand-kept list of
  * six names beside a table of seven is one more copy to fall out of step, and
@@ -486,6 +565,8 @@ if (args.includes('--seasons')) {
   seasonsReport();
 } else if (args.includes('--cond')) {
   condReport();
+} else if (args.includes('--xp')) {
+  curveReport();
 } else if (args.includes('--biomes')) {
   biomeReport();
 } else if (args.includes('--faces')) {

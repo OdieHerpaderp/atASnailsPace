@@ -157,8 +157,20 @@ export const MAPS = {
    * so it is about white and what it carries is the veining. A palm wears
    * nothing at all, for the same reason the conifer and the broadleaf wear
    * nothing: a frond is a hundred small leaflets in four greens, and one grain
-   * across both the trunk and the crown would be a lie about both.           */
-  fountain: ['marble-albedo', 'marble-n', 'marble-rgh'],
+   * across both the trunk and the crown would be a lie about both.
+   *
+   * **And the fountain is two surfaces, which is the whole of why it is an
+   * object here and not an array.** The stone is the marble; the gilt is the
+   * county's second metal and it cannot be the first one's file, because a
+   * tarnish is not a rust - see `gold-*` in the texture builder for the three
+   * things that changed and the one that went the other way round. A metalness
+   * is not a colour and a vertex cannot carry one, so the gold has to be a part
+   * of its own with a material of its own, exactly as the crate's brackets and
+   * the candle lantern's frame are. */
+  fountain: {
+    '': ['marble-albedo', 'marble-n', 'marble-rgh'],
+    gold: ['gold-albedo', 'gold-n', 'gold-rgh'],
+  },
   palm: [],
 
   /* ---- the plants ----------------------------------------------------- *
@@ -461,7 +473,7 @@ export const MAPS = {
   'bower-litter': [],
 
   /* ---- the tintable three: low-chroma, hue left to the game ------------- *
-   * The snail and the three shells are recoloured by the editor, so they get
+   * The snail and the two shells are recoloured by the editor, so they get
    * detail and no colour: a map under `applyLook()` turns the tint into a hue
    * shift, and the whorl patterns stay in the vertex colours, which multiply
    * the tint.
@@ -482,8 +494,15 @@ export const MAPS = {
    * mesh, so `applyMaps()` is never called on it and this entry bound to nothing
    * at all. `race.js` builds its four materials by hand and hands them the maps
    * itself now; the entry is here because it is the record of what a snail wears
-   * and because `tools/inspect.html` audits it.                                        */
+   * and because `tools/inspect.html` audits it.
+   *
+   * **And the two shells share one set of maps, because a shell is a shell.** The
+   * coil and the spike wear the same growth lines, the same roughness and the
+   * same near-white tone: the shape is the file's and the grain is the county's,
+   * which is the same bargain the cliff and the ramp strike - one file per
+   * surface, and the value a surface wants is the gain, not a second map. */
   'shell': ['shell-n', 'shell-rgh', 'shell-tone'],
+  'shell-spike': ['shell-n', 'shell-rgh', 'shell-tone'],
   snail: ['snail-n', 'snail-rgh', 'snail-tone'],
 
   /* ---- the wardrobe: no maps at all, and that is a decision ------------- *

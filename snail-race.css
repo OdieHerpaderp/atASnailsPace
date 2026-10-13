@@ -1,4 +1,4 @@
-/* snail-race.css - styling for Snail Grand Prix. Split out of snail-race.html. */
+/* snail-race.css - styling for At a Snail's Race. Split out of snail-race.html. */
 
 /* ------------------------------------------------------------------ *
  * Maple Mono, which is the county's one typeface. Both the headings
@@ -125,6 +125,48 @@
   #pips i.raced { background: var(--ink); opacity: 0.55; }
   #pips i.now { background: var(--gold); box-shadow: 0 0 0 3px rgba(184, 145, 42, 0.18); }
 
+  /* ---------------- the title ---------------- */
+  /* **A card and not a bare column of buttons**, because the shot behind it is an
+     orbit: it swings from open sky to lit lawn to the stable's own shadow and
+     back, and white text on a lawn is white text on a lawn. `--panel` with the
+     lobby's blur is what the rest of the page has for the same problem, and the
+     shot is exactly why the lobby's cards need it too. */
+  #title { display: grid; place-items: center; }
+  #titleCard {
+    position: relative; left: 0; top: 0;
+    width: min(520px, calc(100vw - 44px)); padding: 24px 28px 22px; text-align: center;
+    /* **And it scrolls itself on a window too short to hold it.** The page body
+       cannot scroll - `overflow: hidden` is how a race keeps the Space bar where
+       it put it - so a card taller than the window is a card whose buttons are
+       off the bottom of the county and cannot be reached at all, on the one
+       screen whose whole job is that they are the first thing a player presses.
+       At 480x300, which is what the browser suite draws at, the copy and the three
+       buttons do not fit; here they do. */
+    max-height: calc(100vh - 24px); overflow-y: auto;
+  }
+  /* 46px is the largest the page can carry without the name breaking: the title
+     is a sentence of five words and one capital, and `Snail Grand Prix` was two
+     words that happened to fit at 21px because it was set as a logo rather than
+     as a name. It is not `.logo` on purpose - that rule uppercases and letterspaces,
+     which is a wordmark, and this is the one place the name is read rather than
+     looked at. */
+  #title h1 {
+    font-size: 46px; font-weight: 600; letter-spacing: 0.05em; line-height: 1.06;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+  #titleBlurb { margin-top: 12px; }
+  #titleMenu { display: grid; gap: 8px; margin-top: 18px; }
+  #titleSave { margin-top: 14px; }
+  /* **And the one rule this screen needs that the lobby's does not.** `Delete save`
+     is `button.danger` - transparent, a hairline border, the county's own red - so
+     it arms into a solid fill that `button.danger.armed` already carries. `New
+     game` is `button.big` first and `danger` second, and `button.big`'s fill wins
+     on order where the lobby's button had nothing to win against: without this
+     line the title's New game arms into a *dark ink* rectangle with a red border,
+     which says "selected" and not "this erases a season". Two selectors and not a
+     fourth class, because the state is the class the lobby already writes. */
+  button.big.danger.armed { background: #a8492f; color: #fff; border-color: #a8492f; }
+
   /* ---------------- snail card ---------------- */
   #snailCard { left: 22px; top: 22px; width: 328px; padding: 10px 16px 11px; }
   /* the field sits under the snail card, wherever that card happens to end */
@@ -160,12 +202,13 @@
   input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
   input[type=color]::-webkit-color-swatch { border: none; border-radius: 2px; }
   input[type=color]::-moz-color-swatch { border: none; border-radius: 2px; }
-  /* **There is no shell-picker row any more**, and the three gradients that stood in
-     for `bands`, `swirl` and `spots` went with it. The shell is one model now, cut
-     from `references/snailRef.glb`, and a row of three buttons that chose a whorl
-     would be three controls that all did the same thing - **a picker with one thing in
-     it is a button that lies**, and the whorl is drawn by `shell-n` and `shell-tone`
-     rather than baked into a file per style. */
+  /* **There is a shell row again, and it is two coils and not three whorls.** The
+     three gradients that stood in for `bands`, `swirl` and `spots` went with the
+     old swept coil; the shell is now two files - the reference model's own smooth
+     dome (`shell.glb`) and a turbinate one with a ring of spikes
+     (`shell-spike.glb`) - and the Shells row in the wardrobe chooses between them.
+     A row of two is not a picker with one thing in it, and the whorl on both is
+     drawn by `shell-n` and `shell-tone` rather than baked into a file per style. */
 
   /* ---------------- the wardrobe ---------------- */
   /* **A face glyph is a character and not a drawing.** There is no canvas in a
@@ -257,6 +300,15 @@
     background: linear-gradient(to top right, transparent 45%, #8e5a5e 45% 60%, transparent 60%),
                 linear-gradient(to top left, transparent 45%, #8e5a5e 45% 60%, transparent 60%); }
   .h-none::before { content: '\2014'; color: var(--faint); font-family: var(--mono); font-size: 13px; }
+  /* the two shells, and each is a brown coil out of the county's own jar - the
+     smooth one a dome with a lit crown, the spiked one a cone with a ring of
+     points, because **a glyph that read the same as its neighbour would be a
+     button that lies about which of the two it puts on the snail.** */
+  .sh-coil::before { content: ''; width: 19px; height: 17px; border-radius: 50% 50% 46% 46%;
+    background: radial-gradient(circle at 62% 30%, #dcb56e, #a97a42 74%); }
+  .sh-spike::before { content: ''; width: 20px; height: 19px; background: #a97a42;
+    clip-path: polygon(50% 0%, 58% 26%, 80% 15%, 69% 40%, 100% 44%, 74% 58%, 96% 100%,
+      50% 80%, 4% 100%, 26% 58%, 0% 44%, 31% 40%, 20% 15%, 42% 26%); }
   /* the faces, each two eyes and a mouth - the same three things the model is */
   .swatches button[class^="f-"]::before {
     content: ''; width: 16px; height: 12px; position: relative;
@@ -302,13 +354,17 @@
   #stats { margin-top: 10px; }
   .stat { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
   .stat .nm { width: 62px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; color: var(--dim); }
-  .stat .pips { display: flex; gap: 2px; flex: 1; }
-  .stat .pips b {
-    flex: 1; height: 8px; border-radius: 1px; display: block;
+  /* **A bar and not the forty-eight pips that were here.** The pips drew the
+     ceiling into the geometry - forty-eight boxes for a number with no top - so
+     every widening of the scale changed the shape of the screen as well as the
+     number on it. The fill's width comes out of `levelBar()` and nothing here
+     knows what a level is. */
+  .stat .bar {
+    flex: 1; height: 8px; border-radius: 4px; display: block; overflow: hidden;
     background: rgba(34, 48, 58, 0.12);
   }
-  .stat .pips b.on { background: var(--ink); opacity: 0.82; }
-  .stat .pips b.up { background: var(--gold); opacity: 1; }
+  .stat .bar i { display: block; height: 100%; background: var(--ink); opacity: 0.82; }
+  .stat .bar i.up { background: var(--gold); opacity: 1; }
   .stat .v { width: 26px; text-align: right; font-family: var(--mono); font-size: 13px; }
   .stat .feed {
     font: inherit; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.03em;
@@ -831,6 +887,12 @@
   @media (max-width: 900px) {
     #snailCard, #raceList { width: 268px; }
     #hudTR { width: 172px; }
+    /* The title card is the one screen whose height is set by a font size, and
+       46px of it on a 300px-tall window puts the buttons under the fold - so it
+       comes down with the rest of the county at the breakpoint that already
+       exists, rather than a fourth breakpoint of its own. */
+    #title h1 { font-size: 30px; }
+    #titleCard { padding: 16px 18px 15px; }
   }
   /* The options modal is the only one with a grid in it, so the one breakpoint
      that matters is the one where the six cells stop being readable. */

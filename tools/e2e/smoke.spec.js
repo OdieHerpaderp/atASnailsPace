@@ -79,9 +79,32 @@ test('the county boots, the boot screen goes, and the surface is the one the bas
   // asking. `reflect` is the register the pool builder writes, read the way the
   // settings panel's tooltip reads it, so a spec can hold the report and the
   // panel to the same answer.
-  const ADDED_SINCE = ['STEP', 'biome', 'challenge', 'gbuffers', 'inspect', 'lamps',
-    'openOptions', 'openWardrobe', 'plinth', 'raceHourKey', 'reflect', 'setFx',
-    'setHeightsOf'];
+  //
+  // **`xp` is the tenth, and it is the one that was missing first.** The exp
+  // curve is two lines of arithmetic in `core.js` and every claim about a
+  // trait - a fruit buys ten, a race pays a tenth a second, the stable's row
+  // shows a level - is a claim about what that curve says. **A spec holding a
+  // number of exp has to ask the curve what it is worth**, and the two ways of
+  // not asking are writing the formula into the spec (a second copy that rots the
+  // day the curve is retuned) and reading the level off the screen (which is the
+  // number under test). So the curve is on the surface as its own names.
+  //
+  // **`stageShadow` is the eleventh, and it is a quantity with no other
+  // observable.** The key light's ortho box is what decides whether the far
+  // country casts a shadow at all, and a thing outside the frustum is a thing
+  // standing on the grass like a sticker - **a picture that is right on the
+  // lobby and wrong on the title**, so no screenshot of the lobby could catch it
+  // and `title.spec.js` needs a number rather than a picture.
+  //
+  // `drawn` is the twelfth, and it is here because **`passScene` cannot answer
+  // the question it appears to**: it reads the composer, and the bottom tier
+  // this suite is pinned at has no composer, so it says `null` on a frame that
+  // is drawing the stable perfectly well. `title.spec.js` needs to know which
+  // scene `world.renderScene()` picked, and it has to be able to ask on either
+  // path.
+  const ADDED_SINCE = ['STEP', 'biome', 'challenge', 'drawn', 'gbuffers', 'inspect',
+    'lamps', 'openOptions', 'openWardrobe', 'plinth', 'raceHourKey', 'reflect',
+    'setFx', 'setHeightsOf', 'stageShadow', 'xp'];
   const got = await page.evaluate(() => Object.keys(window.__snail).sort());
   const missing = BASELINE.surface.filter((k) => !got.includes(k));
   const added = got.filter((k) => !BASELINE.surface.includes(k));
@@ -1279,7 +1302,7 @@ test('the settings are the machine\'s and a preset survives a reload', async ({ 
   const first = await context.newPage();
   const { errors } = await boot(first);
   await first.evaluate(() => window.__snail.setGfx('distance', 4));
-  expect(await first.evaluate(() => JSON.parse(localStorage.getItem('snail-grand-prix-gfx-v1')).distance),
+  expect(await first.evaluate(() => JSON.parse(localStorage.getItem('at-a-snails-race-v1-gfx')).distance),
     'the row was written on the change, not on a real event').toBe(4);
 
   const second = await context.newPage();
@@ -1504,7 +1527,206 @@ test('a duel is two racers on the same course, and it writes no season record', 
     .toBe(Math.min(loss.was.rating, loss.was.top - 1));
   expect(loss.now.rating, 'and never above where you were')
     .toBeLessThanOrEqual(loss.was.rating);
-  expect(loss.now.gold, 'and pays nothing').toBe(loss.was.gold);
+  // **and the floor, which is the one number in `races.json` that nothing else
+  // can see.** `attrFloor` replaced `attrBonus`, and the bonus had been dead
+  // since `ATTR_MAX` left 16: `Math.min(ATTR_MAX, top + 2)` on a pool whose top
+  // rival is already at the ceiling in every trait is 34 clamped back to 32,
+  // **so the key could not change any output at all.** Today the same is true of
+  // the floor - `Math.max(32, 32)` is 32 - and that is the point of the
+  // assertion: it is the only thing that would notice the key being dropped,
+  // deleted as dead code, or renamed back. A duel whose guarantee silently
+  // stopped being a guarantee is a wrong picture rather than a broken one.
+  const floor = await page.evaluate(() => {
+    const S = window.__snail;
+    const r = S.race.racers.find((x) => x.sn.adversary);
+    return {
+      attrs: r.sn.attrs,
+      levels: Object.fromEntries(Object.keys(r.sn.xp).map((k) => [k, S.xp.of(r.sn.xp[k])])),
+    };
+  });
+  for (const key of ['running', 'stamina']) {
+    expect(floor.attrs[key], `The Adversary is floored at ${key}`)
+      .toBeGreaterThanOrEqual(32);
+    // **and the exp reads back as the attribute**, because the floor is applied
+    // to the attributes and the exp is built from them - a floor on one and not
+    // the other is a snail the ladder prints at 32 and the sim runs at 31.
+    expect(floor.levels[key], `${key}: the exp is the floor's own level`)
+      .toBe(floor.attrs[key]);
+  }
+  noErrors(errors);
+});
+
+/* ------------------------------------------------------------------ *
+ * The exp economy, and it is three claims.
+ *
+ * **A fruit buys exp and the level is a reading of it**; a race pays exp on the
+ * trait it is testing and on nothing else; and the flag is the only thing in the
+ * county that writes it. All three are quiet when they are wrong - a level that
+ * never rises is a snail that never grows, a trait that pays on the wrong ground
+ * is a balance nobody can read off the road, and an exp banked onto `state`
+ * mid-race is a save that moves under a player who walked away from the course.
+ * ------------------------------------------------------------------ */
+
+test('a fruit buys exp, and the level and the bar follow it', async ({ page }) => {
+  const { errors } = await boot(page);
+  const fed = await page.evaluate(() => {
+    const S = window.__snail;
+    const rows = () => [...document.querySelectorAll('#stats .stat')].map((r) => ({
+      name: r.querySelector('.nm').textContent,
+      level: r.querySelector('.v').textContent,
+      width: r.querySelector('.bar i').style.width,
+      title: r.title,
+      feed: r.querySelector('.feed').textContent,
+      disabled: r.querySelector('.feed').disabled,
+    }));
+    const out = { curve: S.xp, steps: [] };
+    out.before = rows();
+    out.xp0 = S.state.xp.running;
+    out.gold0 = S.state.gold;
+    // **five fruits, because a level is a step and a spec that feeds once and
+    // expects one is asserting the curve's arithmetic rather than the wiring.**
+    // Which of the five crosses a boundary is the curve's business.
+    for (let i = 0; i < 5; i++) {
+      document.querySelector('#stats .stat .feed').click();
+      out.steps.push({ xp: S.state.xp.running, row: rows()[0], gold: S.state.gold });
+    }
+    return out;
+  });
+  // **the button says what it buys and it is the exp that arrived**, read out of
+  // the label rather than out of a literal: the label and the wiring are two
+  // pieces of code and this is the line that says they are one button.
+  const perFruit = Number(/^\+(\d+) exp · (\d+)g$/.exec(fed.before[0].feed)[1]);
+  expect(perFruit, 'the button names the exp it buys').toBe(fed.curve.fruit);
+  for (const s of fed.steps) {
+    expect(s.row.feed, 'and it keeps saying so').toBe(fed.before[0].feed);
+  }
+  // **every step adds exactly one fruit's worth and the level is the curve's
+  // reading of what is left** - asserted against `xp.of()` and not against a
+  // level written here, so a retune of the curve does not fail this line and a
+  // screen showing the wrong number does.
+  let lastLevel = Number(fed.before[0].level);
+  expect(Number(fed.before[0].level), 'and the row starts on the curve\'s answer')
+    .toBe(fed.curve.of(fed.xp0));
+  let rose = false;
+  fed.steps.forEach((s, i) => {
+    expect(s.xp, `fruit ${i + 1} adds exactly ${perFruit} exp`)
+      .toBeCloseTo(fed.xp0 + perFruit * (i + 1), 6);
+    expect(s.gold, 'and costs the gold it names').toBe(fed.gold0 - perFruit * (i + 1));
+    expect(Number(s.row.level), `the row shows level ${fed.curve.of(s.xp)} after ${i + 1}`)
+      .toBe(fed.curve.of(s.xp));
+    expect(Number(s.row.level), 'and the level never goes down')
+      .toBeGreaterThanOrEqual(lastLevel);
+    if (Number(s.row.level) > lastLevel) rose = true;
+    lastLevel = Number(s.row.level);
+    // **the bar is a fraction of the gap between two levels**, which is the one
+    // thing a bar can get wrong without any number on it changing: a fill past
+    // its own end, or a fill that empties on a level-up.
+    const w = parseFloat(s.row.width);
+    expect(w, 'the fill is a percentage').toBeGreaterThanOrEqual(0);
+    expect(w, 'and never past the end of its own track').toBeLessThanOrEqual(100);
+  });
+  expect(rose, 'five fruits at ten exp crosses a level boundary at this scale').toBe(true);
+  // **and the row says what it cost in exp**, which is the number the pips used
+  // to throw away: the level is what the sim reads and the exp is what you spend.
+  expect(fed.steps[0].row.title, 'the exp into the level is on the row')
+    .toMatch(/^\d+ \/ \d+ exp · level \d+$/);
+  noErrors(errors);
+});
+
+test('a race pays exp on the trait it is testing, and stamina only while surging', async ({ page }) => {
+  const { errors } = await boot(page);
+  const raced = await page.evaluate(() => {
+    const S = window.__snail;
+    // **Hedgerow Dash and not a course with water in it**: four of the five
+    // traits have a ground they are tested on and `running` has three - a
+    // footpath, a walk and a bower - and a course that never leaves the footpath
+    // is the one that can say the other four are exactly untouched.
+    S.start('dash');
+    const before = Object.assign({}, S.race.player.xp);
+    S.sim(8, 0.04);
+    const after = Object.assign({}, S.race.player.xp);
+    const surged = Object.assign({}, S.race.player.xp);
+    S.surge(true);
+    S.sim(8, 0.04);
+    return {
+      before, after, surged, curve: S.xp, spent: S.race.player.spent,
+      // **and what `state` says while the race is still on**, which is the claim
+      // the racer's own `xp` row exists to make.
+      state: Object.assign({}, S.state.xp),
+    };
+  });
+  expect(raced.curve.race, 'a tenth of an exp a second').toBe(0.1);
+  expect(raced.after.running, 'the trait the course tests earns the rate it says')
+    .toBeCloseTo(raced.before.running + raced.curve.race * 8, 3);
+  for (const key of ['power', 'swimming', 'flying']) {
+    expect(raced.after[key], `dash has no ground for ${key}, so it pays nothing`)
+      .toBe(raced.before[key]);
+  }
+  expect(raced.after.stamina, 'and a snail that is not surging earns no stamina')
+    .toBe(raced.before.stamina);
+  // **the half that is easy to get wrong: the sim never writes `state`.** Exp is
+  // banked on the racer precisely so a race walked away from writes nothing, and
+  // a bank that reached `state` would be a save that moves while a snail is
+  // still standing on the road.
+  expect(raced.state, 'nothing has been written to the save mid-race')
+    .toEqual(raced.before);
+  // **and the button is what grows it** - the whole reason stamina is handled
+  // apart from `COND[cond].attr` is that no condition names it.
+  expect(raced.spent, 'the bar was not run dry by eight seconds of surging').toBe(false);
+  expect(raced.surged.stamina, 'so stamina earns while the bar is being spent')
+    .toBeGreaterThan(raced.after.stamina);
+  expect(raced.surged.running, 'and the tested trait keeps earning underneath')
+    .toBeGreaterThan(raced.after.running);
+  noErrors(errors);
+});
+
+test('the flag writes it, the save carries it, and a reload reads it back', async ({ context }) => {
+  const first = await context.newPage();
+  const { errors } = await boot(first);
+  const done = await first.evaluate(() => {
+    const S = window.__snail;
+    S.start('dash');
+    S.sim(8, 0.04);
+    const raced = Object.assign({}, S.state.xp);
+    const rival = S.state.field[0];
+    const rivalBefore = S.state.pool.find((p) => p.id === rival).xp.running;
+    S.finish();
+    const raw = JSON.parse(localStorage.getItem('at-a-snails-race-v1'));
+    return {
+      raced, rival, rivalBefore,
+      xp: Object.assign({}, S.state.xp),
+      poolXp: raw.pool.find((p) => p.id === rival).xp.running,
+      poolRating: raw.pool.find((p) => p.id === rival).rating,
+      v: raw.v,
+      hasStats: 'stats' in raw,
+      keys: Object.keys(raw),
+    };
+  });
+  expect(done.v, 'the save is v3, and the key did not move').toBe(3);
+  expect(done.hasStats, 'and there is no `stats` in it any more').toBe(false);
+  expect(done.keys, 'five traits of exp where five levels used to be').toContain('xp');
+  expect(done.xp, 'the flag is what writes the exp')
+    .not.toEqual(done.raced);
+  expect(done.poolXp, 'and a rival who raced banked it too')
+    .toBeGreaterThan(done.rivalBefore);
+
+  // **and across a reload**, because a save that holds exp and reads exp back
+  // as something else is a career quietly halved on the second page. `save:
+  // null` is what lets this page's own save through: the fixture is stamped by an
+  // init script that runs before the game's first line.
+  const second = await context.newPage();
+  await boot(second, { gfx: null, save: null });
+  const back = await second.evaluate(() => ({
+    xp: Object.assign({}, window.__snail.state.xp),
+    pool: window.__snail.state.pool.map((p) => p.attrs.running),
+    levels: window.__snail.state.pool.map((p) => window.__snail.xp.of(p.xp.running)),
+  }));
+  expect(back.xp, 'a reload hands back the snail the flag left').toEqual(done.xp);
+  // **and a rival's attributes are a reading of its exp, not a second number**,
+  // which is what makes `xp` the record and `attrs` the view. A mismatch here is
+  // a snail the ladder prints one way and the sim runs another.
+  expect(back.pool, 'every rival reads its attributes back off its own exp')
+    .toEqual(back.levels);
   noErrors(errors);
 });
 

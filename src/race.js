@@ -57,6 +57,7 @@ import {
   STAT_MAX,
   START_GOLD,
   START_RATING,
+  START_TRAIT,
   POINTS,
   FIELD,
   POOL_SIZE,
@@ -69,13 +70,18 @@ import {
   RATING_MAX,
   RATING_STEP,
   ratingOf,
+  RACE_EXP,
+  levelOf,
+  expForLevel,
   faceFor,
   hatFor,
   dressPool,
   FACE_SET,
   HAT_SET,
+  SHELL_SET,
   FACE_BY_NAME,
   HAT_BY_NAME,
+  SHELL_BY_NAME,
   SURGE_MULT,
   SURGE_DRAIN,
   PASSIVE_DRAIN,
@@ -134,17 +140,35 @@ const BODY_Y = 0.088;
 // how big a snail is drawn, eight abreast across a lane
 const SNAIL_SCALE = 0.82;
 /**
- * **The shell, and there is one of them.** It used to be `props['shell-' + style]` over
- * three whorls cut in `meshes/`, with a row of three buttons in the shop choosing
- * between them and `def.style` carried through the save to say which. **The shell is
- * now the reference model's own coil** - `references/snailRef.glb`, which arrived as a
- * whole snail and was cut into its shell island by `meshes/build-shell.html` - so
- * there is one geometry, one file and one key, and **the whorl is what the map draws**:
- * `shell-n`'s growth lines and `shell-tone`'s suture are the pattern now, which is the
- * same bargain the county struck for a cobbled road and a cliff face, and the shell is
- * the one piece where a map can carry a pattern three files used to bake into vertices.
+ * **The shell geometry a worn name asks for, and it is a table read and not a
+ * concatenation.** It used to be `props['shell-' + style]` over three whorls cut
+ * in `meshes/`, with a row of three buttons in the shop choosing between them and
+ * `def.style` carried through the save to say which. There are two shells now -
+ * the reference model's own coil (`shell.glb`, cut out of `references/snailRef.glb`
+ * by `meshes/build-shell.html`) and a turbinate one with a ring of spikes
+ * (`shell-spike.glb`, wound on the same page) - and **the whorl is what the map
+ * draws** on both: `shell-n`'s growth lines and `shell-tone`'s suture are the
+ * pattern, which is the same bargain the county struck for a cobbled road and a
+ * cliff face. `SHELL_BY_NAME` maps the worn name onto the loader's bare key, so
+ * the file is named in one table and nowhere is it built by string.
  */
-const shellFor = () => props.shell;
+const shellGeoFor = (name) => props[(SHELL_BY_NAME[name] || SHELL_BY_NAME.coil).geo];
+/**
+ * **A per-shell nudge off the mount `snail.glb` bakes into `shellG`, and the two
+ * coils do not sit the same way.** The reference dome is low and wide and its
+ * bounding-box middle *is* the part that rests on the back; the turbinate is tall
+ * and its box is stretched by the spikes, so the same `SHELL_AT`/`SHELL_ROT` that
+ * seats the coil floats the spike above the body and leans it back off the crest.
+ * The coil's row is four zeroes - **it keeps the mount the file was written
+ * against** - and the spike's is the measurement that brings its own mouth down
+ * onto the back: a little lower, and a little more nose-down so the front settles
+ * forward instead of perching. `mountShell()` reads this, and both `makeSnail()`
+ * and `setShell()` go through it, so the plinth and the grid agree.
+ */
+const SHELL_NUDGE = {
+  coil: { x: 0, y: 0, z: 0, rz: 0 },
+  spike: { x: 0, y: -0.045, z: 0, rz: -0.14 },
+};
 
 function makeSnail(def) {
   // a copy of the file, with this snail's colours on it
@@ -230,7 +254,24 @@ function makeSnail(def) {
   paint('shell', shellMat);
   paint('stalk', stalkMat);
   const shell = node.shellM;
-  shell.geometry = shellFor();
+  const shellGeo = shellGeoFor(def.shellModel);
+  shell.geometry = shellGeo;
+  // **the mount the file baked into `shellG`, read off the clone and kept**, so a
+  // nudge is applied *relative to it* and never written twice - `setShell()` puts
+  // the base back before it nudges again, or a second press would drift the coil
+  // a little further every time. The rotation is captured into `base` below, so
+  // the idle bob sways off the nudged rest and not off the file's.
+  const shellBase = {
+    x: shellG.position.x, y: shellG.position.y, z: shellG.position.z,
+    rz: shellG.rotation.z, scale: shellG.scale.x,
+  };
+  const mountShell = (name) => {
+    const n = SHELL_NUDGE[name] || SHELL_NUDGE.coil;
+    shellG.position.set(shellBase.x + n.x, shellBase.y + n.y, shellBase.z + n.z);
+    shellG.rotation.set(0, 0, shellBase.rz + n.rz);
+    shellG.scale.setScalar(shellBase.scale);
+  };
+  mountShell(def.shellModel);
 
   /* ------------------------------------------------------------------ *
    * The reflection mark, and **a snail is the first thing in the county
@@ -248,13 +289,16 @@ function makeSnail(def) {
    * onto the geometry and the traced pass reads it out of the alpha of its
    * flat buffer, so **the shell file is marked and not the shell already in
    * `snail.glb`** - the geometry is swapped onto the node as a racer is built
-   * and a mark on the template would be a mark on a buffer nothing reads.
+   * and a mark on the template would be a mark on a buffer nothing reads. **And
+   * it is the geometry this snail is actually wearing**, so a spike shell is
+   * marked on its own file and not on the coil's - `reflectMark()` is idempotent
+   * per geometry, so the two are each stamped once and shared by every racer.
    */
   const SKIN_F0 = 0.045, SHELL_F0 = 0.055;
   for (const nm of ['bodyM', 'headM', 'footM', 'stalkM', 'knobM']) {
     if (node[nm]) reflectMark(node[nm].geometry, SKIN_F0, 'skin');
   }
-  if (props.shell) reflectMark(props.shell, SHELL_F0, 'shells');
+  if (shellGeo) reflectMark(shellGeo, SHELL_F0, 'shells');
 
   /* ------------------------------------------------------------------ *
    * The face and the hat, and both of them are a geometry swap onto a node
@@ -432,6 +476,22 @@ group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.userData.gfxCast 
       const rg = parts && parts.rotor;
       if (rotor) { rotor.geometry = rg || null; rotor.visible = !!rotor.geometry; }
     },
+    // **The shell, and it is a geometry swap like the face and the hat** - the
+    // plinth's snail is rebuilt once and worn from there, so pressing a shell
+    // button has to move the coil without a rebuild. `def.shellModel` records it
+    // for the same reason `def.face` does: `sn.def` is the snail's whole
+    // appearance, and a def that disagreed with the mesh would be the plinth
+    // wearing last season's shell with nothing anywhere to say so.
+    setShell(name) {
+      def.shellModel = name || 'coil';
+      const geo = shellGeoFor(def.shellModel);
+      if (geo) shell.geometry = geo;
+      // **and the mount goes with it**, off the base the clone carried, so the
+      // spike seats where `makeSnail()` would have put it and the coil comes back
+      // to the file's own rest - a swap that moved the coil and not the seat would
+      // be a shell hovering over one back and nested in the other.
+      mountShell(def.shellModel);
+    },
     dispose() {
       for (const m of sn.mats) m.dispose();
       foot.geometry.dispose();      // this snail's own copy, from the clone
@@ -479,7 +539,7 @@ const HUES = [0.06, 0.09, 0.12, 0.02, 0.55, 0.62, 0.75, 0.92, 0.45, 0.35];
  *    `tools/plan-test.mjs --faces` is what says so about all sixty-four.
  *
  * **And the three numbers above are now out of the source and in the course's own
- * `duel` entry**, which is where the whole of a duel went: `attrBonus`,
+ * `duel` entry**, which is where the whole of a duel went: `attrFloor`,
  * `skill` and `greed` are read out of the standing duel, and so are `ratingOver`,
  * the face and the hat. They used to be three literals in this function and a
  * `+ 1` in the app's ladder note, so the same number was written in two files and
@@ -490,12 +550,29 @@ function adversary() {
   const top = state.pool.reduce((a, b) => (b.rating > a.rating ? b : a), state.pool[0]);
   const attrs = {};
   for (const a of ATTRS) {
-    // **The bonus is a per-attribute object rather than a `+ 2` on the first
-    // one**, because "they are two better at running than the best snail in the
-    // county" was `ATTRS[0]` written as a position, and the first attribute is
-    // `running` today by an accident of the array's order.
-    const bonus = (d.attrBonus && d.attrBonus[a.key]) || 0;
-    attrs[a.key] = bonus ? Math.min(ATTR_MAX, top.attrs[a.key] + bonus) : top.attrs[a.key];
+    /**
+     * **The floor is a per-attribute object rather than a `+ 2` on the first
+     * one**, because "they are two better at running than the best snail in the
+     * county" was `ATTRS[0]` written as a position, and the first attribute is
+     * `running` today by an accident of the array's order.
+     *
+     * **And it is a floor and not a bonus, which is the whole of why the key
+     * changed name.** `attrBonus` was applied as
+     * `Math.min(ATTR_MAX, top.attrs[a.key] + bonus)` - and `makePool()` gives the
+     * top of the ladder a snail already at `ATTR_MAX` in every trait, so the
+     * two-point bonus on running came out 34 clamped straight back to 32. **The
+     * key could not change any output and had not since `ATTR_MAX` left 16**,
+     * which is a number in the data that does nothing and a course that reads
+     * it believing it is making them stronger.
+     *
+     * **There is no `Math.min` on the floor and that is deliberate.** A floor
+     * above `ATTR_MAX` is a statement that this snail is past the ceiling, and
+     * clamping it back would make the key quiet again the moment `ATTR_MAX`
+     * moves - the same failure the bonus was, arrived at from the other
+     * direction. It is load-bearing on the day it stops being a no-op.
+     */
+    const floor = (d.attrFloor && d.attrFloor[a.key]) || 0;
+    attrs[a.key] = Math.max(top.attrs[a.key], floor);
   }
   return {
     player: false,
@@ -503,6 +580,23 @@ function adversary() {
     adversary: true,
     name: d.name || 'The Adversary',
     attrs,
+    // **The exp these attributes are made of, and not the ladder top's.** Under
+    // this county every snail's traits are exp with a level read off them, so
+    // `effTraits()` reads `xp` - and a duel racer with no `xp` hands it
+    // `undefined`, which is a `NaN` on every speed on the course and a black
+    // screen with nothing in the console. **Built from the floored attributes
+    // and not from `top`'s**, so the floor and the exp cannot disagree: today
+    // `expForLevel(32)` is 431 and the floor changes nothing because the ladder
+    // top is already there, and the moment `ATTR_MAX` widens the two come out
+    // of this line in step rather than one snail reading fast and being no.
+    xp: Object.fromEntries(ATTRS.map((a) => [a.key, expForLevel(attrs[a.key])])),
+    // **And the rating is a statement about the ladder and not about the animal
+    // above**, which is why it is not re-derived from those floored attributes.
+    // They are the pool's top plus a guarantee, so deriving a rating from them
+    // would come out *level* with the snail they were built off - and the whole
+    // of not being in the pool is that they stand one rung above it. `ratingOver`
+    // is one, and it is the one number a duel entry carries that a reader should
+    // be suspicious of changing.
     rating: top.rating + (d.ratingOver == null ? 1 : d.ratingOver),
     // **Both colours come out of the county's jar**, not out of a hex written in
     // this file: `hex()` is the jar's own sRGB encoder, so `def.body` is the same
@@ -525,7 +619,7 @@ function adversary() {
  * `challengeAdversary()`, and a spec asserting the duel is on the marathon.
  * Putting the course in `races.json` moves all six of the numbers a duel changes
  * into its own entry - the field's size, the countdown, the purse, the two locked
- * wardrobe names, their `attrBonus`/`skill`/`greed`, and the hour it is raced at -
+ * wardrobe names, their `attrFloor`/`skill`/`greed`, and the hour it is raced at -
  * and this scan is what finds it.
  *
  * **The fallback is the marathon and it is written down**, because a county with
@@ -619,6 +713,22 @@ function makePool() {
     for (const a of ATTRS) total += attrs[a.key];
     const sn = {
       id: i, name: NAMES[i], attrs, rating: ratingOf(total),
+      /**
+       * **The exp these attributes are made of, and `attrs` is what it reads
+       * back as.** Under this county a rival's traits are a number of exp with
+       * a level derived from it, so a pool entry carries both and the exp is the
+       * one that moves: `makePool()` and a save written by it are the same shape,
+       * `levelOf(xp)` hands the attribute back exactly, and a rival that banks
+       * exp in a race is a rival whose attributes have moved rather than a rival
+       * with a second number that means something else.
+       *
+       * **`attrs` stays in the save** because two things read it as numbers and
+       * neither wants the curve: `topAttr()` derives a face and a hat off it,
+       * and the ladder prints it. Nothing here re-derives `attrs` from `xp` at
+       * build - `expForLevel(attr)` is the other direction, and it is the only
+       * one that is run, so the pair cannot disagree at the moment of writing.
+       */
+      xp: Object.fromEntries(ATTRS.map((a) => [a.key, expForLevel(attrs[a.key])])),
       body: rndColor(r), shell: rndColor(r),
       skill: 0.94 + r() * 0.13,
       greed: 0.15 + r() * 0.75,
@@ -657,16 +767,22 @@ const state = {
   season: 1,
   name: 'Wilma',
   gold: START_GOLD,
-  stats: freshSnail(),
+  // **The five traits, in exp** - every one of them the exp of `START_TRAIT`,
+  // and the only record of what this snail is. It was the five *levels*, and a
+  // level is now a read of this, so there is one number per trait rather than
+  // two that have to agree: `effTraits()` reads `xp`, the bar on the stable
+  // reads `xp`, and `attrs` on a *rival* is what `levelOf` gives back.
+  xp: freshSnail(),
   body: 0xe0b183, shell: 0xc8a05a,
-  // **The wardrobe, and it is four fields and not one.** `face` and `hat` are
-  // what the snail is wearing, `owned` is everything the shop has handed over
-  // and not spent, and `beatAdversary` is the one bit of the duel that has to
-  // survive a reload. Four is a lot for a cosmetic and all four are here for
-  // the same reason: a field that is written in the `state` literal and nowhere
-  // else is a field that is `undefined` on the first screen and nobody can say
-  // why.
-  face: 'plain', hat: 'none', owned: [], beatAdversary: false,
+  // **The wardrobe, and it is five fields and not one.** `face` and `hat` are
+  // what the snail is wearing, `shellModel` is the third worn name - the *shape*
+  // of the coil, where `shell` above is its tint - `owned` is everything the shop
+  // has handed over and not spent, and `beatAdversary` is the one bit of the duel
+  // that has to survive a reload. Five is a lot for a cosmetic and all five are
+  // here for the same reason: a field that is written in the `state` literal and
+  // nowhere else is a field that is `undefined` on the first screen and nobody can
+  // say why.
+  face: 'plain', hat: 'none', shellModel: 'coil', owned: [], beatAdversary: false,
   tier: seasonFor(START_RATING).id,            // which season you are racing this one
   order: seasonPicks(seasonFor(START_RATING).id).slice(),
   field: null,                               // ...and the seven in it with you
@@ -1122,6 +1238,50 @@ function buildCourse(catId) {
   return { tr, grp, crates };
 }
 
+/**
+ * Re-derive one racer's effective traits, and the bar that hangs off them.
+ *
+ * **It is one function because a level-up mid-race and a racer on the grid are
+ * the same question.** `startRace()` calls it for the whole field and
+ * `stepRacer()` calls it the moment a snail crosses a level, and the second call
+ * is the one that matters: **a level applies the instant it is earned** rather
+ * than at the flag, so a snail that banks its last tenth of exp over the line is
+ * quicker for the metres it has left. Written twice it would be two pieces of
+ * arithmetic, and the copy is the one that gets left behind when the first is
+ * changed.
+ *
+ * **The bar moves with it**, and that is worth saying because it is the visible
+ * half: `stamMax` is derived from stamina's *effective* value, so a snail that
+ * levels stamina mid-race watches the bar grow under its thumb - which moves the
+ * `0.30` / `0.45` / `0.18` fractions everything in the sim gates on. Stamina only
+ * moves while surging, so it is rare, and it is real.
+ */
+function refoldEff(r) {
+  r.sn.eff = effTraits(r.sn, r.xp);
+  r.stamMax = 80 + 8 * r.sn.eff.stamina;
+}
+
+/**
+ * Exp onto one trait of one racer, and whether that crossed a level.
+ *
+ * **It answers the crossing rather than the level**, because `levelOf` is a `pow`
+ * and there are eight racers at sixty frames a second, and it is called where
+ * the crossing can only matter. The alternative - asking for the level every
+ * frame and comparing it with last frame's - is the same two `pow`s with a field
+ * to keep them in, and a field to keep them in is a field that gets left behind.
+ *
+ * **`0.1 * dt` is float and the comparison is on levels for that reason**: a
+ * racer's exp after seventy seconds is 7.000000000000001, and any test that
+ * asked "did the exp become exactly 7" would fail on the arithmetic rather than
+ * on the game. `exp` is the record and `level` is the reading, and the reading is
+ * the one with a step in it.
+ */
+function bankExp(r, key, amount) {
+  const before = levelOf(r.xp[key]);
+  r.xp[key] += amount;
+  return levelOf(r.xp[key]) !== before;
+}
+
 /** Take a course out of the scene and give its memory back. */
 function dropCourse(grp) {
   // The reflection probes and the per-pool water materials are the course's, and
@@ -1177,11 +1337,14 @@ function startRace(catId) {
 
   const rivals = duel ? [adversary()] : pickField();
   // **The player's own row of the field, in the same shape as a rival's.** The
-  // two things that are only the player's are here - its stats and the fact it
+  // two things that are only the player's are here - its exp and the fact it
   // is the player - and the rest is a snail like any other, which is the whole
   // point of building a racer out of a `def`: the face and the hat are named on
   // the same object a rival's are and `makeSnail()` cannot tell them apart.
-  const field = [{ player: true, name: state.name, stats: state.stats, body: state.body, shell: state.shell, face: state.face, hat: state.hat, skill: 1, greed: 0, jitter: 0 }].concat(rivals);
+  // **`xp` is a reference and not a copy** so the racer banks onto the same
+  // object the stable reads, and `r.xp` below is the copy that decides what is
+  // written back at the flag.
+  const field = [{ player: true, name: state.name, xp: state.xp, body: state.body, shell: state.shell, shellModel: state.shellModel, face: state.face, hat: state.hat, skill: 1, greed: 0, jitter: 0 }].concat(rivals);
   // the grid is drawn at random, so the player never starts from a set place
   for (let i = field.length - 1; i > 0; i--) {
     const j = (rand() * (i + 1)) | 0;
@@ -1201,6 +1364,13 @@ function startRace(catId) {
     const lane = laneSlot(i, n) * (tr.sm[0].w - 0.5);
     racers.push({
       sn, model, isPlayer: !!sn.player, s: START_S + 0.7 + (n - 1 - i) * 0.13, v: 0,
+      // **the racer's own exp, and a copy.** Everything a race earns goes on
+      // this row rather than on the snail or on `state`, so a race abandoned at
+      // the half-way line writes nothing at all - and `finishRace()` is the only
+      // place `r.xp` is copied back onto a snail. It starts as the snail's own
+      // exp because a racer that began at zero would have to be told where the
+      // ladder had got to, which is the same number written twice.
+      xp: Object.assign({}, sn.xp),
       lane, laneF: laneSlot(i, n), y: startY, cond: RUN, state: 'run',
       stam: 1, stamMax: 1, spent: false, surging: false, aiOn: false, aiTimer: 0,
       leapIdx: 0, leap: null, airStart: 0, airT: 0, sh: null, airY: 0,
@@ -1222,9 +1392,8 @@ function startRace(catId) {
     });
   }
   for (const r of racers) {
-    r.sn.eff = effTraits(r.sn);
-    r.stamMax = 80 + 8 * r.sn.eff.stamina;    // the bar refills between races
-    r.stam = r.stamMax;
+    refoldEff(r);
+    r.stam = r.stamMax;                      // the bar refills between races
   }
 
   Object.assign(race, {
@@ -1665,8 +1834,7 @@ function stepRacer(r, dt) {
       }
     }
     if (r.state === 'push') cond = PUSH;
-    const attr = COND[cond].attr;
-    target = COND[cond].base * (0.62 + 0.22 * r.sn.eff[attr] / STAT_MAX) * (0.5 + r.sn.skill * 0.3);
+    target = COND[cond].base * (0.62 + 0.22 * r.sn.eff[COND[cond].attr] / STAT_MAX) * (0.5 + r.sn.skill * 0.3);
     if (cond === RUN) target *= 1 - 0.34 * Math.min(1, r.fr.k / 0.055);
     if (cond === CLIMB) {
       // A wall is not one thing. The steeper it stands the slower the climb,
@@ -1683,8 +1851,24 @@ function stepRacer(r, dt) {
     else if (r.state !== 'push') r.y = r.fr.y;
   }
 
+  /**
+   * **The trait this stretch of the lane is testing, and it is read once after
+   * the if/else rather than inside either branch.** Every branch that can move
+   * `cond` has moved it by this line - the air path sets `FLY` at its top and
+   * the ground path settles on `PUSH` at its foot - so a snail on the crate and
+   * a snail in the air both bank exp, which is the whole claim: **a race pays
+   * out on what it asks of you**, and a course that never deals a gap pays
+   * nobody's flying.
+   *
+   * The speed above wants the same number two lines earlier and asks for it
+   * again rather than having it hoisted, because a variable declared outside
+   * this function's branches and assigned in both of them is two assignments to
+   * keep in step against one read that cannot be wrong.
+   */
+  const attr = COND[cond].attr;
+  if (bankExp(r, attr, RACE_EXP * dt)) refoldEff(r);
+
   // stamina: it drains the whole race, and an empty bar means a quarter speed
-  const stamStat = r.sn.eff.stamina;
   // The floor under the bar for spending it. A rival will not open the button
   // with a bare 200 left on it - they want the bar full enough that what they
   // spend is worth having - and a snail whose whole bar never reaches 200
@@ -1712,7 +1896,38 @@ function stepRacer(r, dt) {
     if (r.aiOn && r.livePlace <= AI_SURGE_FROM) r.aiOn = false;
     r.surging = r.aiOn && !r.spent && r.stam > surgeFloor;
   }
-  let drain = (PASSIVE_DRAIN + 0.04 * (24 - stamStat)) * race.tr.drain;
+  /**
+   * **Stamina is the one trait a course does not test, and it is paid for by
+   * spending rather than by racing.** `COND` has no entry that names it, so the
+   * five other traits earn on the ground they are tested on and this one earns
+   * only while the bar is being spent - which is what makes a rival's greed the
+   * number that decides whether it ever grows at all, and why the Adversary,
+   * whose `greed` is 0, stands on exactly the stamina its entry floors.
+   *
+   * **It is decided here and not at the top because the surge is.** Whether a
+   * snail is surging is answered above, by the button or by the ai's band, and
+   * asking a question one frame early would pay a snail for pressing a button
+   * it had not been allowed to use yet.
+   */
+  if (r.surging && !r.spent && bankExp(r, 'stamina', RACE_EXP * dt)) refoldEff(r);
+  /**
+   * **And the drain is a slope from the top of the scale and not from a literal
+   * that used to be the top of it.** It read `0.04 * (24 - stamStat)` with a
+   * `24` written into it - the value `STAT_MAX` had when the line was written,
+   * carried on after the ceiling moved twice. **A bare 24 above a scale that
+   * ends at 48 makes the term negative**, so a snail with stamina above 24
+   * *regenerated* through the whole race while its rivals drained, and nothing
+   * said so: the bar simply went up. With stamina levelling mid-race the wrong
+   * sign is not a corner of the scale any more, it is something a player reaches
+   * in a season, which is why this line reads the constant it means.
+   *
+   * **And `stamStat` is read here rather than at the head of the section**,
+   * because a stamina level-up can land between the two: `refoldEff()` above
+   * rewrites `r.sn.eff`, and a value captured before it would drain this frame
+   * against the snail the snail used to be.
+   */
+  const stamStat = r.sn.eff.stamina;
+  let drain = ((PASSIVE_DRAIN + 0.04) / (0.9 + stamStat / 32)) * race.tr.drain;
   if (r.surging && !r.spent) { target *= SURGE_MULT; drain += SURGE_DRAIN; }
   // run dry and you are down to a quarter speed until the bar comes back
   if (r.stam <= 0) r.spent = true;
@@ -1948,11 +2163,27 @@ function finishRace() {
   state.gold += me.points;
   $('goldOut').textContent = state.gold;
   if (me.place === 1) state.wins++;
-  // A rating moves by the place you finished in and by the cup you raced it in,
-  // and the change is recorded per snail, yours and theirs, because a field that
-  // only ever climbs is not a field you can read.
+// A rating moves by the place you finished in and by the cup you raced it in,
+// and the change is recorded per snail, yours and theirs, because a field that
+// only ever climbs is not a field you can read. **Yours moves that way and
+// theirs does not** - a rival's rating is the animal rather than the season, and
+// the loop below says why in the place where it happens.
   const wasRating = state.rating;
   state.rating = ratingFor(me.place, wasRating, payMult);
+  /**
+   * **The exp a race banked is written here and nowhere else**, on the season
+   * path and below the duel's own return, because a duel racer is `id: -1` and
+   * `state.pool[-1]` is `undefined` - the same reason the branch is where it is.
+   * The player's is copied onto `state.xp` in place, which keeps the object
+   * identity `startRace()` handed the field, so a snail standing on the plinth
+   * is wearing the traits the race earned rather than the ones it started with.
+   *
+   * **A race abandoned mid-way writes nothing at all**, because `r.xp` is the
+   * racer's own copy and this is the first line that reads it. That is the whole
+   * reason exp is banked onto the racer rather than onto `state`: there is no
+   * other place in the county where the sim is allowed to touch the save.
+   */
+  Object.assign(state.xp, me.xp);
   for (let i = 0; i < entries.length; i++) {
     const r = entries[i], row = rec.field[i];
     if (r.isPlayer) {
@@ -1967,7 +2198,35 @@ function finishRace() {
     p.pts += r.points;
     p.wins += r.place === 1 ? 1 : 0;
     p.avg = (p.avg * (p.races - 1) + r.place) / p.races;
-    p.rating = ratingFor(r.place, was, payMult);
+    /**
+     * **A rival's rating is their animal and not their form.** The exp they banked
+     * over the race goes on the pool entry, and the rating is read back off it by
+     * the same `ratingOf()` the pool was built with - so a rival's standing is
+     * earned in the same way the player's is spent, and `load()` has nothing left
+     * to re-derive on the way in.
+     *
+     * **It is `ratingFor()` no longer and that is the decision worth a paragraph.**
+     * A place still moves a rival's `races`, `pts`, `wins` and `avg` - the record
+     * the season draw leans on and the ladder's career column - but the number
+     * beside them is the creature rather than the season, so eight snails finish a
+     * GP and the four that banked most exp are the four that climbed. **A ladder
+     * that moves only on wins is a table**, and one that moves on wins *and* on
+     * form is two ladders wearing one set of names.
+     *
+     * **The clamp is the reason this is safe over a career**: exp only ever
+     * accumulates, so a snail that races for three seasons runs its total past
+     * what five attributes can hold and `ratingOf()` takes it off the top of the
+     * scale - a pool top above `RATING_MAX`, an Adversary nine hundred points
+     * clear, and a ladder with a ceiling drawn through it. Clamped into
+     * `[ATTRS.length, ATTR_MAX * ATTRS.length]` the rating cannot leave the range
+     * a fresh pool occupies; **it does not stop the pool drifting, and it is not
+     * meant to** - a season's worth of exp moves a rival by a point or two, and
+     * that is the whole of the drift.
+     */
+    Object.assign(p.xp, r.xp);
+    let total = 0;
+    for (const a of ATTRS) total += levelOf(p.xp[a.key]);
+    p.rating = ratingOf(clamp(total, ATTRS.length, ATTR_MAX * ATTRS.length));
     row.dRating = p.rating - was;
     row.rating = p.rating;
     row.wasRating = was;
@@ -1980,9 +2239,15 @@ function finishRace() {
 /* ================================================================== *
  * Saving
  * ================================================================== */
-const SAVE_KEY = 'snail-grand-prix-v1';
+/* **Both keys carry the game's name, and the game's name has been changed once.**
+ * `snail-grand-prix-*` became `at-a-snails-race-*` and there is no migration: a
+ * save under the old key is not a save this build can read, and `load()` already
+ * answers a missing key with a fresh game - which is the right answer to a
+ * season recorded on a rating scale that no longer exists. `boot()` deletes the
+ * two dead entries so a returning player is not left with them forever. */
+const SAVE_KEY = 'at-a-snails-race-v1';
 function save() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(Object.assign({ v: 2 }, state))); } catch (e) { void e; }
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(Object.assign({ v: 3 }, state))); } catch (e) { void e; }
 }
 function load() {
   try {
@@ -1998,10 +2263,19 @@ function load() {
     // it is one `state = freshSnail()` away, so a renamed stat is worth a
     // version and not a patch to `load()`. The file is overwritten by the same
     // key on the first write, so nothing of the old one is left lying about.
-    if (!d || d.v !== 2 || !Array.isArray(d.pool) || d.pool.length !== POOL_SIZE) return false;
-    // rivals now carry attributes rather than the old 1-12 traits; a save from
-    // before that has a pool the current code cannot read, so take the new one
-    if (!d.pool.every((p) => p && p.attrs && typeof p.rating === 'number')) return false;
+    //
+    // **And v3 is that rule asked a second time, over every trait at once.** A v2
+    // save holds five *levels* per snail where this one holds five *exp* values,
+    // and the two are not interconvertible by reading a field - 5 and 43 are both
+    // perfectly good numbers and mean nothing to each other. `levelOf(5)` is 1
+    // and a snail on 1 is the foot of the ladder, so a v2 save read as v3 would
+    // quietly halve a career. **The key is the same and the payload is not**: the
+    // bump rejects the file rather than moving the slot, which is what lets the
+    // save keep its name while everything in it means something else.
+    if (!d || d.v !== 3 || !Array.isArray(d.pool) || d.pool.length !== POOL_SIZE) return false;
+    // rivals carry attributes *and* the exp they are made of; a save from before
+    // either has a pool the current code cannot read, so take the new one
+    if (!d.pool.every((p) => p && p.attrs && p.xp && typeof p.rating === 'number')) return false;
     Object.assign(state, d);
     if (typeof state.rating !== 'number' || !isFinite(state.rating)) state.rating = START_RATING;
     // a save from before the seasons existed has no tier; put it in the one
@@ -2016,50 +2290,74 @@ function load() {
     if (state.order.length !== picks.length) state.order = picks.slice();
     state.results = (Array.isArray(state.results) ? state.results : []).filter((r) => r && CAT_BY_ID[r.catId]);
     if (!Array.isArray(state.field)) state.field = null;
-    // **And the four cosmetic fields, filled rather than rejected.** A save
+    // **And the cosmetic fields, filled rather than rejected.** A save
     // written before faces and hats existed has a pool whose entries carry
     // neither, and `state.face` itself is missing - so `dressPool()` gives every
-    // rival the two names the current derivation gives it and the player gets
+    // rival the names the current derivation gives it and the player gets
     // the starters. **This is the additive case the rule above carves out and
     // it is why it is here rather than in a version bump**: a hat is not a
     // renamed stat, nothing in the sim reads a field that is not there, and
-    // `d.v !== 2 || pool.length !== POOL_SIZE` still passes on a save written
+    // `d.v !== 3 || pool.length !== POOL_SIZE` still passes on a save written
     // before any of it. Bumping the version would throw away every save in the
     // county over a cosmetic.
     state.face = FACE_BY_NAME[state.face] ? state.face : 'plain';
     state.hat = HAT_BY_NAME[state.hat] ? state.hat : 'none';
+    state.shellModel = SHELL_BY_NAME[state.shellModel] ? state.shellModel : 'coil';
     state.owned = (Array.isArray(state.owned) ? state.owned : [])
-      .filter((n) => FACE_SET.some((f) => f.name === n) || HAT_SET.some((h) => h.name === n));
+      .filter((n) => FACE_SET.some((f) => f.name === n) || HAT_SET.some((h) => h.name === n)
+        || SHELL_SET.some((s) => s.name === n));
     if (!state.beatAdversary) state.beatAdversary = false;
     /**
-     * **And every rival is brought back inside the rules, attributes first.**
+     * **And every rival is brought back inside the rules - exp first, and the
+     * attributes from it.**
      *
-     * The rating is a curve over the animal and not a number the save is trusted to
-     * hold, so an episode's pool carries both written by whatever rules were current.
-     * The old ones were `total * 10` and a split that could not divide a total of
-     * 158 between five attributes of at most 16 - so an old pool holds snails with
-     * attributes up to 40 and ratings to 1580, and `effTraits()` does not clamp them
-     * on the way into the sim. Recomputing the rating alone leaves those attributes
-     * out of range and a `ratingOf(169)` is 1148: a pool top above the ceiling, a
-     * player at the foot of it, and an adversary nine hundred points clear.
+     * `xp` is the record and `attrs` is a reading of it, so the order of those
+     * two lines is the whole of this block: the exp is clamped into something a
+     * level can be read out of, the attributes are `levelOf()` of that exp
+     * clamped into `[1, ATTR_MAX]`, and **the exp is left alone afterwards** so
+     * that the reading stays true - a pool entry whose attributes and whose exp
+     * disagree is a snail the ladder prints one way and the sim runs another,
+     * and the sim is the one that decides the race.
      *
-     * **So the attributes are clamped into `[1, ATTR_MAX]` and the rating is derived
-     * from the clamped ones.** This is a migration and not a version bump, and the
-     * distinction is the whole of it: the values are in the save and
-     * `ratingOf()` is a pure function of them, so the current answer can be
-     * re-derived exactly on load rather than approximated. A rival that was out of
-     * range is now in range, which is what a pool built by today's `makePool()` would
-     * have produced for it anyway.
+     * **`p.rating` is not re-derived, and that is the decision this comment
+     * exists for.** It used to be: `ratingOf(total)` over the clamped
+     * attributes, because at the time a rating *was* the animal and the animal
+     * was in the save, so the current answer could be reproduced exactly. **A
+     * rival's rating is earned by racing now** - `finishRace()` reads it back out
+     * of the exp that snail banked - so recomputing it here would throw away a
+     * season's racing on every reload and leave a snail rated by a curve the game
+     * no longer uses. What is left is a bounds check, and it is there for the
+     * only case the derivation covered: **a hand-edited save**, which can put a
+     * snail at 10^9 and leave the Adversary standing a rung above a number no
+     * ladder can hold.
      *
-     * **`state.rating` itself is not touched.** A player's rating is a career number
-     * with no inputs to derive it from, and the old scale topped out at 60, so a
-     * returning snail keeps the rating it had and climbs the new ladder from there.
+     * **`state.rating` is untouched for the same reason and a stronger one.** A
+     * player's rating is a career number with nothing in the save to derive it
+     * from: it moves by the place you finished in, and the place is not written
+     * down anywhere `load()` could read it back.
      */
     for (const p of state.pool) {
-      if (p.attrs) for (const a of ATTRS) p.attrs[a.key] = clamp(Math.round(p.attrs[a.key] || 1), 1, ATTR_MAX);
-      let total = 0;
-      for (const a of ATTRS) total += (p.attrs && p.attrs[a.key]) || 1;
-      p.rating = ratingOf(total);
+      for (const a of ATTRS) p.xp[a.key] = Math.max(0, Number(p.xp[a.key]) || 0);
+      for (const a of ATTRS) p.attrs[a.key] = clamp(levelOf(p.xp[a.key]), 1, ATTR_MAX);
+      if (typeof p.rating !== 'number' || !isFinite(p.rating)) {
+        // **and the one fallback: a snail whose rating is not a number at all is
+        // given the one its own attributes describe**, which is the only case in
+        // which deriving is still the right answer - there is nothing to keep.
+        let total = 0;
+        for (const a of ATTRS) total += p.attrs[a.key];
+        p.rating = ratingOf(total);
+      }
+      p.rating = clamp(p.rating, RATING_MIN, RATING_MAX);
+    }
+    /**
+     * **And the player's own five**, which are the same five fields read the same
+     * way: the save holds exp, `levelOf` makes the level, and a save that has
+     * somehow lost them gets a fresh snail's rather than five `undefined`s -
+     * which is the black screen this function's whole first paragraph is about.
+     */
+    for (const a of ATTRS) {
+      state.xp[a.key] = Number.isFinite(state.xp[a.key]) ? Math.max(0, state.xp[a.key])
+        : expForLevel(START_TRAIT);
     }
     dressPool(state.pool);
     return true;
@@ -2078,7 +2376,7 @@ export {
   buildRipples, spawnRipple, updateRipples, leapShot, flightY, flightPitch,
   markLiveOrder, leapAt, touchDown, stepCrate, standCrate, placeAll,
   stepRacer, stepRace, finishRace, save, load, SAVE_KEY, crateSpanS,
-  makeSnail, SNAIL_SCALE, shellFor, NAMES, HUES, rndColor, BODY_Y,
+  makeSnail, SNAIL_SCALE, shellGeoFor, NAMES, HUES, rndColor, BODY_Y,
   poolByIds, seasonField, forgetSeasonFields, seasonRivals, pickField, drawSeasonField,
   lastSeasonField, crateTopAt, crateMeshY, laneYAt,
 };

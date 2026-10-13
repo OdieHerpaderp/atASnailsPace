@@ -17,7 +17,7 @@
  * because it is the one that imports the modules whose state they describe.
  * ================================================================== */
 /* ================================================================== *
- * Snail Grand Prix
+ * At a Snail’s Race
  * A racing game in a walled valley: rock walls to climb, ponds to swim
  * and gaps to fly; every snail carries five traits and the course you are
  * on decides which one is working.
@@ -68,7 +68,7 @@ import {
 // to be built and the two frames ask where it is - see `stageOf()`. The scene it
 // stands on is `world.stageScene` and the two are the same object.
 import {
-  stageEnv, stageBackdrop, stageOf, buildStable, requestRestage,
+  stageEnv, stageBackdrop, stageOf, buildStable, requestRestage, fitShadowBox, shadowBoxOf,
 } from './stage.js';
 
 // The things standing next to the lane: the half-way tower, the lamps, the
@@ -187,9 +187,19 @@ import {
   hatFor,
   FACE_SET,
   HAT_SET,
+  SHELL_SET,
   FACE_BY_NAME,
   HAT_BY_NAME,
-  STAT_MAX,
+  SHELL_BY_NAME,
+  // **and the exp economy**, which is three names and not one: what a fruit buys,
+  // and the two functions that turn a number of exp into a bar. `STAT_MAX` went
+  // out of this list with the pip loop it was drawn from - a constant imported for
+  // the length of a row of boxes is a constant that says the screen's shape.
+  FRUIT_EXP,
+  levelBar,
+  levelOf,
+  expForLevel,
+  RACE_EXP,
   GOLD_PER_FRUIT,
   START_GOLD,
   START_RATING,
@@ -247,14 +257,24 @@ let mode = 'stable';
 world.modeOf = () => mode;
 /**
  * Is this frame about the stable? **It is a function and not a bare `mode ===
- * 'stable'`, and that is because the far country and the fog both have to ask it
- ***: `mat.hillNear` and `mat.hillFar` are one pair shared by two backdrops and the
- * course's fog is tinted off the standing biome, so both need to know which
- * screen they are painting for. The stable is always temperate - `buildStable()`
- * says so out loud - so on the stable the biome is `BIOMES.temperate` and not
- * whatever the last course happened to be.
+ * 'stable'`, and that is because four things have to ask it**: `mat.hillNear`
+ * and `mat.hillFar` are one pair shared by two backdrops and the course's fog is
+ * tinted off the standing biome, so both need to know which screen they are
+ * painting for; the hour is pinned off it (the stable stands at 0.55 and a
+ * course at 0); the sun's glow belongs to whichever env is being drawn; and the
+ * post chain picks its scene off it. The stable is always temperate -
+ * `buildStable()` says so out loud - so on the stable the biome is
+ * `BIOMES.temperate` and not whatever the last course happened to be.
+ *
+ * **Three of those four had their own copy of the pair** - `mode === 'stable' ||
+ * mode === 'stroll'` written out in `updateTimeOfDay()`, in the frame loop and in
+ * the sun's glow - and `title` arriving was what made that worth fixing rather
+ * than worth doing twice more: a title lit at hour **0** instead of 0.55 is a low,
+ * warm, dim evening rather than the mid-morning the lobby stands at, and **nobody
+ * would have called it wrong**. It is a quiet answer to a question three files
+ * were each answering for themselves.
  */
-const onStableScreen = () => mode === 'stable' || mode === 'stroll';
+const onStableScreen = () => mode === 'stable' || mode === 'stroll' || mode === 'title';
 /** And the season, for `trackSeed()` - the scenery is upstream of this file and asks
  *  for it through the registry rather than reading `state` directly. */
 world.seasonOf = () => state.season;
@@ -283,15 +303,61 @@ function fieldCentre(out) {
   return out.multiplyScalar(1 / Math.max(1, race.racers.length));
 }
 
+/**
+ * The two shots the stable is ever seen from, and **the whole of the title
+ * screen's camera**.
+ *
+ * A title screen wants a shot of the *place*: the lawn, the pool, the grove and
+ * the giant mushrooms on the skyline, going round slowly enough that a player
+ * reads it as a place and not as a turntable. The lobby wants a shot of the
+ * *snail* - three point nine metres out and a metre and a half up, which is
+ * where a snail on a stone fills a useful part of the frame.
+ *
+ * **So the title is the second row of this table and not a second copy of the
+ * function that reads it.** `stageFrame()` is the only animator of the stable in
+ * the county: the plinth snail, the fountain's jets, the drifting pool, the
+ * dome's own position and the backdrop's are all in it, and a `titleFrame()`
+ * would have been a seventh place to remember all of them. Radius, height, the
+ * bob and its frequency, the height of the aim and the rate are six numbers, and
+ * they are the only things a third shot would need.
+ *
+ * `rate` is the one that decides whether a shot reads: `0.22` is a lap every
+ * twenty-nine seconds, which is what you want when the subject is a snail and
+ * the subject is what the lobby is for. `0.055` is a lap every hundred and
+ * fourteen seconds - **slow enough that the far country comes round rather than
+ * whipping past**, and it is the reason the pool at ten metres and the grove at
+ * twelve and a half both come into frame instead of one of them.
+ */
+const ORBIT = {
+  stable: { r: 3.9, y: 1.55, bob: 0.16, bobF: 0.7, look: 0.74, rate: 0.22 },
+  title: { r: 26, y: 11.0, bob: 0.90, bobF: 0.4, look: 1.10, rate: 0.055 },
+};
+/**
+ * The camera's own angle, **and it is not the plinth snail's spin**.
+ *
+ * They were one number until the title screen arrived, and one number meant the
+ * snail turned at whatever rate the camera did - which is fine for the lobby and
+ * is not fine for a title, where a camera going round in a hundred and fourteen
+ * seconds would turn a snail on a stone in a hundred and fourteen seconds too,
+ * for the length of a menu. So the two are apart: `st.spin` keeps advancing at
+ * its own rate and keeps driving `st.snail.group.rotation.y`, and this advances
+ * at the shot's. **Leaving the title therefore cuts from 26 m to 3.9 m on the
+ * same bearing** rather than swooping in, which is what every other screen
+ * change here does too - and it is also what stops the snail on the plinth
+ * snapping round when the shot changes.
+ */
+let orbitA = 0;
+
 function stageFrame(dt) {
   // the stable is a `let` this file cannot hold, so it is asked for once a
   // frame and used four times - the snail, the fountain, and its own clock
   const st = stageOf();
+  const o = ORBIT[mode === 'title' ? 'title' : 'stable'];
+  orbitA += dt * o.rate;
   st.spin += dt * 0.22;
-  const a = st.spin;
-  camera.position.set(Math.cos(a) * 3.9, 1.55 + Math.sin(a * 0.7) * 0.16, Math.sin(a) * 3.9);
-  camera.lookAt(0, 0.74, 0);
-  st.snail.group.rotation.y = -a * 0.6;
+  camera.position.set(Math.cos(orbitA) * o.r, o.y + Math.sin(orbitA * o.bobF) * o.bob, Math.sin(orbitA) * o.r);
+  camera.lookAt(0, o.look, 0);
+  st.snail.group.rotation.y = -st.spin * 0.6;
   st.snail.update(dt, { v: 1.1, cond: RUN });
   // the fountain runs all the time the hub is up: each jet on its own phase, and
   // the ripple on the pool drifting, which is the same `updateWater()` a race
@@ -302,8 +368,34 @@ function stageFrame(dt) {
   }
   updateWater();
   stageEnv.sky.position.copy(camera.position);
+  // **The key does not follow the camera, and this is the one number a wide shot
+  // did not make obvious.** It is pinned over the plinth - stage lighting rather
+  // than a sun, which is right for one object and wrong for a hundred-metre piece
+  // of county - and it is what makes the shadow box in `src/stage.js` a question
+  // rather than a constant. `strollFrame()`'s camera-following key is the wrong
+  // rule to copy: it would wheel the sun round with the eye and every shadow on
+  // the lawn would crawl. `fill` already rides the camera and `hemi` lifts the
+  // shadow side, so the back-lit half of the orbit is dim rather than black.
   stageEnv.key.position.set(3.2, 5.4, 3.0);
   stageEnv.key.target.position.set(0, 0.6, 0);
+  // **The title is a sun and not stage lighting.** A shot of the county from
+  // twenty-six metres wants the shadow to move with the hour the sky is moving
+  // through, the way a race's does: a pinned key under a sliding dome is a
+  // picture with no sun in it, and the whole of it is one override off the
+  // pinned position above. The key is asked from the *camera* here rather than
+  // from a fixed point, because the orbit is a shot and not a place, and a
+  // key that is four metres off the centre of it on one lap and on the centre
+  // on the next is stage lighting back again. `updateTimeOfDay()` has already
+  // put the hour's `sunH` and `sunSide` on `stageEnv` by the time this line
+  // runs, so the shadow reaches its full arc with the hour's full day.
+  if (mode === 'title') {
+    const cam = camera.position;
+    stageEnv.key.position.set(
+      cam.x + 3.6 * stageEnv.sunSide,
+      cam.y + 5.6 * stageEnv.sunH,
+      cam.z + 3.4 * stageEnv.sunSide);
+    stageEnv.key.target.position.copy(cam);
+  }
   stageEnv.fill.position.copy(camera.position);
   stageEnv.fill.target.position.set(0, 0.6, 0);
   stageBackdrop.position.set(0, 0, 0);
@@ -760,6 +852,7 @@ function litLamps() {
  * frame loop, because the hour is the clock and the lamps belong to the eye.
  */
 let todU = -1, todFinale = null, todPainted = -1;
+let titleTime = 0.55; // hours into day for title screen (starts at mid-morning)
 /** A race's hour starts at the beginning of its own stretch of the day, and the
  *  two assignments in front of `updateTimeOfDay(true)` are the cache's to clear -
  *  which is why the whole of it is asked for through the registry rather than
@@ -835,26 +928,40 @@ function updateTimeOfDay(force) {
   // at 0.55 - a high, pale, mid-morning sun - and a course stands at 0, which is
   // the hour a course is inspected at.
   //
-  // It is written as two places rather than one, and getting it wrong is not a
-  // small thing: the free camera on the stable fell out of the stable's half of
+  // **It is one place and it is `onStableScreen()`**, and getting it wrong is not
+  // a small thing: the free camera on the stable fell out of the stable's half of
   // this line and so showed the stable at **hour 0** - a low, warm, dim sun at
   // 0.95 against 1.28, and a third of the elevation. Walking about your own
   // lobby in the evening when standing still in it is lunchtime is not a camera
   // difference; it is the county moving without you, and the shadows swing round
-  // with the hour as well as stretching out.
-  const onStage = mode === 'stable' || mode === 'stroll';
-  const u = running ? clamp((race.t * HOURS_PER_SECOND) / clock.span, 0, 1)
-    : (onStage ? 0.55 : 0);
-  if (u === todU && finale === todFinale && !force) return;
+  // with the hour as well as stretching out. The title screen made the same shape
+  // of mistake available a third time, and a title at hour 0 is the lobby at
+  // dusk - **a picture nobody would call wrong**, which is the whole difficulty.
+  let u;
+  if (running) {
+    u = clamp((race.t * HOURS_PER_SECOND) / clock.span, 0, 1);
+  } else if (mode === 'title') {
+    // Progress through full day cycle for smoother visual progression
+    u = ((titleTime % 24) + 24) % 24 / 24;
+  } else if (onStableScreen()) {
+    u = 0.55;
+  } else {
+    u = 0;
+  }
+  if (mode !== 'title' && u === todU && finale === todFinale && !force) return;
   todU = u; todFinale = finale;
-  timeOfDay(u, finale, TOD);
+  if (mode === 'title') {
+    timeOfDay(titleTime, finale, TOD, true);
+  } else {
+    timeOfDay(u, finale, TOD);
+  }
   // the dome is a whole mesh of vertex colours, so it only gets repainted once
   // the hour has moved far enough to be worth it - and the environment, which
   // costs a pre-filter to build, is refreshed in the same breath, because a
   // dome repainted under a stale environment is the exact disagreement the
   // plan for this calls out
-  if (force || Math.abs(u - todPainted) > 0.02) {
-    todPainted = u;
+  if (force || (mode === 'title' && Math.abs(((titleTime % 24)+24)%24/24 - ((todPainted % 24)+24)%24/24) > 0.02) || Math.abs(u - todPainted) > 0.01) {
+    todPainted = mode === 'title' ? titleTime : u;
     paintSky(_todSky, chainUp());
     refreshEnvironment(_todSky, [env, stageEnv]);
     // **The probes are requeued in the same breath as the dome**, because a pool
@@ -940,6 +1047,10 @@ function frame(now) {
   const dt = Math.max(0, Math.min(raw / 1000, 0.05));
   last = now;
   clock += dt;
+  if (mode === 'title') {
+    // 30 ingame minutes per second = 0.5 game hours per second
+    titleTime += dt * 0.5;
+  }
   // **Shown by the mode and not by whichever screen was switched on.** Two of the
   // four places the county can be - a race and the inspector - are the ones where
   // the frame cost is the thing being judged, and a panel driven off `mode` has no
@@ -954,12 +1065,31 @@ function frame(now) {
   }
   if (perfOn) perfPush(raw);
   // Cloud shadow and grass wind ride the frame's own clock rather than a second
-  // one. Two effect clocks that are not the same number drift against each other
-  // within seconds - a shadow sliding one way over grass leaning another - and a
-  // second clock buys nothing that `gfxU` sharing `clock` does not.
+  // one. Two effect clocks that are not the same number drift against each
+  // other within seconds - a shadow sliding one way over grass leaning another -
+  // and a second clock buys nothing that `gfxU` sharing `clock` does not.
   gfxU.uCloudTime.value = clock;
   gfxU.uWindTime.value = clock;
-  if (mode === 'stable') { stageFrame(dt); updateTimeOfDay(); }
+  // **And the parallax march's pixel yardstick, off the camera actually being
+  // drawn with and the county's own height.** The march's distance fade is
+  // written in pixels - a displacement smaller than the pixel it lands in is no
+  // displacement - so the number it divides by is metres per pixel at one metre
+  // of depth: the frustum's height at one metre over the height it is drawn at.
+  // It is per-frame for the reason `syncGlow()` gives for the lamps: **a number
+  // read from the camera and not written on the frame it moved is a number one
+  // camera old**, and the inspector's free camera and the race's chase camera
+  // do not share a field of view. `scenePixels()` and not the window, because
+  // the county is drawn at a share of the window and the march's pixels are the
+  // county's.
+  gfxU.uPomPixel.value = 2 * Math.tan(camera.fov * Math.PI / 360)
+    / Math.max(1, scenePixels()[1]);
+  // **The title is a shot of the stable and not a fifth place**, so it takes
+  // `stageFrame()` and its own set of camera numbers rather than a branch of its
+  // own - and `ORBIT` inside `stageFrame()` is what says which shot. The dispatch
+  // is `mode === 'stable' || mode === 'title'` and not `onStableScreen()` because
+  // `stroll` is deliberately *not* here: the free camera walks, and walking is
+  // `strollFrame()`.
+  if (mode === 'stable' || mode === 'title') { stageFrame(dt); updateTimeOfDay(); }
   else if (mode === 'stroll') { freeCameraFrame(dt); strollFrame(dt); updateTimeOfDay(); }
   else if (mode === 'race') { raceFrame(dt); updateTimeOfDay(); }
   else if (mode === 'inspect') { freeCameraFrame(dt); inspectFrame(dt); }
@@ -977,7 +1107,7 @@ function frame(now) {
   // The sun's glow is placed from the key light's own direction off the eye, so it
   // is where the sun is from wherever you are standing, and only the env being
   // drawn needs it placed because the other one is not on screen.
-  const lit = mode === 'stable' || mode === 'stroll' ? stageEnv : env;
+  const lit = onStableScreen() ? stageEnv : env;
   if (lit.sunGlow && lit.sunGlow.visible) {
     _v1.copy(lit.key.position).sub(camera.position);
     if (_v1.lengthSq() < 1e-6) _v1.set(0.4, 0.5, 0.3);
@@ -1668,12 +1798,25 @@ function closeLadder() {
  * things writes the save once and not four times.
  * ================================================================== */
 const ownedHas = (n) => state.owned.indexOf(n) >= 0;
+/**
+ * **The three wardrobe kinds, and each says its own state slot and its own glyph
+ * prefix.** A face is `state.face`, a hat is `state.hat`, and a shell is
+ * `state.shellModel` - **not `state.shell`, which is the coil's tint and not its
+ * shape**, so the slot is named here once rather than guessed at from `kind` at
+ * each of the two call sites below. The prefix is the `.f-`/`.h-`/`.sh-` rule the
+ * stylesheet draws the swatch out of.
+ */
+const WARDROBE_KIND = {
+  face: { slot: 'face', prefix: 'f-' },
+  hat: { slot: 'hat', prefix: 'h-' },
+  shell: { slot: 'shellModel', prefix: 'sh-' },
+};
 /** What pressing one of these buttons should do, and it is a function so the
  *  buy, the wear, the too-poor and the locked are one `switch` rather than four
  *  `if`s fighting over the same node. */
 function wardrobePress(kind, item) {
   if (item.locked) return;                      // the Adversary's; a duel hands them over
-  const slot = kind === 'face' ? 'face' : 'hat';
+  const slot = WARDROBE_KIND[kind].slot;
   const worn = state[slot];
   if (ownedHas(item.name)) {
     // **Wearing something you already own costs nothing**, so pressing a worn
@@ -1692,25 +1835,31 @@ function wardrobePress(kind, item) {
   applyLook();
 }
 function wardrobeNote() {
-  const held = state.owned.filter((n) => FACE_BY_NAME[n] || HAT_BY_NAME[n]).length;
+  // **the starters are counted and not assumed.** It used to be a `+2` for the
+  // two price-0 pieces - `plain` and `straw` - and the coil is a third now, so a
+  // magic number would read "2 of 24" over a snail already wearing three of them.
+  const starters = [...FACE_SET, ...HAT_SET, ...SHELL_SET]
+    .filter((x) => x.price === 0 && !x.locked && !x.sentinel).length;
+  const held = state.owned.filter((n) => FACE_BY_NAME[n] || HAT_BY_NAME[n] || SHELL_BY_NAME[n]).length;
   const locked = state.beatAdversary ? 0 : 2;
   $('wdNote').textContent = state.beatAdversary
     ? 'The Adversary’s face and horns are yours, and they are the only two in the county you did not buy.'
-    : `you are wearing ${held + 2} of ${FACE_SET.length + HAT_SET.length}`
+    : `you are wearing ${held + starters} of ${FACE_SET.length + HAT_SET.length + SHELL_SET.length}`
       + (locked ? `, and ${locked} more are theirs` : '')
       + ' · a face is the whole face and a hat is a silhouette, so the hats are what you read at race distance';
 }
 function renderWardrobe() {
   $('wdGold').textContent = state.gold;
   const build = (host, kind, set) => {
+    const { slot, prefix } = WARDROBE_KIND[kind];
     host.textContent = '';
     for (const item of set) {
       const b = document.createElement('button');
       // **the class is the glyph and the swatch, and there is no `src`:** the
-      // stylesheet draws ten faces and six hats out of gradients and box-shadows,
+      // stylesheet draws the faces and hats out of gradients and box-shadows,
       // which is the same trick the shell picker's swatches used
-      b.className = (kind === 'face' ? 'f-' : 'h-') + item.name
-        + (state[kind] === item.name ? ' sel' : '');
+      b.className = prefix + item.name
+        + (state[slot] === item.name ? ' sel' : '');
       b.title = item.name;
       const price = document.createElement('span');
       price.className = 'price';
@@ -1727,6 +1876,7 @@ function renderWardrobe() {
   };
   build($('wdFaces'), 'face', FACE_SET);
   build($('wdHats'), 'hat', HAT_SET);
+  build($('wdShells'), 'shell', SHELL_SET);
   wardrobeNote();
 }
 function openWardrobe() {
@@ -1791,10 +1941,11 @@ function applyLook() {
    */
   st.snail.setFace(state.face);
   st.snail.setHat(state.hat);
+  st.snail.setShell(state.shellModel);
+
   $('bodyColor').value = '#' + state.body.toString(16).padStart(6, '0');
   $('shellColor').value = '#' + state.shell.toString(16).padStart(6, '0');
 }
-
 function renderStable() {
   const races = seasonLength();
   $('goldOut').textContent = state.gold;
@@ -1818,35 +1969,58 @@ function renderStable() {
   const wrap = $('stats');
   wrap.innerHTML = '';
   for (const a of ATTRS) {
-    const v = state.stats[a.key];
+    /**
+     * **A bar and not forty-eight pips**, because a pip row is a row of forty-
+     * eight boxes drawn for a number that has no top any more - it read the
+     * ceiling into the geometry, so widening `STAT_MAX` changed the shape of the
+     * screen as well as the number on it. **The bar's geometry comes out of
+     * `levelBar()`** rather than out of a `levelOf()` and an `expForLevel()`
+     * written beside each other, which is a pair that can disagree and a bar that
+     * then fills past its own right-hand end.
+     */
+    const bar = levelBar(state.xp[a.key]);
     const row = document.createElement('div');
     row.className = 'stat';
     const nm = document.createElement('span');
     nm.className = 'nm'; nm.textContent = a.name;
-    const pips2 = document.createElement('span');
-    pips2.className = 'pips';
-    for (let i = 0; i < STAT_MAX; i++) {
-      const b = document.createElement('b');
-      if (i < v) b.className = state.lastFed === a.key && i === v - 1 ? 'on up' : 'on';
-      pips2.appendChild(b);
-    }
+    const track = document.createElement('span');
+    track.className = 'bar';
+    const fill = document.createElement('i');
+    fill.style.width = (bar.frac * 100).toFixed(2) + '%';
+    // **and a fruit is still visible as having happened** - `lastFed` tints the
+    // fill for one render, which is what the old pip's `up` class did and the
+    // only thing that said the press had landed.
+    if (state.lastFed === a.key) fill.className = 'up';
+    track.appendChild(fill);
+    // **The level is the number on the row and the exp is in the tooltip**, which
+    // is the pair of numbers that are actually different: the level is what the
+    // sim reads and what a player compares, and the exp is what they spend.
     const val = document.createElement('span');
-    val.className = 'v'; val.textContent = v;
+    val.className = 'v'; val.textContent = bar.level;
     const btn = document.createElement('button');
     btn.className = 'feed';
-    btn.textContent = '+1 · 10g';
-    btn.disabled = state.gold < GOLD_PER_FRUIT || v >= STAT_MAX;
-    btn.title = v >= STAT_MAX ? 'already at the top' : 'feed a fruit';
+    btn.textContent = `+${FRUIT_EXP} exp · ${GOLD_PER_FRUIT}g`;
+    // **disabled on the price and on nothing else.** There is no cap, so there is
+    // no second term here to agree with `state.xp` - a guard that used to be there
+    // and stopped firing the day the bonus stopped firing is a rule nobody reads.
+    btn.disabled = state.gold < GOLD_PER_FRUIT;
+    btn.title = 'feed a fruit';
     btn.onclick = () => {
-      if (state.gold < GOLD_PER_FRUIT || state.stats[a.key] >= STAT_MAX) return;
+      if (state.gold < GOLD_PER_FRUIT) return;
       state.gold -= GOLD_PER_FRUIT;
-      state.stats[a.key]++;
+      state.xp[a.key] += FRUIT_EXP;
       state.lastFed = a.key;
       save();
       applyLook();
       renderStable();
     };
-    row.append(nm, pips2, val, btn);
+    // **The exp into the level goes in a `title`, which is the one place the bar's
+    // own arithmetic is visible** - `into` over `span` is exactly the fraction
+    // the fill is drawn at, so a bar that fills past its end can be read off the
+    // row rather than only seen. The level is in it too, because the title is
+    // the only place both numbers are together.
+    row.title = `${Math.round(bar.into)} / ${bar.span} exp · level ${bar.level}`;
+    row.append(nm, track, val, btn);
     wrap.appendChild(row);
   }
 
@@ -1928,7 +2102,7 @@ function renderStable() {
  * whichever entry in `races.json` carries a `duel` - which is its own entry in
  * the data rather than a constant here, because the whole of a duel used to be six
  * literals spread over two files and now is one object: the size of the field, the
- * lane share each racer holds, the crates, the countdown, their `attrBonus`, `skill`
+ * lane share each racer holds, the crates, the countdown, their `attrFloor`, `skill`
  * and `greed`, the two locked wardrobe names, the purse, the rating a win is
  * worth, and the hour it is raced at. **And the course it is raced on is a course
  * in `races.json` like any other**, so it has a name, a shape, a biome and a
@@ -2406,7 +2580,7 @@ function wipeSave() {
   // that is not on the list survives a delete. A fresh game would come up with
   // the previous player's horns still unlocked and still on the plinth.
   state.face = 'plain'; state.hat = 'none'; state.owned = []; state.beatAdversary = false;
-  state.stats = freshSnail();
+  state.xp = freshSnail();
   state.results = [];
   state.rating = START_RATING; state.races = 0; state.pts = 0; state.wins = 0;
   state.tier = seasonFor(START_RATING).id;
@@ -2420,6 +2594,120 @@ function wipeSave() {
   show('stable');
   renderStable();
   applyLook();
+}
+
+/* ================================================================== *
+ * The title
+ *
+ * A fifth mode over the same stable the lobby is standing on, seen from
+ * twenty-six metres instead of four. It is a **shot and not a place**: it
+ * animates the lawn through `stageFrame()` like the lobby does and there is no
+ * copy of the stable's animation here.
+ *
+ * **And there is no route back to it.** The lobby is a full screen with its own
+ * identity and a `Delete save` of its own, so a way home would be a second door
+ * onto the same destructive action wearing a different coat. Boot only.
+ * ================================================================== */
+
+/** Was there a save to come back to? **`load()`'s own answer, taken at the call
+ *  site and kept as one number.** It is a boolean that means something precise -
+ *  `load()` checked the version and that the pool is exactly `POOL_SIZE` entries -
+ *  and a second `localStorage.getItem()` here would be a second copy of a
+ *  question only `load()` can answer, one that would say `true` for a save the
+ *  game then rejected. `state` is already the loaded one, so the summary line
+ *  under Continue costs nothing either. */
+let hadSave = false;
+
+/**
+ * Onto the title, and the shot out to the wide box.
+ *
+ * **The box is on here and not in the frame loop** because the frame loop is the
+ * thing that reads `ORBIT` and it has no business knowing how wide a shadow map
+ * is: `stage.js` owns the number and this asks it for it. It matters at boot,
+ * where the order is `buildStable()` - built while `mode` is still `'stable'` -
+ * then this, which widens a box that already exists.
+ */
+function openTitle() {
+  mode = 'title';
+  titleTime = 0.55; // start at mid-morning
+  $('stable').classList.remove('on');
+  $('title').classList.add('on');
+  fitShadowBox();
+}
+
+/**
+ * Off the title and into the lobby. **`renderStable()` runs again and it is belt
+ * and braces** - the boot block already drew the lobby once before the title went
+ * up - but this is the function that makes the button and the boot agree, and a
+ * lobby that had been drawn before a wipe would otherwise come up holding the
+ * erased season's gold for a frame.
+ *
+ * **`show()` goes first because `fitShadowBox()` asks the mode what it is**, and
+ * the mode is the app's own `let`: a box asked while `mode` still says `title` is
+ * the wide one left on for the lobby's four-metre orbit, which is forty texels a
+ * metre of map spent on nothing.
+ */
+function closeTitle() {
+  $('title').classList.remove('on');
+  show('stable');
+  fitShadowBox();
+  renderStable();
+}
+
+/**
+ * New game, armed.
+ *
+ * **It reuses `wipeSave()` whole rather than re-implementing the reset**, which
+ * is the whole argument: that function hand-lists every field the game owns, and
+ * the two fields added since it was written - the wardrobe and `race.duel` - were
+ * both missed for months because a second copy of the list had been written
+ * somewhere else. There is no second copy here.
+ *
+ * **And it arms on the first press only when there is something to lose.** With
+ * no save the button says what it does and does it, because a two-tap ritual to
+ * confirm the destruction of nothing is a ritual and not a warning.
+ *
+ * **`wipeSave()` goes before `closeTitle()` and not the other way round**, and the
+ * order is the one that never shows the wrong numbers: `wipeSave()` ends in
+ * `show('stable')` and `renderStable()`, so running it second would draw the
+ * lobby twice - once holding the erased season's gold and once not - and a frame
+ * cannot fall between them, but a reader would have to work out which one was on
+ * screen. Erased first, both renders are of the fresh game and the second is
+ * simply the same answer again.
+ */
+let titleWipeArmed = 0;
+function disarmTitleWipe() {
+  clearTimeout(titleWipeArmed);
+  titleWipeArmed = 0;
+  const btn = $('titleNew');
+  btn.classList.remove('armed');
+  btn.textContent = 'New game';
+  btn.title = 'throw the saved game away and start a new snail';
+}
+function titleNewGame() {
+  if (hadSave && !titleWipeArmed) {
+    const btn = $('titleNew');
+    titleWipeArmed = setTimeout(disarmTitleWipe, 4000);
+    btn.classList.add('armed');
+    btn.textContent = 'Erase and start again';
+    btn.title = 'this erases the season, the gold and the snail for good';
+    return;
+  }
+  disarmTitleWipe();
+  wipeSave();
+  closeTitle();
+}
+
+/** What is under Continue, in one line - and **`state` is already the loaded one**,
+ *  so this is reading the save rather than parsing it a second time. It says
+ *  which snail, which rung and how much of this season is behind the player,
+ *  which are the three things a person deciding whether to press Continue is
+ *  actually asking. */
+function renderTitle() {
+  $('titleContinue').style.display = hadSave ? '' : 'none';
+  $('titleSave').textContent = hadSave
+    ? `${state.name} · season ${state.season} · rating ${state.rating} · ${state.results.length} raced this season`
+    : 'No season saved. A new snail starts in the Sunday Cup.';
 }
 
 
@@ -2475,6 +2763,25 @@ $('wdClose').addEventListener('click', closeWardrobe);
 $('freeLook').addEventListener('click', openStroll);
 $('strollBack').addEventListener('click', closeStroll);
 
+// The title's three buttons. **The Options button is the lobby's own
+// `openOptions()` and not a title-flavoured one** - the panel is the panel, and a
+// second settings modal for the same eleven rows would be a second place every
+// row's cost and caption had to be written.
+$('titleContinue').addEventListener('click', closeTitle);
+$('titleNew').addEventListener('click', titleNewGame);
+$('titleOptions').addEventListener('click', openOptions);
+// And `Enter` on the title goes in whichever way there is to go in. **Gated on
+// `mode === 'title'` for the reason the Space handler is gated on `mode ===
+// 'race'`**: one listener for the page, and a key that means something only on
+// one screen. It never presses *New game* with a save standing, because that is
+// the one branch with a state change in it - it goes to `titleNewGame()`, so the
+// first Enter arms and the second erases, exactly as the button does.
+addEventListener('keydown', (e) => {
+  if (e.code !== 'Enter' || mode !== 'title') return;
+  e.preventDefault();
+  if (hadSave) closeTitle(); else titleNewGame();
+});
+
 // The saved game is the only thing that carries a season across a reload, so
 // throwing it away is a real loss. It takes two clicks and the button says so
 // once you have asked, rather than one stray click on a small quiet button.
@@ -2502,7 +2809,19 @@ wipeBtn.addEventListener('click', () => {
 /* ================================================================== *
  * Go
  * ================================================================== */
-if (!load()) shuffleOrder();
+// **And the two dead keys go with it.** The game was called Snail Grand Prix and
+// both keys are named after it now, so a browser that has played the county keeps
+// `snail-grand-prix-v1` and `snail-grand-prix-gfx-v1` forever with nothing
+// reading either. There is no migration - a save under the old key is not a save
+// this build can read, and the rating it holds was on a scale that no longer
+// exists - so deleting them is the whole of the answer, and it is two lines
+// because a `try` is not free in a boot that has to reach its first frame.
+try {
+  localStorage.removeItem('snail-grand-prix-v1');
+  localStorage.removeItem('snail-grand-prix-gfx-v1');
+} catch (e) { void e; }
+hadSave = load();
+if (!hadSave) shuffleOrder();
 seasonRivals();          // you are told who you are racing before you race them
 // The wind and the cloud shades are injected into the county's surfaces once, at
 // setup, and driven by uniform thereafter - see `gfxSurfaceTargets()`
@@ -2534,6 +2853,20 @@ $('optDefaults').addEventListener('click', () => {
 // A tier that needs a post pass fetches one on the way; the frame loop draws the
 // direct path until it lands, which is a frame, not a fault.
 applyGraphics();
+// **And the title, last: after the stable is standing, after the hour is painted
+// and after the settings are in.**
+//
+// The order is the whole of what it is. `buildStable()` has to have run before
+// `openTitle()`, because `openTitle()` is a mode and the frame loop picks its
+// scene by mode - a title over a stable that is not built yet is the county's
+// empty scene at twenty-six metres, which is a lawn of nothing. `renderStable()`
+// has to have run too, because the lobby behind the card should already be the
+// real one. And it goes **above `.gone`**, so the first frame is the wide orbit
+// and not the lobby for a frame and the orbit after: the module body is one task
+// and `requestAnimationFrame` cannot fire inside it, which is the only reason
+// this block can be ordered at all.
+openTitle();
+renderTitle();
 $('boot').classList.add('gone');
 setTimeout(() => { const b = $('boot'); if (b) b.remove(); }, 700);
 // the debug runner never holds the surge button unless it is told to, and the
@@ -2544,6 +2877,32 @@ let simSurge = false;
 
 window.__snail = {
   state, race, get stage() { return stageOf(); },
+  /** Which scene the frame loop is about, **as a name rather than through the
+   *  chain.** `background().passScene` reads the *composer*, and at the bottom
+   *  tier there is no composer - `needsComposer()` is false and there is no
+   *  chain at all - so `passScene` answers `null` on a frame that is very
+   *  definitely drawing the stable, and a title spec asserting on it would be
+   *  asserting that the chain is down. **The predicate is one function and both
+   *  paths go through it** - `setChainScene(renderScene())` and
+   *  `renderer.render(renderScene(), world.camera)` - so asking the function is
+   *  the question, on either path. */
+  drawn: () => (world.renderScene() === world.stageScene ? 'stage' : 'race'),
+  /**
+   * The key light's shadow box on the stable, **and the reader rather than a
+   * re-derivation of it** - `stage.js` hands back what the ortho camera is
+   * actually set to, so a spec is watching the box and not a table agreeing
+   * with itself.
+   *
+   * **It is here because the title screen is the first shot in the county that
+   * needs a different one.** A twenty-six metre camera on the lobby's
+   * sixty-metre box puts the grove, the palms and the giant mushrooms outside
+   * the frustum, and a thing outside a shadow map's frustum is a thing standing
+   * on the lawn like a sticker - **which is correct-looking from the plinth and
+   * cannot be looked at from anywhere else**, so the lobby's answer would pass
+   * every screenshot a player takes of the lobby and be wrong on the first
+   * screen they ever see.
+   */
+  stageShadow: () => shadowBoxOf(),
   // **And the queue beside the count**, because the count alone cannot see a probe
   // being rebuilt every frame: a queue that is refilled above the pump and never
   // empties has the same four probes standing as one that has finished. The
@@ -2777,6 +3136,26 @@ window.__snail = {
   setHeightsOf: (which) => setHeightsOf(which),
 
   /**
+   * **The exp curve, exposed rather than restated.** A test that wants to know
+   * what level a body of exp is worth has three answers available to it and two
+   * of them are traps: it can write `floor(exp ^ 0.8 / 4)` out itself, which is a
+   * second copy of the curve that rots silently and fails the day the curve is
+   * retuned, or it can read the level off the stable's row, which is the number
+   * under test and therefore no evidence at all.
+   *
+   * So the curve comes with the names it is written in - **`of` is exp to level
+   * and `for` is level to exp**, and the two rates are here because a spec
+   * asserting "the tested trait rose" has to say *by how much*, and a magic
+   * `0.8` written into the test is the copy this hook exists to remove.
+   */
+  xp: {
+    of: (exp) => levelOf(exp),
+    for: (level) => expForLevel(level),
+    race: RACE_EXP,
+    fruit: FRUIT_EXP,
+  },
+
+  /**
    * **The biome that is standing, and the four things that went into standing
    * it.** It is here and not on `race` because it is not a race's: a course built
    * for the inspector never set a race, and the biome is whatever was built last.
@@ -2913,5 +3292,5 @@ window.__snail = {
   surge: (on) => { simSurge = !!on; },
   finish: () => finishRace(),
   skip: () => { for (const r of race.racers) { r.s = race.tr.finish; r.finished = true; r.finishT = 1; } finishRace(); },
-  feed: (k) => { state.gold -= GOLD_PER_FRUIT; state.stats[k]++; renderStable(); },
+  feed: (k) => { state.gold -= GOLD_PER_FRUIT; state.xp[k] += FRUIT_EXP; renderStable(); },
 };

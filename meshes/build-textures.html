@@ -3466,6 +3466,28 @@ const METAL = (u, v) => {
  */
 const METAL_CAL = 0.86;
 
+/**
+ * The gold's, and it is the iron's number with the tarnish taken off it.
+ *
+ * A bracket is a sixth darker than the gunmetal in its vertices because a
+ * bracket has been out in the rain, and 0.86 is that statement. **The gilt is a
+ * finished surface and not a working part**, so it carries less of the weathering
+ * than the iron does - but it is not *brighter*, and the reason is the jar's
+ * rather than this map's: `cob` is five times `ironBody`, so a map that reads the
+ * same as the iron's still lands the gilt nearly five times the reflectance. The
+ * hue and the value of the gold are in the jar, exactly as the iron's are, and
+ * this map is the tarnish and the wear on top of it and nothing else.
+ *
+ * **And the scuff is tuned to reach white and not to pass it**, which is the
+ * whole of the number: at 0.95 the polish came out at 1.12 and **eighteen per
+ * cent of the tile clipped flat**, where the iron's own 0.86 against its 0.15
+ * scuff clips fifteen hundredths of one per cent. A clipped scuff is a polish
+ * that has stopped brightening, and a fifth of the map stopped is a fifth of the
+ * gilt with no detail in it at all. 0.88 against a 0.14 scuff is 1.043 at the
+ * very top of the range and the terms never align there in practice.
+ */
+const GOLD_CAL = 0.88;
+
 let metalCache = { size: 0, f: null };
 function metalFields(S) {
   if (metalCache.size === S) return metalCache.f;
@@ -3690,16 +3712,21 @@ const DRAW = {
 
   // Moss is a mat, not a coat of paint: a hundred hairs thick, so the normal
   // is fine and close, and the albedo is the moss palette with the dark of it
-  // in the hollows where the water stands.
+  // in the hollows where the water stands. The normal carries a directional
+  // stem on top of the clump relief - a ridged field sheared along the shoot -
+  // because a mat of separate hairs catches the light along each one and a
+  // purely isotropic grain reads as felt.
   'moss-n': (S) => normalMap(S, field(S, (u, v) =>
-    0.5 + 0.5 * fbm(u, v, 47, 3, 7)), 4.8),
+    0.5 + 0.26 * fbm(u, v, 9, 3, 7) + 0.24 * ridged(u + v * 0.7, v, 30, 2, 13)), 5),
   'moss-albedo': (S) => albedo(S, (u, v, out) => {
-    const m = fbm(u, v, 11, 4, 23);
+    // a mat grows in clumps - thick where it has hold, thin in the gaps - and
+    // the clumps are the coarse term; the fine term is the grain of the shoots
+    const clump = fbm(u, v, 6, 3, 23);
     const fine = fbm(u, v, 37, 2, 47);
     const dark = lin('mossDark'), light = lin('mossLight');
     for (let k = 0; k < 3; k++) {
-      const c = lerp(dark[k], light[k], clamp01(m * 1.15 - 0.08));
-      out[k] = c * (0.82 + 0.30 * fine);
+      const c = lerp(dark[k], light[k], clamp01(clump * 1.3 - 0.15));
+      out[k] = c * (0.80 + 0.34 * fine);
     }
   }),
 
@@ -5514,6 +5541,97 @@ const DRAW = {
     out[2] = g * (1.0 - m.oxide * 0.24 - m.scuff * 0.03);
   }),
 
+  /* ---- the gold, and it is the iron's own field ------------------------ *
+   * The fountain's gilt, and **it is one field with the iron and not a second
+   * one**, which is the bargain the county struck for the cliff and the ramp:
+   * a surface that wants the same grain and a different value is a gain, not a
+   * fourth file. `metalAt()` hands over all eight terms - the mill lines, the
+   * slow roll, the pinpricks, the bloom, the dust, the orange peel, the broad
+   * wear and the scuffs - and what the gold does with them is change three
+   * things and keep the rest.
+   *
+   * **The bloom is a tarnish and not a rust, and that is the whole of the
+   * difference between the two files.** Gold does not oxidise; what gilt does
+   * is *dull*, under a film that takes the reflectance down and the roughness
+   * up, and it sits in the same places the rust does - the hollows, where the
+   * water stood - because both of them are the water. So the term keeps its
+   * place in the field and changes what it costs: rust is a stop and a half
+   * down and takes the metalness with it all the way, because rust is not a
+   * metal, while a tarnish is a third down and takes a third of the metalness,
+   * because there is still gold under the film. **And the hue goes the other
+   * way round**: rust is a red-brown and pulls the three channels apart, while
+   * a dulling film on gold is a grey one and pulls them *together* - which is
+   * why a tarnished gilt reads as a duller gold rather than as a browner one,
+   * and why these two cannot be one file with a gain on it.
+   *
+   * **And the scuff is a polish and not a bare patch.** On the iron a scuff is
+   * the oxide gone and the steel under it showing, so it is brighter *and
+   * colder* and the channels come back together. On gold there is nothing
+   * under the gold to show, so a scuff is a hand that has been past: brighter,
+   * the same hue, and the roughness down with it.
+   *
+   * The albedo is **about white and the vertex colours carry the metal**, for
+   * the iron's reason and not a new one: a metal's albedo is its reflectance,
+   * and the gold is `cob` in the jar - the county's own gold, the one the start
+   * line is painted with - so this map is the tarnish and the wear on top of it
+   * and nothing else. `GOLD_CAL` is the iron's 0.86 with the weathering taken
+   * off rather than put back: a gilt is a finished surface and a bracket is a
+   * working part, so the film is lighter and the polish reaches white without
+   * passing it. */
+  'gold-n': (S) => normalMap(S, heightField(S, (u, v) => {
+    const m = metalAt(S, u, v);
+    // **Gold leaf is thinner and softer than a stamped plate**, so it takes the
+    // tooling marks of whatever was put on it rather than the rolls' own: the
+    // mill lines come up to the strength everything else gets, where the iron
+    // carries them at half of it because an eighth of a millimetre on a
+    // nine-centimetre bracket is nothing. The tarnish's edge stands off a
+    // little more than the rust's for the same reason - a film on a soft metal
+    // has a softer shoulder, and a soft shoulder is a wider gradient.
+    return 0.50 + (m.mill - 0.5) * 0.16 + (m.roll - 0.5) * 0.20
+      + m.toot * 0.08 - m.pit * 0.12 + m.oxide * 0.16;
+    // The strength is 9 against the iron's 8, and the two numbers are the same
+    // argument: the weights above are a shade heavier and the map has to come
+    // out where the iron's did. It measures about **7.5 degrees**, under the
+    // county's eight and over the four below which a map is too flat to see.
+  }), 9),
+  'gold-rgh': (S) => ormMap(S,
+    field(S, (u, v) => {
+      const m = metalAt(S, u, v);
+      // **A polished gilt and not a worn stamping**, so the base is under the
+      // iron's 0.30 and the tarnish lifts it less than the rust does: the film
+      // is thinner and there is less of it. The scuff takes it down hardest,
+      // because a polish is the one thing on the piece that is smooth.
+      return clamp01(0.26 + m.oxide * 0.34 + m.pit * 0.16 + m.toot * 0.06
+        + (m.wear - 0.5) * 0.07 - m.scuff * 0.14);
+    }), null,
+    field(S, (u, v) => {
+      const m = metalAt(S, u, v);
+      // and the metalness, which is the reason this surface exists at all: a
+      // band with a metalness of zero is a yellow plastic moulding, and no
+      // amount of `cob` in the vertices will make it read as gold. The tarnish
+      // takes a third of it away rather than all of it, because there is still
+      // gold under the film where there was no steel under the rust.
+      return clamp01(1.0 - m.oxide * 0.55 - m.dust * 0.18 + m.scuff * 0.05);
+    })),
+  'gold-albedo': (S) => albedo(S, (u, v, out) => {
+    const m = metalAt(S, u, v);
+    const g = (1
+      - m.oxide * 0.24
+      - m.pit * 0.07
+      - m.dust * 0.09
+      + m.scuff * 0.14
+      + (m.wear - 0.5) * 0.06
+      + (m.mill - 0.5) * 0.03) * GOLD_CAL;
+    // The tarnish is the only hue this map is allowed, and it is the oxide's
+    // argument with the sign changed: a dulling film on gold is a grey one, so
+    // it takes the green and the blue down and leaves the red - the channels
+    // come together rather than apart, and a tarnished gilt is a duller gold
+    // rather than a browner one.
+    out[0] = g * (1.0 - m.oxide * 0.08);
+    out[1] = g * (1.0 - m.oxide * 0.16);
+    out[2] = g * (1.0 - m.oxide * 0.22 - m.scuff * 0.02);
+  }),
+
   /* ---- sailcloth ----------------------------------------------------- *
    * The one map in the county that is cloth, and it is here because a windmill's
    * fan is the largest single surface in the game that is neither stone nor
@@ -5877,6 +5995,13 @@ function sizeFor(name) {
   // whole plate. The argument `sizeFor` keeps making everywhere: the frequency and
   // the tile move together.
   if (name.startsWith('metal-')) return SIZE.albedo;
+  // And the gold's three, at the iron's **512** and for the iron's reason: it is
+  // the iron's own field, so it carries the iron's frequencies and the iron's
+  // tile, and a term whose finest octave is a millimetre and a half is four
+  // texels of a 256 - which is where a lattice stops drawing a surface and
+  // starts beating against the pixel grid. The fountain's gilt is worn at the
+  // same hand's breadth the brackets are.
+  if (name.startsWith('gold-')) return SIZE.albedo;
   // And the turf's two, at **2048**, which is the one map in this file that is
   // not content with a sixteenth of that. Everything else in here is a rock, a
   // wall or a road, and the largest thing any of them has to resolve is a slab
